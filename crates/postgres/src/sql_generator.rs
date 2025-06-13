@@ -1,4 +1,4 @@
-use anyhow::Result;
+use shem_core::Result;
 use shem_core::{
     Table, View, MaterializedView, Function, Procedure,
     Type, Domain, Sequence, Extension, Trigger, Policy, Server,

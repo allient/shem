@@ -1,4 +1,3 @@
-use std::fmt;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -20,6 +19,12 @@ pub enum Error {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("Anyhow error: {0}")]
+    Anyhow(#[from] anyhow::Error),
+
+    #[error("PostgreSQL error: {0}")]
+    Postgres(#[from] tokio_postgres::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>; 

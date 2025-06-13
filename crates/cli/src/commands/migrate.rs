@@ -1,16 +1,17 @@
 use anyhow::{Result, Context};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use crate::config::Config;
 use shem_core::{
     DatabaseDriver,
     DatabaseConnection,
+    migration::Migration,
     Transaction,
-    Schema,
-    traits::SqlGenerator,
-    Statement
 };
 use shem_postgres::PostgresDriver;
+use std::fs;
+use std::path::Path;
+use serde_json;
 
 pub async fn execute(
     migrations: PathBuf,
@@ -18,184 +19,150 @@ pub async fn execute(
     dry_run: bool,
     config: &Config,
 ) -> Result<()> {
-    // Get database URL
     let url = database_url.or_else(|| config.database_url.clone())
-        .context("No database URL provided")?;
+        .ok_or_else(|| anyhow::anyhow!("No database URL provided"))?;
     
     // Connect to database
     let driver = get_driver()?;
-    let conn: Box<dyn DatabaseConnection> = driver.connect(<std::string::String as AsRef<str>>::as_ref(&url)).await?;
+    let conn = driver.connect(&url).await?;
     
     // Create migrations table if it doesn't exist
-    create_migrations_table(conn.as_ref()).await?;
+    if !dry_run {
+        create_migrations_table(&conn).await?;
+    }
     
     // Get applied migrations
-    let applied = get_applied_migrations(conn.as_ref()).await?;
-    
-    // Get migration files
-    let files = get_migration_files(&migrations)?;
-    
-    // Filter out already applied migrations
-    let pending: Vec<_> = files.into_iter()
-        .filter(|f| !applied.contains(&f.id))
-        .collect();
-    
-    if pending.is_empty() {
-        info!("No pending migrations");
-        return Ok(());
-    }
-    
-    // Sort migrations by dependencies
-    let sorted = sort_migrations(&pending)?;
-    
-    // Apply migrations
-    if dry_run {
-        info!("Dry run - would apply {} migrations:", sorted.len());
-        for migration in &sorted {
-            info!("  {}: {}", migration.id, migration.name);
-            for stmt in &migration.up {
-                info!("    {}", stmt);
-            }
-        }
+    let applied = if !dry_run {
+        get_applied_migrations(&conn).await?
     } else {
-        let mut tx = conn.begin().await?;
-        
-        for migration in &sorted {
-            info!("Applying migration {}: {}", migration.id, migration.name);
+        vec![]
+    };
+    
+    // Find migration files
+    let migration_files = find_migration_files(&migrations)?;
+    
+    // Apply pending migrations
+    for file in migration_files {
+        let name = file.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid migration filename"))?;
             
-            // Execute up migration
-            for stmt in &migration.up {
-                tx.execute(stmt).await?;
+        if applied.contains(&name.to_string()) {
+            info!("Migration {} already applied, skipping", name);
+            continue;
+        }
+        
+        info!("Applying migration {}", name);
+        
+        // Read and parse migration
+        let content = fs::read_to_string(&file)?;
+        let migration = parse_migration(&content)?;
+        
+        if dry_run {
+            info!("Would apply migration {}:", name);
+            for stmt in &migration.statements {
+                info!("  {}", stmt);
             }
-            
-            // Record migration
-            record_migration(&mut tx, &migration.id, &migration.name).await?;
+            continue;
         }
         
+        // Begin transaction
+        let tx = conn.begin().await?;
+        
+        // Apply migration
+        for stmt in &migration.statements {
+            tx.execute(stmt).await?;
+        }
+        
+        // Record migration
+        record_migration(&tx, name, &migration).await?;
+        
+        // Commit transaction
         tx.commit().await?;
-        info!("Applied {} migrations", sorted.len());
+        
+        info!("Migration {} applied successfully", name);
     }
     
     Ok(())
 }
 
-async fn create_migrations_table(conn: &dyn DatabaseConnection) -> Result<()> {
-    conn.execute(
-        r#"
+async fn create_migrations_table(conn: &Box<dyn DatabaseConnection>) -> Result<()> {
+    let sql = r#"
         CREATE TABLE IF NOT EXISTS schema_migrations (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-        "#
-    ).await?;
-    
+    "#;
+    conn.execute(sql).await?;
     Ok(())
 }
 
-async fn get_applied_migrations(conn: &dyn DatabaseConnection) -> Result<Vec<String>> {
-    let rows = conn.query(
-        "SELECT id FROM schema_migrations ORDER BY applied_at"
-    ).await?;
-    
-    let mut migrations = Vec::new();
+async fn get_applied_migrations(conn: &Box<dyn DatabaseConnection>) -> Result<Vec<String>> {
+    let rows = conn.query("SELECT name FROM schema_migrations ORDER BY id").await?;
+    let mut migrations = Vec::with_capacity(rows.len());
     for row in rows {
-        if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-            migrations.push(id.to_string());
+        match row {
+            serde_json::Value::Object(obj) => {
+                if let Some(serde_json::Value::String(name)) = obj.get("name") {
+                    migrations.push(name.clone());
+                }
+            }
+            _ => continue,
         }
     }
-    
     Ok(migrations)
 }
 
-fn get_migration_files(dir: &PathBuf) -> Result<Vec<Migration>> {
-    let mut files = Vec::new();
-    
-    for entry in walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
-    {
-        let path = entry.path();
-        let content = std::fs::read_to_string(path)
-            .context("Failed to read migration file")?;
-            
-        let migration = parse_migration_file(path, &content)?;
-        files.push(migration);
+fn find_migration_files(migrations_dir: &Path) -> Result<Vec<PathBuf>> {
+    if !migrations_dir.exists() {
+        anyhow::bail!("Migrations directory does not exist: {}", migrations_dir.display());
     }
     
-    // Sort by ID (timestamp)
-    files.sort_by(|a, b| a.id.cmp(&b.id));
-    
+    let mut files: Vec<_> = fs::read_dir(migrations_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
+        .map(|e| e.path())
+        .collect();
+        
+    files.sort();
     Ok(files)
 }
 
-fn parse_migration_file(path: &std::path::Path, content: &str) -> Result<Migration> {
-    // Extract migration ID from filename
-    let id = path.file_stem()
-        .and_then(|s| s.to_str())
-        .context("Invalid migration filename")?
-        .to_string();
-        
-    // Parse migration name from header
-    let name = content.lines()
-        .find(|line| line.starts_with("-- Migration:"))
-        .and_then(|line| line.split_once(":"))
-        .map(|(_, name)| name.trim().to_string())
-        .unwrap_or_else(|| format!("migration_{}", id));
-        
+fn parse_migration(content: &str) -> Result<Migration> {
     // Split content into up and down migrations
-    let parts: Vec<_> = content.split("-- Down Migration").collect();
-    let up = parts[0]
-        .lines()
-        .filter(|line| !line.starts_with("--"))
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
+    let parts: Vec<_> = content.split("-- migrate:down").collect();
+    let up = parts[0].trim().to_string();
+    let down = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+    
+    // Split into statements
+    let up_statements: Vec<_> = up.split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
         .collect();
         
-    let down = if parts.len() > 1 {
-        parts[1]
-            .lines()
-            .filter(|line| !line.starts_with("--"))
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let down_statements: Vec<_> = down.split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
     
     Ok(Migration {
-        id,
-        name,
-        up,
-        down,
-        dependencies: Vec::new(), // TODO: Parse dependencies from comments
+        version: chrono::Utc::now().format("%Y%m%d%H%M%S").to_string(),
+        description: "Migration".to_string(),
+        statements: up_statements,
+        rollback_statements: down_statements,
+        created_at: chrono::Utc::now(),
     })
 }
 
-async fn record_migration(tx: &mut Box<dyn Transaction>, id: &str, name: &str) -> Result<()> {
-    tx.execute(&format!(
-        "INSERT INTO schema_migrations (id, name) VALUES ('{}', '{}')",
-        id, name
-    )).await?;
-    
+async fn record_migration(tx: &Box<dyn Transaction>, name: &str, migration: &Migration) -> Result<()> {
+    let sql = "INSERT INTO schema_migrations (name) VALUES ($1)";
+    tx.execute(sql).await?;
     Ok(())
-}
-
-fn sort_migrations(migrations: &[Migration]) -> Result<Vec<Migration>> {
-    // TODO: Implement topological sort based on dependencies
-    Ok(migrations.to_vec())
 }
 
 fn get_driver() -> Result<Box<dyn DatabaseDriver>> {
     Ok(Box::new(PostgresDriver::new()))
-}
-
-#[derive(Debug, Clone)]
-struct Migration {
-    id: String,
-    name: String,
-    up: Vec<String>,
-    down: Vec<String>,
-    dependencies: Vec<String>,
 } 

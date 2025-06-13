@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::fmt::Debug;
 use crate::*;
-use anyhow::Result;
+use crate::error::Result;
 
 use crate::schema::{
     Schema, Table, View, MaterializedView, Function, Procedure,
@@ -239,4 +239,54 @@ pub trait AsyncSqlGenerator: Send + Sync {
     async fn generate_alter_table_async(&self, old: &crate::Table, new: &crate::Table) -> Result<(Vec<String>, Vec<String>)>;
     async fn generate_drop_table_async(&self, table: &crate::Table) -> Result<String>;
     async fn generate_create_type_async(&self, type_def: &crate::Type) -> Result<String>;
+}
+
+#[async_trait]
+impl DatabaseConnection for Box<dyn DatabaseConnection> {
+    fn driver(&self) -> &dyn DatabaseDriver {
+        self.as_ref().driver()
+    }
+
+    async fn introspect(&self) -> Result<Schema> {
+        self.as_ref().introspect().await
+    }
+
+    async fn execute(&self, sql: &str) -> Result<()> {
+        self.as_ref().execute(sql).await
+    }
+
+    async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
+        self.as_ref().query(sql).await
+    }
+
+    async fn begin(&self) -> Result<Box<dyn Transaction>> {
+        self.as_ref().begin().await
+    }
+
+    async fn close(self: Box<Self>) -> Result<()> {
+        (*self).close().await
+    }
+
+    async fn metadata(&self) -> Result<ConnectionMetadata> {
+        self.as_ref().metadata().await
+    }
+}
+
+#[async_trait]
+impl Transaction for Box<dyn Transaction> {
+    async fn execute(&self, sql: &str) -> Result<()> {
+        self.as_ref().execute(sql).await
+    }
+
+    async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
+        self.as_ref().query(sql).await
+    }
+
+    async fn commit(self: Box<Self>) -> Result<()> {
+        (*self).commit().await
+    }
+
+    async fn rollback(self: Box<Self>) -> Result<()> {
+        (*self).rollback().await
+    }
 }

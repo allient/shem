@@ -649,24 +649,129 @@ fn parse_drop_behavior(behavior: &protobuf::DropBehavior) -> Result<DropBehavior
 }
 
 fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
+    use protobuf::AlterTableType::*;
     if let Some(node::Node::AlterTableCmd(cmd)) = &cmd.node {
         match protobuf::AlterTableType::try_from(cmd.subtype) {
-            Ok(protobuf::AlterTableType::AtAddColumn) => {
-                if let Some(node) = &cmd.def {
-                    if let Some(node::Node::ColumnDef(col)) = &node.node {
-                        Ok(AlterTableAction::AddColumn(parse_column_def(col)?))
-                    } else {
-                        Err(anyhow::anyhow!("Expected ColumnDef node"))
-                    }
+            Ok(AtAddColumn) => {
+                let col = cmd.def.as_ref()
+                    .and_then(|node| match &node.node {
+                        Some(node::Node::ColumnDef(col)) => Some(col),
+                        _ => None,
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("Expected ColumnDef node for ADD COLUMN"))?;
+                Ok(AlterTableAction::AddColumn(parse_column_def(col)?))
+            }
+            Ok(AtDropColumn) => {
+                Ok(AlterTableAction::DropColumn(cmd.name.to_string()))
+            }
+            Ok(AtAlterColumnType) => {
+                let type_name = cmd.def.as_ref()
+                    .and_then(|node| match &node.node {
+                        Some(node::Node::TypeName(type_name)) => Some(type_name),
+                        _ => None,
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("Expected TypeName node for ALTER COLUMN TYPE"))?;
+                Ok(AlterTableAction::AlterColumn {
+                    name: cmd.name.to_string(),
+                    action: AlterColumnAction::SetDataType(parse_data_type(type_name)?),
+                })
+            }
+            Ok(AtColumnDefault) => {
+                let str_val = cmd.def.as_ref()
+                    .and_then(|node| match &node.node {
+                        Some(node::Node::String(s)) => Some(s),
+                        _ => None,
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("Expected String node for COLUMN DEFAULT"))?;
+                if str_val.sval == "NULL" {
+                    Ok(AlterTableAction::AlterColumn {
+                        name: cmd.name.to_string(),
+                        action: AlterColumnAction::DropDefault,
+                    })
                 } else {
-                    Err(anyhow::anyhow!("Missing column definition"))
+                    Ok(AlterTableAction::AlterColumn {
+                        name: cmd.name.to_string(),
+                        action: AlterColumnAction::SetDefault(
+                            parse_expression(&Node { node: Some(node::Node::String(str_val.clone())) })?
+                        ),
+                    })
                 }
             }
-            // ... handle other alter table actions ...
-            _ => Err(anyhow::anyhow!("Unsupported alter table action")),
+            Ok(AtSetNotNull) => {
+                Ok(AlterTableAction::AlterColumn {
+                    name: cmd.name.to_string(),
+                    action: AlterColumnAction::SetNotNull,
+                })
+            }
+            Ok(AtDropNotNull) => {
+                Ok(AlterTableAction::AlterColumn {
+                    name: cmd.name.to_string(),
+                    action: AlterColumnAction::DropNotNull,
+                })
+            }
+            Ok(AtAddConstraint) => {
+                let constraint = cmd.def.as_ref()
+                    .and_then(|node| match &node.node {
+                        Some(node::Node::Constraint(constraint)) => Some(constraint),
+                        _ => None,
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("Expected Constraint node for ADD CONSTRAINT"))?;
+                Ok(AlterTableAction::AddConstraint(parse_table_constraint(constraint)?))
+            }
+            Ok(AtDropConstraint) => {
+                Ok(AlterTableAction::DropConstraint(cmd.name.to_string()))
+            }
+            Ok(AtEnableRowSecurity) => Ok(AlterTableAction::EnableRowLevelSecurity),
+            Ok(AtDisableRowSecurity) => Ok(AlterTableAction::DisableRowLevelSecurity),
+            Ok(AtForceRowSecurity) => Ok(AlterTableAction::ForceRowLevelSecurity),
+            Ok(AtNoForceRowSecurity) => Ok(AlterTableAction::NoForceRowLevelSecurity),
+            Ok(AtSetLogged) => Ok(AlterTableAction::SetLogged),
+            Ok(AtSetUnLogged) => Ok(AlterTableAction::SetUnlogged),
+            // Add more cases as needed here
+            Ok(other) => Err(anyhow::anyhow!("AlterTableType {:?} not supported", other)),
+            Err(e) => Err(anyhow::anyhow!("Unknown AlterTableType: {:?}", e)),
         }
     } else {
         Err(anyhow::anyhow!("Expected AlterTableCmd node"))
+    }
+}
+
+
+// Helper function to parse partition bounds
+fn parse_partition_bounds(bound_spec: &protobuf::PartitionBoundSpec) -> Result<PartitionBounds> {
+    match bound_spec.strategy.as_str() {
+        "range" => {
+            let mut bounds = Vec::new();
+            for bound in &bound_spec.lowerdatums {
+                if let Some(node) = &bound.node {
+                    bounds.push(parse_expression(&Node {
+                        node: Some(node.clone()),
+                    })?);
+                }
+            }
+            Ok(PartitionBounds::Range(bounds))
+        }
+        "list" => {
+            let mut bounds = Vec::new();
+            for bound in &bound_spec.listdatums {
+                if let Some(node) = &bound.node {
+                    bounds.push(parse_expression(&Node {
+                        node: Some(node.clone()),
+                    })?);
+                }
+            }
+            Ok(PartitionBounds::List(bounds))
+        }
+        "hash" => {
+            if let Some(node) = bound_spec.listdatums.first() {
+                Ok(PartitionBounds::Hash(parse_expression(&Node {
+                    node: Some(node.node.as_ref().context("Missing hash datum node")?.clone()),
+                })?))
+            } else {
+                Err(anyhow::anyhow!("Missing hash datum"))
+            }
+        }
+        _ => Err(anyhow::anyhow!("Unknown partition strategy")),
     }
 }
 
@@ -681,5 +786,11 @@ impl NodeToString for Box<Node> {
         // This is a placeholder - you'll need to implement the actual conversion
         // based on your needs
         Ok(format!("{:?}", self))
+    }
+}
+
+impl std::fmt::Display for AlterTableAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 } 

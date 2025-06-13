@@ -1,4 +1,4 @@
-use anyhow::Result;
+use shem_core::{Result, Error};
 use tokio_postgres::{Row, GenericClient};
 use shem_core::schema::*;
 
@@ -75,7 +75,7 @@ where
         schema.policies.insert(policy.name.clone(), policy);
     }
 
-    // Introspect foreign servers
+    // Introspect servers
     let servers = introspect_servers(&*client).await?;
     for server in servers {
         schema.servers.insert(server.name.clone(), server);
