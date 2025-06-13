@@ -1,0 +1,20 @@
+[package]
+name = "shem-parser"
+version = "0.1.0"
+edition = "2021"
+description = "SQL parser for database schema management"
+authors = ["Jonathan Vargas <jonathanvargas1104@gmail.com>"]
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+pg_query = { workspace = true }
+
+[features]
+default = ["full"]
+full = ["postgres"]
+postgres = []  # Enable PostgreSQL-specific parsing features
+

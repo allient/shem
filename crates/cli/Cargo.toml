@@ -1,0 +1,35 @@
+[package]
+name = "shem-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Declarative database schema management CLI"
+authors = ["Jonathan Vargas <jonathanvargas1104@gmail.com>"]
+license = "MIT"
+
+[[bin]]
+name = "shem"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+shem-core = { path = "../core" }
+shem-postgres = { path = "../postgres" }
+shem-parser = { path = "../parser" }
+
+# External dependencies
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+walkdir = { workspace = true }
+base64 = "0.21"
+uuid = { workspace = true }
+regex = { workspace = true }
+indexmap = { workspace = true }

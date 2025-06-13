@@ -1,1 +1,5 @@
-# shem
+cargo check
+cargo build
+
+
+cargo upgrade

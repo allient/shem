@@ -1,0 +1,60 @@
+[workspace]
+members = [
+    "crates/cli",
+    "crates/core",
+    "crates/parser",
+    "crates/postgres",
+]
+
+# Optional workspace metadata
+package.version = "0.1.0"
+package.edition = "2021"
+package.license = "MIT"
+package.authors = ["Jonathan Vargas <jonathan.vargas@example.com>"]
+package.repository = "https://github.com/yourusername/shem"
+package.description = "A CLI tool for managing database schemas and migrations"
+
+[workspace.dependencies]
+# CLI dependencies
+clap = { version = "4.5.40", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+thiserror = "2.0"
+async-trait = "0.1"
+
+# Database dependencies
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid"] }
+postgres = "0.19"
+pg_query = "6.1.0"
+tokio-postgres  = "0.7.13"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# Utilities
+chrono = { version = "0.4.41", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+regex = "1.11"
+indexmap = { version = "2.9", features = ["serde"] }
+
+# File & path management
+walkdir = "2.5"
+glob = "0.3"
+ignore = "0.4"
+
+# Schema diffing helpers
+similar = "2.7"
+diff = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing tools
+tempfile = "3.20"
+assert_cmd = "2.0"
+predicates = "3.1"
+insta = "1.43"
