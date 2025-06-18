@@ -45,6 +45,9 @@ pub enum Commands {
         /// Database connection string
         #[arg(short, long)]
         database_url: Option<String>,
+        /// Migration name (will be used in filename)
+        #[arg(short, long)]
+        name: Option<String>,
     },
     /// Apply migrations to database
     Migrate {
@@ -81,6 +84,20 @@ pub enum Commands {
     },
 }
 
+fn find_config_file() -> Option<PathBuf> {
+    // Look for config files in current directory
+    let config_files = ["shem.toml", "shem.yaml", "shem.yml"];
+    
+    for filename in config_files {
+        let path = PathBuf::from(filename);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    
+    None
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -96,18 +113,23 @@ async fn main() -> Result<()> {
     // Load config from file or use defaults
     let config = if let Some(config_path) = cli.config {
         Config::from_path(&config_path)?
+    } else if let Some(config_path) = find_config_file() {
+        info!("Found config file: {}", config_path.display());
+        Config::from_path(&config_path)?
     } else {
+        info!("No config file found, using defaults");
         Config::default()
     };
     
     // Execute command
     let result = match cli.command {
         Commands::Init { path } => commands::init::execute(path.to_str().unwrap(), &config).await,
-        Commands::Diff { schema, output, database_url } => {
+        Commands::Diff { schema, output, database_url, name } => {
             commands::diff::execute(
                 schema,
                 output,
                 database_url.or_else(|| config.database_url.clone()),
+                name,
                 &config
             ).await
         }

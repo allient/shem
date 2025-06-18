@@ -20,6 +20,48 @@ pub async fn execute(path: &str, _config: &Config) -> Result<()> {
     std::fs::create_dir_all(&migrations_path)
         .context("Failed to create migrations directory")?;
     
+    // Create config file
+    let config_path = base_path.join("shem.toml");
+    let config_content = r#"# Shem Configuration File
+# This file configures your declarative schema management
+
+# Database connection URL
+database_url = "postgresql://postgres:postgres@localhost:5432/myapp_dev"
+
+# Directory paths
+schema_dir = "schema"
+migrations_dir = "migrations"
+
+[declarative]
+enabled = true
+# Schema files to include (supports glob patterns)
+schema_paths = ["./schema/*.sql"]
+# Port for shadow database (used for safe schema diffing)
+shadow_port = 5433
+auto_cleanup = true
+
+[declarative.safety_checks]
+# Warn about potentially destructive operations
+warn_on_drop = true
+# Require confirmation for destructive operations
+require_confirmation = true
+# Create backup before applying migrations
+backup_before_apply = false
+
+[postgres]
+# Schemas to include in search path
+search_path = ["public"]
+# Extensions to include
+extensions = []
+# Tables to exclude from schema operations
+exclude_tables = []
+# Schemas to exclude from schema operations
+exclude_schemas = ["information_schema", "pg_catalog"]
+"#;
+    
+    std::fs::write(&config_path, config_content)
+        .context("Failed to write config file")?;
+    
     // Create initial schema file
     let initial_schema = schema_path.join("00_initial.sql");
     let schema_content = r"-- Initial schema file
@@ -101,8 +143,14 @@ CREATE TABLE profiles (
     info!("Initialized schema project at {}", base_path.display());
     info!("Created schema directory at {}", schema_path.display());
     info!("Created migrations directory at {}", migrations_path.display());
+    info!("Created config file at {}", config_path.display());
     info!("Created initial schema file at {}", initial_schema.display());
     info!("Created schema README at {}", readme_path.display());
+    info!("");
+    info!("Next steps:");
+    info!("1. Edit shem.toml and set your database URL");
+    info!("2. Modify schema/00_initial.sql with your schema definitions");
+    info!("3. Run 'cargo run --bin shem -- diff' to generate your first migration");
     
     Ok(())
 }

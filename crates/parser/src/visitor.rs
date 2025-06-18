@@ -40,7 +40,9 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
     for element in &stmt.table_elts {
         match element.node.as_ref().context("Empty node")? {
             node::Node::ColumnDef(stmt) => {
-                columns.push(parse_column_def(&**stmt)?);
+                let (column, inline_constraints) = parse_column_def(&**stmt)?;
+                columns.push(column);
+                constraints.extend(inline_constraints);
             }
             node::Node::Constraint(stmt) => {
                 constraints.push(parse_table_constraint(&**stmt)?);
@@ -209,7 +211,7 @@ fn get_qualified_name(rel: &protobuf::RangeVar) -> Result<String> {
     Ok(name)
 }
 
-fn parse_column_def(col: &protobuf::ColumnDef) -> Result<ColumnDefinition> {
+fn parse_column_def(col: &protobuf::ColumnDef) -> Result<(ColumnDefinition, Vec<TableConstraint>)> {
     let name = col.colname.clone();
     let data_type = if let Some(type_name) = &col.type_name {
         parse_data_type(type_name)?
@@ -236,31 +238,80 @@ fn parse_column_def(col: &protobuf::ColumnDef) -> Result<ColumnDefinition> {
         None
     };
     
-    // Handle identity column - col.identity is a String
+    // Handle identity column
     let identity = if !col.identity.is_empty() {
-        Some(parse_identity_column(&Node {
-            node: Some(node::Node::String(protobuf::String {
-                sval: col.identity.clone(),
-            })),
-        })?)
+        Some(parse_identity_column(&col.identity)?)
     } else {
         None
     };
+
+    let comment = None; // TODO: Parse comment from appropriate field
     
-    Ok(ColumnDefinition {
+    // Parse inline constraints from col.constraints
+    let mut inline_constraints = Vec::new();
+    for constraint_node in &col.constraints {
+        if let Some(node::Node::Constraint(constraint)) = &constraint_node.node {
+            match constraint.contype {
+                1 => { // PRIMARY KEY
+                    inline_constraints.push(TableConstraint::PrimaryKey {
+                        columns: vec![name.clone()],
+                        name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                    });
+                }
+                2 => { // UNIQUE
+                    inline_constraints.push(TableConstraint::Unique {
+                        columns: vec![name.clone()],
+                        name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    let column = ColumnDefinition {
         name,
         data_type,
         default,
         not_null,
         generated,
         identity,
-        comment: None, // TODO: Parse comment
-    })
+        comment,
+    };
+    
+    Ok((column, inline_constraints))
 }
 
 fn parse_data_type(type_name: &protobuf::TypeName) -> Result<DataType> {
-    // TODO: Implement full type parsing
-    Ok(DataType::Text) // Placeholder
+    // Parse the type name from the names field
+    let mut name_parts = Vec::new();
+    for n in &type_name.names {
+        if let Some(node::Node::String(str_val)) = &n.node {
+            name_parts.push(str_val.sval.to_lowercase());
+        }
+    }
+    let name = name_parts.join(".");
+    match name.as_str() {
+        "serial" => Ok(DataType::Serial),
+        "bigserial" => Ok(DataType::BigSerial),
+        "smallserial" => Ok(DataType::SmallSerial),
+        "integer" | "int" | "int4" => Ok(DataType::Integer),
+        "bigint" | "int8" => Ok(DataType::BigInt),
+        "smallint" | "int2" => Ok(DataType::SmallInt),
+        "text" => Ok(DataType::Text),
+        "boolean" | "bool" => Ok(DataType::Boolean),
+        "real" | "float4" => Ok(DataType::Real),
+        "double precision" | "float8" => Ok(DataType::DoublePrecision),
+        "date" => Ok(DataType::Date),
+        "timestamp" => Ok(DataType::Timestamp(None)),
+        "timestamptz" | "timestamp with time zone" => Ok(DataType::TimestampTz(None)),
+        "time" => Ok(DataType::Time(None)),
+        "timetz" | "time with time zone" => Ok(DataType::TimeTz(None)),
+        "uuid" => Ok(DataType::Uuid),
+        "json" => Ok(DataType::Json),
+        "jsonb" => Ok(DataType::JsonB),
+        _ => Ok(DataType::Custom(name)),
+    }
 }
 
 fn parse_expression(expr: &protobuf::Node) -> Result<Expression> {
@@ -276,7 +327,7 @@ fn parse_generated_column(expr: &protobuf::Node) -> Result<GeneratedColumn> {
     })
 }
 
-fn parse_identity_column(expr: &protobuf::Node) -> Result<IdentityColumn> {
+fn parse_identity_column(s: &str) -> Result<IdentityColumn> {
     // TODO: Implement identity column parsing
     Ok(IdentityColumn {
         always: false,
@@ -290,11 +341,30 @@ fn parse_identity_column(expr: &protobuf::Node) -> Result<IdentityColumn> {
 }
 
 fn parse_table_constraint(constraint: &protobuf::Constraint) -> Result<TableConstraint> {
-    // TODO: Implement constraint parsing
-    Ok(TableConstraint::PrimaryKey {
-        columns: Vec::new(),
-        name: None,
-    })
+    fn node_to_string(node: &pg_query::Node) -> Option<String> {
+        if let Some(pg_query::protobuf::node::Node::String(s)) = &node.node {
+            Some(s.sval.clone())
+        } else {
+            None
+        }
+    }
+    match constraint.contype {
+        1 => { // PRIMARY KEY
+            let columns = constraint.keys.iter().filter_map(node_to_string).collect();
+            Ok(TableConstraint::PrimaryKey {
+                columns,
+                name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+            })
+        }
+        2 => { // UNIQUE
+            let columns = constraint.keys.iter().filter_map(node_to_string).collect();
+            Ok(TableConstraint::Unique {
+                columns,
+                name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+            })
+        }
+        _ => Ok(TableConstraint::PrimaryKey { columns: Vec::new(), name: None }), // fallback
+    }
 }
 
 fn parse_partition_definition(part: &protobuf::Node) -> Result<PartitionDefinition> {
@@ -659,7 +729,8 @@ fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
                         _ => None,
                     })
                     .ok_or_else(|| anyhow::anyhow!("Expected ColumnDef node for ADD COLUMN"))?;
-                Ok(AlterTableAction::AddColumn(parse_column_def(col)?))
+                let (column, _) = parse_column_def(col)?;
+                Ok(AlterTableAction::AddColumn(column))
             }
             Ok(AtDropColumn) => {
                 Ok(AlterTableAction::DropColumn(cmd.name.to_string()))

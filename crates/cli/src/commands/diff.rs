@@ -20,10 +20,20 @@ pub async fn execute(
     schema: PathBuf,
     output: Option<PathBuf>,
     database_url: Option<String>,
+    name: Option<String>,
     config: &Config,
 ) -> Result<()> {
+    // Try to load schema files from config first, fall back to provided path
+    let schema_files = if config.declarative.enabled && !config.declarative.schema_paths.is_empty() {
+        info!("Using declarative schema paths from config");
+        config.load_schema_files()?
+    } else {
+        info!("Using provided schema path: {}", schema.display());
+        vec![schema]
+    };
+
     // Load schema from files
-    let target_schema = load_schema(&schema)?;
+    let target_schema = load_schema_from_files(&schema_files)?;
 
     info!("Target schema: {:?}", target_schema);
 
@@ -49,7 +59,17 @@ pub async fn execute(
     // Write migration file
     let output_path = output.unwrap_or_else(|| {
         let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-        PathBuf::from(format!("migrations/{}.sql", timestamp))
+        let filename = if let Some(migration_name) = name {
+            // Sanitize the name for use in filename
+            let sanitized_name = migration_name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .collect::<String>();
+            format!("migrations/{}_{}.sql", timestamp, sanitized_name)
+        } else {
+            format!("migrations/{}.sql", timestamp)
+        };
+        PathBuf::from(filename)
     });
 
     // Create migrations directory if it doesn't exist
@@ -63,55 +83,63 @@ pub async fn execute(
     Ok(())
 }
 
-fn load_schema(path: &PathBuf) -> Result<Schema> {
+fn load_schema_from_files(files: &[PathBuf]) -> Result<Schema> {
     let mut schema = Schema::new();
 
-    if path.is_file() {
-        // Load single schema file
-        info!("Loading schema from file: {}", path.display());
-        let statements = parse_file(path)?;
-        for stmt in statements {
-            add_statement_to_schema(&mut schema, &stmt)?;
-        }
-    } else if path.is_dir() {
-        // Load all .sql files in directory, ordered by filename
-        info!("Loading schemas from directory: {}", path.display());
-        
-        // Use BTreeMap to maintain order by filename
-        let mut ordered_files = BTreeMap::new();
-        
-        // First, collect all SQL files and their paths
-        for entry in walkdir::WalkDir::new(path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
-        {
-            let path = entry.path().to_path_buf();
-            let filename = path.file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid filename: {}", path.display()))?;
-            
-            ordered_files.insert(filename.to_string(), path);
-        }
-
-        // Then process them in order
-        for (filename, filepath) in ordered_files {
-            info!("Processing schema file: {}", filename);
-            let statements = parse_file(&filepath)?;
+    for file_path in files {
+        if file_path.is_file() {
+            // Load single schema file
+            info!("Loading schema from file: {}", file_path.display());
+            let statements = parse_file(file_path)?;
             for stmt in statements {
                 add_statement_to_schema(&mut schema, &stmt)?;
             }
+        } else if file_path.is_dir() {
+            // Load all .sql files in directory, ordered by filename
+            info!("Loading schemas from directory: {}", file_path.display());
+            
+            // Use BTreeMap to maintain order by filename
+            let mut ordered_files = BTreeMap::new();
+            
+            // First, collect all SQL files and their paths
+            for entry in walkdir::WalkDir::new(file_path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
+            {
+                let path = entry.path().to_path_buf();
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid filename: {}", path.display()))?;
+                
+                ordered_files.insert(filename.to_string(), path);
+            }
+
+            // Then process them in order
+            for (filename, filepath) in ordered_files {
+                info!("Processing schema file: {}", filename);
+                let statements = parse_file(&filepath)?;
+                for stmt in statements {
+                    add_statement_to_schema(&mut schema, &stmt)?;
+                }
+            }
+        } else {
+            anyhow::bail!("Schema path does not exist: {}", file_path.display());
         }
-    } else {
-        anyhow::bail!("Schema path does not exist: {}", path.display());
     }
 
     Ok(schema)
 }
 
+// Keep the old function for backward compatibility
+fn load_schema(path: &PathBuf) -> Result<Schema> {
+    load_schema_from_files(&[path.clone()])
+}
+
 fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Result<()> {
     match stmt {
         ParserStatement::CreateTable(create) => {
+            dbg!(create);
             let mut table = shem_core::Table {
                 name: create.name.clone(),
                 schema: create.schema.clone(),
@@ -122,9 +150,89 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
 
             // Add columns
             for col in &create.columns {
+                let type_name = match &col.data_type {
+                    shem_parser::ast::DataType::Text => "TEXT".to_string(),
+                    shem_parser::ast::DataType::Integer => "INTEGER".to_string(),
+                    shem_parser::ast::DataType::BigInt => "BIGINT".to_string(),
+                    shem_parser::ast::DataType::SmallInt => "SMALLINT".to_string(),
+                    shem_parser::ast::DataType::Serial => "SERIAL".to_string(),
+                    shem_parser::ast::DataType::BigSerial => "BIGSERIAL".to_string(),
+                    shem_parser::ast::DataType::SmallSerial => "SMALLSERIAL".to_string(),
+                    shem_parser::ast::DataType::Boolean => "BOOLEAN".to_string(),
+                    shem_parser::ast::DataType::Real => "REAL".to_string(),
+                    shem_parser::ast::DataType::DoublePrecision => "DOUBLE PRECISION".to_string(),
+                    shem_parser::ast::DataType::Decimal(precision, scale) => {
+                        if let (Some(p), Some(s)) = (precision, scale) {
+                            format!("DECIMAL({}, {})", p, s)
+                        } else if let Some(p) = precision {
+                            format!("DECIMAL({})", p)
+                        } else {
+                            "DECIMAL".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Numeric(precision, scale) => {
+                        if let (Some(p), Some(s)) = (precision, scale) {
+                            format!("NUMERIC({}, {})", p, s)
+                        } else if let Some(p) = precision {
+                            format!("NUMERIC({})", p)
+                        } else {
+                            "NUMERIC".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Date => "DATE".to_string(),
+                    shem_parser::ast::DataType::Time(precision) => {
+                        if let Some(p) = precision {
+                            format!("TIME({})", p)
+                        } else {
+                            "TIME".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Timestamp(precision) => {
+                        if let Some(p) = precision {
+                            format!("TIMESTAMP({})", p)
+                        } else {
+                            "TIMESTAMP".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::TimestampTz(precision) => {
+                        if let Some(p) = precision {
+                            format!("TIMESTAMPTZ({})", p)
+                        } else {
+                            "TIMESTAMPTZ".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Interval(precision) => {
+                        if let Some(p) = precision {
+                            format!("INTERVAL({:?})", p)
+                        } else {
+                            "INTERVAL".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Uuid => "UUID".to_string(),
+                    shem_parser::ast::DataType::Json => "JSON".to_string(),
+                    shem_parser::ast::DataType::JsonB => "JSONB".to_string(),
+                    shem_parser::ast::DataType::ByteA => "BYTEA".to_string(),
+                    shem_parser::ast::DataType::Character(length) => {
+                        if let Some(l) = length {
+                            format!("CHAR({})", l)
+                        } else {
+                            "CHAR".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::CharacterVarying(length) => {
+                        if let Some(l) = length {
+                            format!("VARCHAR({})", l)
+                        } else {
+                            "VARCHAR".to_string()
+                        }
+                    }
+                    shem_parser::ast::DataType::Custom(name) => name.clone(),
+                    _ => format!("{:?}", col.data_type), // Fallback for other types
+                };
+
                 let column = shem_core::Column {
                     name: col.name.clone(),
-                    type_name: format!("{:?}", col.data_type),
+                    type_name,
                     nullable: !col.not_null,
                     default: col.default.as_ref().map(|d| format!("{:?}", d)),
                     identity: col.identity.as_ref().map(|i| shem_core::Identity {
@@ -144,6 +252,19 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
 
             // Add constraints
             for constraint in &create.constraints {
+                let definition = match constraint {
+                    TableConstraint::PrimaryKey { columns, .. } => {
+                        format!("PRIMARY KEY ({})", columns.join(", "))
+                    }
+                    TableConstraint::Unique { columns, .. } => {
+                        format!("UNIQUE ({})", columns.join(", "))
+                    }
+                    TableConstraint::ForeignKey { columns, .. } => {
+                        format!("FOREIGN KEY ({})", columns.join(", "))
+                    }
+                    TableConstraint::Check { .. } => "CHECK (...)".to_string(),
+                    TableConstraint::Exclusion { .. } => "EXCLUDE (...)".to_string(),
+                };
                 let constraint = shem_core::Constraint {
                     name: match constraint {
                         TableConstraint::PrimaryKey { name, .. } => {
@@ -163,7 +284,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         TableConstraint::Check { .. } => shem_core::ConstraintKind::Check,
                         TableConstraint::Exclusion { .. } => shem_core::ConstraintKind::Exclusion,
                     },
-                    definition: format!("{:?}", constraint),
+                    definition,
                 };
                 table.constraints.push(constraint);
             }
@@ -362,6 +483,41 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 options: create.options.clone(),
             };
             schema.servers.insert(server.name.clone(), server);
+        }
+        ParserStatement::AlterTable(alter) => {
+            // Find the table in the schema and add constraints
+            if let Some(table) = schema.tables.get_mut(&alter.name) {
+                for action in &alter.actions {
+                    match action {
+                        shem_parser::ast::AlterTableAction::AddConstraint(constraint) => {
+                            match constraint {
+                                shem_parser::ast::TableConstraint::PrimaryKey { columns, name } => {
+                                    if !columns.is_empty() {
+                                        let c = shem_core::Constraint {
+                                            name: name.clone().unwrap_or_default(),
+                                            kind: shem_core::ConstraintKind::PrimaryKey,
+                                            definition: format!("PRIMARY KEY ({})", columns.join(", ")),
+                                        };
+                                        table.constraints.push(c);
+                                    }
+                                }
+                                shem_parser::ast::TableConstraint::Unique { columns, name } => {
+                                    if !columns.is_empty() {
+                                        let c = shem_core::Constraint {
+                                            name: name.clone().unwrap_or_default(),
+                                            kind: shem_core::ConstraintKind::Unique,
+                                            definition: format!("UNIQUE ({})", columns.join(", ")),
+                                        };
+                                        table.constraints.push(c);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
         _ => {
             warn!("Unsupported statement type: {:?}", stmt);

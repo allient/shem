@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
+use std::collections::HashSet;
+use glob::glob;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -8,6 +10,7 @@ pub struct Config {
     pub schema_dir: PathBuf,
     pub migrations_dir: PathBuf,
     pub postgres: PostgresConfig,
+    pub declarative: DeclarativeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +19,22 @@ pub struct PostgresConfig {
     pub extensions: Vec<String>,
     pub exclude_tables: Vec<String>,
     pub exclude_schemas: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeclarativeConfig {
+    pub enabled: bool,
+    pub schema_paths: Vec<String>,
+    pub shadow_port: u16,
+    pub auto_cleanup: bool,
+    pub safety_checks: SafetyConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyConfig {
+    pub warn_on_drop: bool,
+    pub require_confirmation: bool,
+    pub backup_before_apply: bool,
 }
 
 impl Default for Config {
@@ -30,6 +49,17 @@ impl Default for Config {
                 exclude_tables: vec![],
                 exclude_schemas: vec!["information_schema".to_string(), "pg_catalog".to_string()],
             },
+            declarative: DeclarativeConfig {
+                enabled: true,
+                schema_paths: vec!["./schema/*.sql".to_string()],
+                shadow_port: 5433,
+                auto_cleanup: true,
+                safety_checks: SafetyConfig {
+                    warn_on_drop: true,
+                    require_confirmation: true,
+                    backup_before_apply: false,
+                },
+            },
         }
     }
 }
@@ -37,8 +67,40 @@ impl Default for Config {
 impl Config {
     pub fn from_path(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config = serde_yaml::from_str(&content)?;
+        let config = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+            toml::from_str(&content)?
+        } else {
+            serde_yaml::from_str(&content)?
+        };
         Ok(config)
+    }
+
+    pub fn load_schema_files(&self) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        let mut seen = HashSet::new();
+
+        for pattern in &self.declarative.schema_paths {
+            let matches = glob(pattern)
+                .with_context(|| format!("Invalid glob pattern: {}", pattern))?;
+            
+            for entry in matches {
+                let path = entry
+                    .with_context(|| format!("Failed to read glob pattern: {}", pattern))?;
+                
+                if !seen.contains(&path) {
+                    seen.insert(path.clone());
+                    files.push(path);
+                }
+            }
+        }
+
+        files.sort_by(|a, b| {
+            a.file_name()
+                .unwrap_or_default()
+                .cmp(&b.file_name().unwrap_or_default())
+        });
+
+        Ok(files)
     }
 }
 
@@ -51,7 +113,10 @@ pub async fn load_config(path: &Path) -> Result<Config> {
         .await
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
     
-    let config: Config = if path.extension().and_then(|s| s.to_str()) == Some("json") {
+    let config: Config = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+        toml::from_str(&content)
+            .with_context(|| "Failed to parse TOML config")?
+    } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
         serde_json::from_str(&content)
             .with_context(|| "Failed to parse JSON config")?
     } else {
@@ -63,8 +128,13 @@ pub async fn load_config(path: &Path) -> Result<Config> {
 }
 
 pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
-    let content = serde_yaml::to_string(config)
-        .with_context(|| "Failed to serialize config")?;
+    let content = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
+        toml::to_string_pretty(config)
+            .with_context(|| "Failed to serialize TOML config")?
+    } else {
+        serde_yaml::to_string(config)
+            .with_context(|| "Failed to serialize YAML config")?
+    };
     
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await

@@ -22,24 +22,36 @@ pub async fn execute(
     let url = database_url.or_else(|| config.database_url.clone())
         .ok_or_else(|| anyhow::anyhow!("No database URL provided"))?;
     
+    info!("Connecting to database...");
+    
     // Connect to database
     let driver = get_driver()?;
     let conn = driver.connect(&url).await?;
     
     // Create migrations table if it doesn't exist
     if !dry_run {
+        info!("Creating migrations table if it doesn't exist...");
         create_migrations_table(&conn).await?;
     }
     
-    // Get applied migrations
+    // Get applied migrations (only after ensuring table exists)
     let applied = if !dry_run {
+        info!("Getting applied migrations...");
         get_applied_migrations(&conn).await?
     } else {
         vec![]
     };
     
     // Find migration files
+    info!("Finding migration files in: {}", migrations.display());
     let migration_files = find_migration_files(&migrations)?;
+    
+    if migration_files.is_empty() {
+        info!("No migration files found");
+        return Ok(());
+    }
+    
+    info!("Found {} migration files", migration_files.len());
     
     // Apply pending migrations
     for file in migration_files {
@@ -71,6 +83,7 @@ pub async fn execute(
         
         // Apply migration
         for stmt in &migration.statements {
+            info!("Executing: {}", stmt);
             tx.execute(stmt).await?;
         }
         
@@ -99,6 +112,28 @@ async fn create_migrations_table(conn: &Box<dyn DatabaseConnection>) -> Result<(
 }
 
 async fn get_applied_migrations(conn: &Box<dyn DatabaseConnection>) -> Result<Vec<String>> {
+    // Check if table exists first
+    let check_sql = r#"
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'schema_migrations'
+        )
+    "#;
+    
+    let table_exists = conn.query(check_sql).await?;
+    let exists = match table_exists.first() {
+        Some(serde_json::Value::Object(obj)) => {
+            obj.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)
+        }
+        _ => false,
+    };
+    
+    if !exists {
+        info!("schema_migrations table does not exist yet");
+        return Ok(vec![]);
+    }
+    
     let rows = conn.query("SELECT name FROM schema_migrations ORDER BY id").await?;
     let mut migrations = Vec::with_capacity(rows.len());
     for row in rows {
@@ -131,18 +166,39 @@ fn find_migration_files(migrations_dir: &Path) -> Result<Vec<PathBuf>> {
 
 fn parse_migration(content: &str) -> Result<Migration> {
     // Split content into up and down migrations
-    let parts: Vec<_> = content.split("-- migrate:down").collect();
-    let up = parts[0].trim().to_string();
-    let down = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+    let parts: Vec<_> = content.split("-- Down Migration").collect();
+    let up = parts[0].trim();
+    let down = parts.get(1).map(|s| s.trim()).unwrap_or("");
     
-    // Split into statements
-    let up_statements: Vec<_> = up.split(';')
+    // Parse up migration statements
+    let up_statements: Vec<_> = up.lines()
+        .map(|line| line.trim())
+        .filter(|line| {
+            !line.is_empty() && 
+            !line.starts_with("--") && 
+            !line.starts_with("/*") &&
+            !line.starts_with("*/")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split(';')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
         
-    let down_statements: Vec<_> = down.split(';')
+    // Parse down migration statements
+    let down_statements: Vec<_> = down.lines()
+        .map(|line| line.trim())
+        .filter(|line| {
+            !line.is_empty() && 
+            !line.starts_with("--") && 
+            !line.starts_with("/*") &&
+            !line.starts_with("*/")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split(';')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(String::from)
@@ -158,8 +214,8 @@ fn parse_migration(content: &str) -> Result<Migration> {
 }
 
 async fn record_migration(tx: &Box<dyn Transaction>, name: &str, migration: &Migration) -> Result<()> {
-    let sql = "INSERT INTO schema_migrations (name) VALUES ($1)";
-    tx.execute(sql).await?;
+    let sql = format!("INSERT INTO schema_migrations (name) VALUES ('{}')", name.replace('\'', "''"));
+    tx.execute(&sql).await?;
     Ok(())
 }
 
