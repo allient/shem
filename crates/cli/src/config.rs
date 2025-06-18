@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
-use std::collections::HashSet;
+use anyhow::{Context, Result};
 use glob::glob;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -66,13 +66,15 @@ impl Default for Config {
 
 impl Config {
     pub fn from_path(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
-            toml::from_str(&content)?
-        } else {
-            serde_yaml::from_str(&content)?
-        };
-        Ok(config)
+        // 🔐 Reject unsupported formats
+        if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+            return Err(anyhow::anyhow!("Only .toml config files are supported"));
+        }
+
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+
+        toml::from_str(&content).with_context(|| "Failed to parse TOML config")
     }
 
     pub fn load_schema_files(&self) -> Result<Vec<PathBuf>> {
@@ -80,13 +82,13 @@ impl Config {
         let mut seen = HashSet::new();
 
         for pattern in &self.declarative.schema_paths {
-            let matches = glob(pattern)
-                .with_context(|| format!("Invalid glob pattern: {}", pattern))?;
-            
+            let matches =
+                glob(pattern).with_context(|| format!("Invalid glob pattern: {}", pattern))?;
+
             for entry in matches {
-                let path = entry
-                    .with_context(|| format!("Failed to read glob pattern: {}", pattern))?;
-                
+                let path =
+                    entry.with_context(|| format!("Failed to read glob pattern: {}", pattern))?;
+
                 if !seen.contains(&path) {
                     seen.insert(path.clone());
                     files.push(path);
@@ -108,41 +110,27 @@ pub async fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    
+
     let content = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    
-    let config: Config = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
-        toml::from_str(&content)
-            .with_context(|| "Failed to parse TOML config")?
-    } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
-        serde_json::from_str(&content)
-            .with_context(|| "Failed to parse JSON config")?
-    } else {
-        serde_yaml::from_str(&content)
-            .with_context(|| "Failed to parse YAML config")?
-    };
-    
-    Ok(config)
+
+    toml::from_str(&content).with_context(|| "Failed to parse TOML config")
 }
 
 pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
-    let content = if path.extension().and_then(|s| s.to_str()) == Some("toml") {
-        toml::to_string_pretty(config)
-            .with_context(|| "Failed to serialize TOML config")?
-    } else {
-        serde_yaml::to_string(config)
-            .with_context(|| "Failed to serialize YAML config")?
-    };
-    
+    let content =
+        toml::to_string_pretty(config).with_context(|| "Failed to serialize TOML config")?;
+
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await
+        tokio::fs::create_dir_all(parent)
+            .await
             .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
     }
-    
-    tokio::fs::write(path, content).await
+
+    tokio::fs::write(path, content)
+        .await
         .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-    
+
     Ok(())
 }
