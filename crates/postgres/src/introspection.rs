@@ -1,6 +1,7 @@
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;
+use std::collections::HashMap;
 
 /// Introspect PostgreSQL database schema
 pub async fn introspect_schema<C>(client: &C) -> Result<Schema>
@@ -39,10 +40,24 @@ where
         schema.procedures.insert(proc.name.clone(), proc);
     }
 
-    // Introspect types (including range types)
-    let types = introspect_types(&*client).await?;
-    for type_def in types {
-        schema.types.insert(type_def.name.clone(), type_def);
+    // Introspect types (composite types, not enums)
+    let composite_types = introspect_composite_types(&*client).await?;
+    for type_def in composite_types {
+        // Store composite types in a separate collection or handle them differently
+        // For now, we'll skip them as they're not enums
+    }
+
+    // Introspect range types separately for detailed information
+    let range_types = introspect_range_types(&*client).await?;
+    for range_type in range_types {
+        // Store range types in the types collection with a special prefix
+        schema.range_types.insert(range_type.name.clone(), range_type);
+    }
+
+    // Introspect enums
+    let enums = introspect_enums(&*client).await?;
+    for enum_type in enums {
+        schema.enums.insert(enum_type.name.clone(), enum_type);
     }
 
     // Introspect domains
@@ -63,10 +78,16 @@ where
         schema.extensions.insert(ext.name.clone(), ext);
     }
 
-    // Introspect triggers (including constraint triggers)
+    // Introspect triggers
     let triggers = introspect_triggers(&*client).await?;
     for trigger in triggers {
         schema.triggers.insert(trigger.name.clone(), trigger);
+    }
+
+    // Introspect constraint triggers separately
+    let constraint_triggers = introspect_constraint_triggers(&*client).await?;
+    for trigger in constraint_triggers {
+        schema.constraint_triggers.insert(trigger.name.clone(), trigger);
     }
 
     // Introspect event triggers
@@ -107,11 +128,20 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
         SELECT 
             t.table_schema,
             t.table_name,
-            obj_description(pgc.oid, 'pg_class') as comment
+            obj_description(pgc.oid, 'pg_class') as comment,
+            pgc.relowner as owner
         FROM information_schema.tables t
         JOIN pg_class pgc ON pgc.relname = t.table_name
-        WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
+        JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = t.table_schema
+        WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND t.table_type = 'BASE TABLE'
+        AND pgc.relowner > 1  -- exclude system-owned tables
+        AND NOT EXISTS (
+            -- Exclude tables that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = pgc.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -137,6 +167,11 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
             columns,
             constraints,
             indexes,
+            comment,
+            tablespace: None, // TODO: Get tablespace information
+            inherits: Vec::new(), // TODO: Get inheritance information
+            partition_by: None, // TODO: Get partitioning information
+            storage_parameters: HashMap::new(), // TODO: Get storage parameters
         });
     }
 
@@ -155,8 +190,7 @@ async fn introspect_columns<C: GenericClient>(
             c.is_nullable = 'YES' as is_nullable,
             c.column_default,
             c.identity_generation,
-            c.generation_expression,
-            col_description(pgc.oid, c.ordinal_position) as comment
+            c.generation_expression
         FROM information_schema.columns c
         JOIN pg_class pgc ON pgc.relname = c.table_name
         WHERE c.table_schema = $1
@@ -179,6 +213,8 @@ async fn introspect_columns<C: GenericClient>(
                 increment: 1,
                 min_value: None,
                 max_value: None,
+                cache: None,
+                cycle: false,
             }),
             Some(identity_type) if identity_type == "BY DEFAULT" => Some(Identity {
                 always: false,
@@ -186,6 +222,8 @@ async fn introspect_columns<C: GenericClient>(
                 increment: 1,
                 min_value: None,
                 max_value: None,
+                cache: None,
+                cycle: false,
             }),
             _ => None,
         };
@@ -195,7 +233,6 @@ async fn introspect_columns<C: GenericClient>(
                 expression: expr,
                 stored: true,
             });
-        let comment: Option<String> = row.get("comment");
 
         columns.push(Column {
             name,
@@ -204,6 +241,10 @@ async fn introspect_columns<C: GenericClient>(
             default,
             identity,
             generated,
+            comment: None,
+            collation: None, // TODO: Get column collation
+            storage: None, // TODO: Get storage type
+            compression: None, // TODO: Get compression method
         });
     }
 
@@ -247,7 +288,21 @@ async fn introspect_constraints<C: GenericClient>(
         let constraint_type: String = row.get("constraint_type");
         let kind = match constraint_type.as_str() {
             "PRIMARY KEY" => ConstraintKind::PrimaryKey,
-            "FOREIGN KEY" => ConstraintKind::ForeignKey,
+            "FOREIGN KEY" => {
+                let foreign_table = format!(
+                    "{}.{}",
+                    row.get::<_, String>("foreign_table_schema"),
+                    row.get::<_, String>("foreign_table_name")
+                );
+                let update_rule = row.get::<_, Option<String>>("update_rule");
+                let delete_rule = row.get::<_, Option<String>>("delete_rule");
+                
+                ConstraintKind::ForeignKey {
+                    references: foreign_table,
+                    on_delete: None, // TODO: Parse referential action
+                    on_update: None, // TODO: Parse referential action
+                }
+            },
             "UNIQUE" => ConstraintKind::Unique,
             "CHECK" => ConstraintKind::Check,
             _ => continue,
@@ -257,19 +312,14 @@ async fn introspect_constraints<C: GenericClient>(
             ConstraintKind::PrimaryKey => {
                 format!("PRIMARY KEY ({})", row.get::<_, String>("column_name"))
             }
-            ConstraintKind::ForeignKey => {
-                let foreign_table = format!(
-                    "{}.{}",
-                    row.get::<_, String>("foreign_table_schema"),
-                    row.get::<_, String>("foreign_table_name")
-                );
+            ConstraintKind::ForeignKey { ref references, .. } => {
                 let foreign_column = row.get::<_, String>("foreign_column_name");
                 let update_rule = row.get::<_, Option<String>>("update_rule");
                 let delete_rule = row.get::<_, Option<String>>("delete_rule");
                 format!(
                     "FOREIGN KEY ({}) REFERENCES {} ({}) ON UPDATE {} ON DELETE {}",
                     row.get::<_, String>("column_name"),
-                    foreign_table,
+                    references,
                     foreign_column,
                     update_rule.unwrap_or_else(|| "NO ACTION".to_string()),
                     delete_rule.unwrap_or_else(|| "NO ACTION".to_string())
@@ -297,6 +347,8 @@ async fn introspect_constraints<C: GenericClient>(
             name,
             kind,
             definition,
+            deferrable: false, // TODO: Get deferrable information
+            initially_deferred: false, // TODO: Get initially deferred information
         });
     }
 
@@ -339,6 +391,17 @@ async fn introspect_indexes<C: GenericClient>(
         let where_clause: Option<String> = row.get("where_clause");
         let definition: String = row.get("index_definition");
 
+        // Convert method string to IndexMethod enum
+        let index_method = match method.as_str() {
+            "btree" => IndexMethod::Btree,
+            "hash" => IndexMethod::Hash,
+            "gist" => IndexMethod::Gist,
+            "spgist" => IndexMethod::Spgist,
+            "gin" => IndexMethod::Gin,
+            "brin" => IndexMethod::Brin,
+            _ => IndexMethod::Btree, // Default fallback
+        };
+
         if current_index
             .as_ref()
             .map(|i: &Index| i.name != name)
@@ -351,17 +414,24 @@ async fn introspect_indexes<C: GenericClient>(
                 name,
                 columns: vec![IndexColumn {
                     name: column_name,
+                    expression: None, // TODO: Get expression for functional indexes
                     order: SortOrder::Ascending, // TODO: Get actual sort order
                     nulls_first: false,          // TODO: Get actual nulls order
+                    opclass: None, // TODO: Get operator class
                 }],
                 unique: is_unique,
-                method,
+                method: index_method,
+                where_clause,
+                tablespace: None, // TODO: Get tablespace
+                storage_parameters: HashMap::new(), // TODO: Get storage parameters
             });
         } else if let Some(idx) = &mut current_index {
             idx.columns.push(IndexColumn {
                 name: column_name,
+                expression: None, // TODO: Get expression for functional indexes
                 order: SortOrder::Ascending, // TODO: Get actual sort order
                 nulls_first: false,          // TODO: Get actual nulls order
+                opclass: None, // TODO: Get operator class
             });
         }
     }
@@ -380,9 +450,19 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             v.table_schema,
             v.table_name,
             v.view_definition,
-            v.check_option
+            v.check_option,
+            pgc.relowner as owner
         FROM information_schema.views v
-        WHERE v.table_schema NOT IN ('pg_catalog', 'information_schema')
+        JOIN pg_class pgc ON pgc.relname = v.table_name
+        JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = v.table_schema
+        WHERE v.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND pgc.relowner > 1  -- exclude system-owned views
+        AND NOT EXISTS (
+            -- Exclude views that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = pgc.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -405,6 +485,9 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             schema,
             definition,
             check_option: check_option_enum,
+            comment: None,
+            security_barrier: false, // TODO: Get security barrier information
+            columns: Vec::new(), // TODO: Get explicit column list
         });
     }
 
@@ -420,7 +503,7 @@ async fn introspect_materialized_views<C: GenericClient>(
             matviewname,
             definition
         FROM pg_matviews
-        WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -436,6 +519,10 @@ async fn introspect_materialized_views<C: GenericClient>(
             schema,
             definition,
             check_option: CheckOption::None, // Materialized views don't have check options
+            comment: None,
+            tablespace: None, // TODO: Get tablespace information
+            storage_parameters: HashMap::new(), // TODO: Get storage parameters
+            indexes: Vec::new(), // TODO: Get materialized view indexes
         });
     }
 
@@ -450,12 +537,27 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             p.prosrc as function_body,
             l.lanname as language,
             pg_get_function_result(p.oid) as return_type,
-            pg_get_function_arguments(p.oid) as arguments
+            pg_get_function_arguments(p.oid) as arguments,
+            p.proowner as owner,
+            p.prokind as kind
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND p.prokind = 'f'  -- functions only, not procedures
+        AND NOT p.proisagg  -- exclude aggregates
+        AND NOT p.proiswindow  -- exclude window functions
+        AND p.proowner > 1  -- exclude system-owned functions (owner 1 is usually postgres superuser)
+        AND NOT EXISTS (
+            -- Exclude functions that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = p.oid AND d.deptype = 'e'
+        )
+        AND NOT EXISTS (
+            -- Exclude internal functions (those with no source or C language functions)
+            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = '' OR l.lanname = 'c'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -500,6 +602,13 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             returns,
             language,
             definition,
+            comment: None,
+            volatility: Volatility::Volatile, // TODO: Get volatility information
+            strict: false, // TODO: Get strict information
+            security_definer: false, // TODO: Get security definer information
+            parallel_safety: ParallelSafety::Unsafe, // TODO: Get parallel safety information
+            cost: None, // TODO: Get cost information
+            rows: None, // TODO: Get rows information
         });
     }
 
@@ -513,12 +622,24 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             n.nspname as schema_name,
             p.prosrc as procedure_body,
             l.lanname as language,
-            pg_get_function_arguments(p.oid) as arguments
+            pg_get_function_arguments(p.oid) as arguments,
+            p.proowner as owner
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND p.prokind = 'p'  -- procedures only
+        AND p.proowner > 1  -- exclude system-owned procedures
+        AND NOT EXISTS (
+            -- Exclude procedures that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = p.oid AND d.deptype = 'e'
+        )
+        AND NOT EXISTS (
+            -- Exclude internal procedures (those with no source or C language procedures)
+            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = '' OR l.lanname = 'c'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -540,40 +661,46 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             parameters,
             language,
             definition,
+            comment: None,
+            security_definer: false, // TODO: Get security definer information
         });
     }
 
     Ok(procedures)
 }
 
-async fn introspect_types<C: GenericClient>(client: &C) -> Result<Vec<Type>> {
+async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<Type>> {
     let query = r#"
         SELECT 
-            t.typname as type_name,
-            n.nspname as schema_name,
-            t.typtype as type_kind
+            t.typname as name,
+            n.nspname as schema,
+            string_agg(att.attname || ' ' || pg_catalog.format_type(att.atttypid, att.atttypmod), ', ' ORDER BY att.attnum) as definition
         FROM pg_type t
-        JOIN pg_namespace n ON t.typnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-        AND t.typtype IN ('c', 'e', 'r')  -- composite, enum, range
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        JOIN pg_catalog.pg_class c ON c.relname = t.typname
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid
+        WHERE t.typtype = 'c'
+        AND att.attnum > 0
+        AND NOT att.attisdropped
+        GROUP BY t.typname, n.nspname
+        ORDER BY n.nspname, t.typname
     "#;
 
     let rows = client.query(query, &[]).await?;
     let mut types = Vec::new();
 
     for row in rows {
-        let name: String = row.get("type_name");
-        let schema: Option<String> = row.get("schema_name");
-        let type_kind: i8 = row.get("type_kind");
+        let name: String = row.get("name");
+        let schema: Option<String> = row.get("schema");
+        let definition: Option<String> = row.get("definition");
 
-        let kind = match type_kind as u8 as char {
-            'c' => TypeKind::Composite,
-            'e' => TypeKind::Enum,
-            'r' => TypeKind::Range,
-            _ => TypeKind::Base,
-        };
-
-        types.push(Type { name, schema, kind });
+        types.push(Type {
+            name,
+            schema,
+            kind: TypeKind::Composite { attributes: Vec::new() }, // TODO: Parse attributes
+            comment: None,
+            definition,
+        });
     }
 
     Ok(types)
@@ -586,12 +713,22 @@ async fn introspect_domains<C: GenericClient>(client: &C) -> Result<Vec<Domain>>
             d.domain_schema,
             d.data_type,
             d.domain_default,
-            c.check_clause
+            c.check_clause,
+            t.typowner as owner
         FROM information_schema.domains d
+        JOIN pg_type t ON t.typname = d.domain_name
+        JOIN pg_namespace n ON t.typnamespace = n.oid AND n.nspname = d.domain_schema
         LEFT JOIN information_schema.check_constraints c
             ON d.domain_name = c.constraint_name
             AND d.domain_schema = c.constraint_schema
-        WHERE d.domain_schema NOT IN ('pg_catalog', 'information_schema')
+        WHERE d.domain_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.typowner > 1  -- exclude system-owned domains
+        AND NOT EXISTS (
+            -- Exclude domains that are part of extensions
+            SELECT 1 FROM pg_depend dep
+            JOIN pg_extension e ON dep.refobjid = e.oid
+            WHERE dep.objid = t.oid AND dep.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -606,15 +743,12 @@ async fn introspect_domains<C: GenericClient>(client: &C) -> Result<Vec<Domain>>
 
         let mut constraints = Vec::new();
 
-        if let Some(default_val) = default {
-            constraints.push(format!("DEFAULT {}", default_val));
-        }
-
         if let Some(check) = &check_clause {
-            if check.contains("NOT NULL") {
-                constraints.push("NOT NULL".to_string());
-            }
-            constraints.push(check.clone());
+            constraints.push(DomainConstraint {
+                name: None,
+                check: check.clone(),
+                not_valid: false, // TODO: Get NOT VALID information
+            });
         }
 
         domains.push(Domain {
@@ -622,6 +756,9 @@ async fn introspect_domains<C: GenericClient>(client: &C) -> Result<Vec<Domain>>
             schema,
             base_type,
             constraints,
+            default,
+            not_null: false, // TODO: Get NOT NULL information
+            comment: None,
         });
     }
 
@@ -637,9 +774,19 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
             s.minimum_value,
             s.maximum_value,
             s.increment,
-            s.cycle_option
+            s.cycle_option,
+            seq.relowner as owner
         FROM information_schema.sequences s
-        WHERE s.sequence_schema NOT IN ('pg_catalog', 'information_schema')
+        JOIN pg_class seq ON seq.relname = s.sequence_name
+        JOIN pg_namespace n ON seq.relnamespace = n.oid AND n.nspname = s.sequence_schema
+        WHERE s.sequence_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND seq.relowner > 1  -- exclude system-owned sequences
+        AND NOT EXISTS (
+            -- Exclude sequences that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = seq.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -663,12 +810,15 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
         sequences.push(Sequence {
             name,
             schema,
+            data_type: "bigint".to_string(), // TODO: Get actual data type
             start,
             increment,
             min_value,
             max_value,
             cache: 1, // Default cache value
             cycle: cycle_option == "YES",
+            owned_by: None, // TODO: Get owned by information
+            comment: None,
         });
     }
 
@@ -694,6 +844,8 @@ async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Exten
             name,
             schema: None, // Extensions don't have a specific schema
             version,
+            cascade: false, // TODO: Get cascade information
+            comment: None,
         });
     }
 
@@ -708,13 +860,21 @@ async fn introspect_triggers<C: GenericClient>(client: &C) -> Result<Vec<Trigger
             p.proname as function_name,
             t.tgtype as trigger_type,
             t.tgargs as trigger_arguments,
-            t.tgconstraint as is_constraint_trigger
+            t.tgconstraint as is_constraint_trigger,
+            c.relowner as owner
         FROM pg_trigger t
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_proc p ON t.tgfoid = p.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND NOT t.tgisinternal  -- Exclude internal triggers
+        AND c.relowner > 1  -- exclude system-owned tables
+        AND NOT EXISTS (
+            -- Exclude triggers on tables that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -746,10 +906,14 @@ async fn introspect_triggers<C: GenericClient>(client: &C) -> Result<Vec<Trigger
         triggers.push(Trigger {
             name,
             table,
+            schema: None,
             timing,
             events,
             function,
             arguments: args,
+            condition: None, // TODO: Get WHEN condition
+            for_each: TriggerLevel::Row, // TODO: Get FOR EACH information
+            comment: None,
         });
     }
 
@@ -765,11 +929,19 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
             p.polroles as roles,
             p.polcmd::text as command,
             pg_get_expr(p.polqual, p.polrelid) as using_expression,
-            pg_get_expr(p.polwithcheck, p.polrelid) as check_expression
+            pg_get_expr(p.polwithcheck, p.polrelid) as check_expression,
+            c.relowner as owner
         FROM pg_policy p
         JOIN pg_class c ON p.polrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND c.relowner > 1  -- exclude system-owned tables
+        AND NOT EXISTS (
+            -- Exclude policies on tables that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -787,9 +959,21 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         // Convert role OIDs to role names (simplified)
         let role_names = roles.iter().map(|&oid| oid.to_string()).collect();
 
+        // Parse command to PolicyCommand enum
+        let policy_command = match command.as_str() {
+            "ALL" => PolicyCommand::All,
+            "SELECT" => PolicyCommand::Select,
+            "INSERT" => PolicyCommand::Insert,
+            "UPDATE" => PolicyCommand::Update,
+            "DELETE" => PolicyCommand::Delete,
+            _ => PolicyCommand::All, // Default fallback
+        };
+
         policies.push(Policy {
             name,
             table,
+            schema: None, // TODO: Get schema information
+            command: policy_command,
             permissive,
             roles: role_names,
             using: using_expr,
@@ -821,13 +1005,14 @@ async fn introspect_servers<C: GenericClient>(client: &C) -> Result<Vec<Server>>
         let options_map = if let Some(opt_array) = options {
             parse_server_options(&opt_array)
         } else {
-            std::collections::HashMap::new()
+            HashMap::new()
         };
 
         servers.push(Server {
             name,
             foreign_data_wrapper,
             options: options_map,
+            version: None, // TODO: Get server version
         });
     }
 
@@ -867,12 +1052,22 @@ async fn introspect_event_triggers<C: GenericClient>(client: &C) -> Result<Vec<E
             "unknown_function".to_string()
         };
 
+        // Parse event to EventTriggerEvent enum
+        let event_enum = match event.as_str() {
+            "ddl_command_start" => EventTriggerEvent::DdlCommandStart,
+            "ddl_command_end" => EventTriggerEvent::DdlCommandEnd,
+            "table_rewrite" => EventTriggerEvent::TableRewrite,
+            "sql_drop" => EventTriggerEvent::SqlDrop,
+            _ => EventTriggerEvent::DdlCommandStart, // Default fallback
+        };
+
         event_triggers.push(EventTrigger {
             name,
-            event,
+            event: event_enum,
             function: function_name,
             enabled,
             tags: tags.unwrap_or_default(),
+            condition: None, // TODO: Get WHEN condition
         });
     }
 
@@ -886,10 +1081,18 @@ async fn introspect_collations<C: GenericClient>(client: &C) -> Result<Vec<Colla
             n.nspname as schema_name,
             c.collcollate as locale,
             c.collctype as ctype,
-            c.collprovider::text as provider
+            c.collprovider::text as provider,
+            c.collowner as owner
         FROM pg_collation c
         JOIN pg_namespace n ON c.collnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND c.collowner > 1  -- exclude system-owned collations
+        AND NOT EXISTS (
+            -- Exclude collations that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -902,12 +1105,21 @@ async fn introspect_collations<C: GenericClient>(client: &C) -> Result<Vec<Colla
         let ctype: Option<String> = row.get("ctype");
         let provider: String = row.get("provider");
 
+        // Parse provider to CollationProvider enum
+        let provider_enum = match provider.as_str() {
+            "libc" => CollationProvider::Libc,
+            "icu" => CollationProvider::Icu,
+            _ => CollationProvider::Libc, // Default fallback
+        };
+
         collations.push(Collation {
             name,
             schema,
-            locale,
-            ctype,
-            provider,
+            locale: locale.clone(),
+            lc_collate: locale.clone(),
+            lc_ctype: ctype.clone(),
+            provider: provider_enum,
+            deterministic: true, // TODO: Get deterministic information
         });
     }
 
@@ -922,12 +1134,20 @@ async fn introspect_rules<C: GenericClient>(client: &C) -> Result<Vec<Rule>> {
             n.nspname as schema_name,
             r.ev_type as event_type,
             r.is_instead as is_instead,
-            pg_get_ruledef(r.oid) as rule_definition
+            pg_get_ruledef(r.oid) as rule_definition,
+            c.relowner as owner
         FROM pg_rewrite r
         JOIN pg_class c ON r.ev_class = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND r.rulename != '_RETURN'  -- Exclude default rules
+        AND c.relowner > 1  -- exclude system-owned tables
+        AND NOT EXISTS (
+            -- Exclude rules on tables that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -956,11 +1176,87 @@ async fn introspect_rules<C: GenericClient>(client: &C) -> Result<Vec<Rule>> {
             schema,
             event,
             instead: is_instead,
-            definition,
+            condition: None, // TODO: Get WHERE condition
+            actions: vec![definition], // TODO: Parse actions properly
         });
     }
 
     Ok(rules)
+}
+
+async fn introspect_constraint_triggers<C: GenericClient>(client: &C) -> Result<Vec<ConstraintTrigger>> {
+    let query = r#"
+        SELECT 
+            t.tgname as trigger_name,
+            c.relname as table_name,
+            n.nspname as schema_name,
+            p.proname as function_name,
+            t.tgtype as trigger_type,
+            t.tgargs as trigger_arguments,
+            t.tgconstraint as constraint_oid,
+            c.relowner as owner
+        FROM pg_trigger t
+        JOIN pg_class c ON t.tgrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        JOIN pg_proc p ON t.tgfoid = p.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND NOT t.tgisinternal
+        AND t.tgconstraint IS NOT NULL
+        AND c.relowner > 1  -- exclude system-owned tables
+        AND NOT EXISTS (
+            -- Exclude constraint triggers on tables that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut constraint_triggers = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("trigger_name");
+        let table: String = row.get("table_name");
+        let schema: Option<String> = row.get("schema_name");
+        let function: String = row.get("function_name");
+        let trigger_type: i16 = row.get("trigger_type");
+        let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
+        let constraint_oid: u32 = row.get("constraint_oid");
+
+        // Parse trigger type to determine timing and events
+        let (timing, events) = parse_trigger_type(trigger_type);
+
+        // Parse arguments
+        let args = if let Some(arg_bytes) = arguments {
+            parse_trigger_arguments(&arg_bytes)
+        } else {
+            Vec::new()
+        };
+
+        // Get constraint name from OID
+        let constraint_query = "SELECT conname FROM pg_constraint WHERE oid = $1";
+        let constraint_rows = client.query(constraint_query, &[&constraint_oid]).await?;
+        let constraint_name = if let Some(constraint_row) = constraint_rows.first() {
+            constraint_row.get::<_, String>("conname")
+        } else {
+            "unknown_constraint".to_string()
+        };
+
+        constraint_triggers.push(ConstraintTrigger {
+            name,
+            table,
+            schema,
+            function,
+            timing,
+            events,
+            arguments: args,
+            constraint_name,
+            deferrable: false, // TODO: Get deferrable information
+            initially_deferred: false, // TODO: Get initially deferred information
+        });
+    }
+
+    Ok(constraint_triggers)
 }
 
 // Helper functions for parsing
@@ -1021,7 +1317,7 @@ fn parse_trigger_type(trigger_type: i16) -> (TriggerTiming, Vec<TriggerEvent>) {
     }
     if (trigger_type & 4) != 0 {
         // TG_UPDATE
-        events.push(TriggerEvent::Update);
+        events.push(TriggerEvent::Update { columns: None });
     }
     if (trigger_type & 8) != 0 {
         // TG_TRUNCATE
@@ -1057,4 +1353,149 @@ fn parse_server_options(options: &[String]) -> std::collections::HashMap<String,
     }
 
     options_map
+}
+
+async fn introspect_range_types<C: GenericClient>(client: &C) -> Result<Vec<RangeType>> {
+    let query = r#"
+        SELECT 
+            t.typname as type_name,
+            n.nspname as schema_name,
+            r.rngsubtype as subtype_oid,
+            r.rngsubopc as subtype_opclass_oid,
+            r.rngcollation as collation_oid,
+            r.rngcanonical as canonical_oid,
+            r.rngsubdiff as subtype_diff_oid,
+            t.typowner as owner
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        JOIN pg_range r ON t.oid = r.rngtypid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.typowner > 1  -- exclude system-owned types
+        AND NOT EXISTS (
+            -- Exclude range types that are part of extensions
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut range_types = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("type_name");
+        let schema: Option<String> = row.get("schema_name");
+        let subtype_oid: u32 = row.get("subtype_oid");
+        let subtype_opclass_oid: Option<u32> = row.get("subtype_opclass_oid");
+        let collation_oid: Option<u32> = row.get("collation_oid");
+        let canonical_oid: Option<u32> = row.get("canonical_oid");
+        let subtype_diff_oid: Option<u32> = row.get("subtype_diff_oid");
+
+        // Get subtype name
+        let subtype_query = "SELECT typname FROM pg_type WHERE oid = $1";
+        let subtype_rows = client.query(subtype_query, &[&subtype_oid]).await?;
+        let subtype = if let Some(subtype_row) = subtype_rows.first() {
+            subtype_row.get::<_, String>("typname")
+        } else {
+            "unknown".to_string()
+        };
+
+        // Get opclass name if available
+        let subtype_opclass = if let Some(opclass_oid) = subtype_opclass_oid {
+            let opclass_query = "SELECT opcname FROM pg_opclass WHERE oid = $1";
+            let opclass_rows = client.query(opclass_query, &[&opclass_oid]).await?;
+            if let Some(opclass_row) = opclass_rows.first() {
+                Some(opclass_row.get::<_, String>("opcname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get collation name if available
+        let collation = if let Some(coll_oid) = collation_oid {
+            let coll_query = "SELECT collname FROM pg_collation WHERE oid = $1";
+            let coll_rows = client.query(coll_query, &[&coll_oid]).await?;
+            if let Some(coll_row) = coll_rows.first() {
+                Some(coll_row.get::<_, String>("collname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get canonical function name if available
+        let canonical = if let Some(canon_oid) = canonical_oid {
+            let canon_query = "SELECT proname FROM pg_proc WHERE oid = $1";
+            let canon_rows = client.query(canon_query, &[&canon_oid]).await?;
+            if let Some(canon_row) = canon_rows.first() {
+                Some(canon_row.get::<_, String>("proname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get subtype diff function name if available
+        let subtype_diff = if let Some(diff_oid) = subtype_diff_oid {
+            let diff_query = "SELECT proname FROM pg_proc WHERE oid = $1";
+            let diff_rows = client.query(diff_query, &[&diff_oid]).await?;
+            if let Some(diff_row) = diff_rows.first() {
+                Some(diff_row.get::<_, String>("proname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        range_types.push(RangeType {
+            name,
+            schema,
+            subtype,
+            subtype_opclass,
+            collation,
+            canonical,
+            subtype_diff,
+            multirange_type_name: None, // TODO: Get multirange type name
+        });
+    }
+
+    Ok(range_types)
+}
+
+async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>> {
+    let query = r#"
+        SELECT 
+            t.typname as name,
+            n.nspname as schema,
+            array_agg(e.enumlabel ORDER BY e.enumsortorder) as values
+        FROM pg_type t
+        JOIN pg_enum e ON t.oid = e.enumtypid
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        WHERE t.typtype = 'e'
+        GROUP BY t.typname, n.nspname
+        ORDER BY n.nspname, t.typname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut enums = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let schema: Option<String> = row.get("schema");
+        let values: Vec<String> = row.get("values");
+
+        enums.push(EnumType {
+            name,
+            schema,
+            values,
+            comment: None, // TODO: Get enum comment
+        });
+    }
+
+    Ok(enums)
 }

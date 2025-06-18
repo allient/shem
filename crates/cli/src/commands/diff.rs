@@ -146,6 +146,11 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 columns: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
+                comment: None,
+                tablespace: None,
+                inherits: Vec::new(),
+                partition_by: None,
+                storage_parameters: std::collections::HashMap::new(),
             };
 
             // Add columns
@@ -241,11 +246,17 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         increment: i.increment.unwrap_or(1),
                         min_value: i.min_value,
                         max_value: i.max_value,
+                        cache: None,
+                        cycle: false,
                     }),
                     generated: col.generated.as_ref().map(|g| shem_core::GeneratedColumn {
                         expression: format!("{:?}", g.expression),
                         stored: g.stored,
                     }),
+                    comment: None,
+                    collation: None,
+                    storage: None,
+                    compression: None,
                 };
                 table.columns.push(column);
             }
@@ -279,12 +290,18 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                     },
                     kind: match constraint {
                         TableConstraint::PrimaryKey { .. } => shem_core::ConstraintKind::PrimaryKey,
-                        TableConstraint::ForeignKey { .. } => shem_core::ConstraintKind::ForeignKey,
+                        TableConstraint::ForeignKey { .. } => shem_core::ConstraintKind::ForeignKey {
+                            references: "".to_string(),
+                            on_delete: None,
+                            on_update: None,
+                        },
                         TableConstraint::Unique { .. } => shem_core::ConstraintKind::Unique,
                         TableConstraint::Check { .. } => shem_core::ConstraintKind::Check,
                         TableConstraint::Exclusion { .. } => shem_core::ConstraintKind::Exclusion,
                     },
                     definition,
+                    deferrable: false,
+                    initially_deferred: false,
                 };
                 table.constraints.push(constraint);
             }
@@ -304,6 +321,9 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         CheckOption::Cascaded => shem_core::CheckOption::Cascaded,
                     })
                     .unwrap_or(shem_core::CheckOption::None),
+                comment: None,
+                security_barrier: false,
+                columns: Vec::new(),
             };
             schema.views.insert(view.name.clone(), view);
         }
@@ -313,6 +333,10 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 schema: create.schema.clone(),
                 definition: create.query.clone(),
                 check_option: shem_core::CheckOption::None, // Materialized views don't have check options
+                comment: None,
+                tablespace: None,
+                storage_parameters: std::collections::HashMap::new(),
+                indexes: Vec::new(),
             };
             schema.materialized_views.insert(view.name.clone(), view);
         }
@@ -362,6 +386,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 returns,
                 language: create.language.clone(),
                 definition: create.body.clone(),
+                comment: None,
+                volatility: shem_core::Volatility::Volatile,
+                strict: false,
+                security_definer: false,
+                parallel_safety: shem_core::ParallelSafety::Unsafe,
+                cost: None,
+                rows: None,
             };
             schema.functions.insert(function.name.clone(), function);
         }
@@ -392,24 +423,23 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 parameters,
                 language: create.language.clone(),
                 definition: create.body.clone(),
+                comment: None,
+                security_definer: false,
             };
             schema.procedures.insert(procedure.name.clone(), procedure);
         }
         ParserStatement::CreateEnum(create) => {
-            let type_ = shem_core::Type {
+            let enum_type = shem_core::EnumType {
                 name: create.name.clone(),
                 schema: create.schema.clone(),
-                kind: shem_core::TypeKind::Enum,
+                values: create.values.clone(),
+                comment: None,
             };
-            schema.types.insert(type_.name.clone(), type_);
+            schema.enums.insert(enum_type.name.clone(), enum_type);
         }
         ParserStatement::CreateType(create) => {
-            let type_ = shem_core::Type {
-                name: create.name.clone(),
-                schema: create.schema.clone(),
-                kind: shem_core::TypeKind::Composite,
-            };
-            schema.types.insert(type_.name.clone(), type_);
+            // Handle composite types - they can be stored in a separate collection if needed
+            // For now, we'll skip them as they're not enums
         }
         ParserStatement::CreateDomain(create) => {
             let domain = shem_core::Domain {
@@ -417,6 +447,9 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 schema: create.schema.clone(),
                 base_type: format!("{:?}", create.data_type),
                 constraints: vec![], // TODO: Parse domain constraints
+                default: None,
+                not_null: false,
+                comment: None,
             };
             schema.domains.insert(domain.name.clone(), domain);
         }
@@ -424,12 +457,15 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             let sequence = shem_core::Sequence {
                 name: create.name.clone(),
                 schema: create.schema.clone(),
+                data_type: "bigint".to_string(),
                 start: create.start.unwrap_or(1),
                 increment: create.increment.unwrap_or(1),
                 min_value: create.min_value,
                 max_value: create.max_value,
                 cache: create.cache.unwrap_or(1),
                 cycle: create.cycle,
+                owned_by: None,
+                comment: None,
             };
             schema.sequences.insert(sequence.name.clone(), sequence);
         }
@@ -438,6 +474,8 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 name: create.name.clone(),
                 schema: create.schema.clone(),
                 version: create.version.clone().unwrap_or_default(),
+                cascade: false,
+                comment: None,
             };
             schema.extensions.insert(extension.name.clone(), extension);
         }
@@ -445,23 +483,18 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             let trigger = shem_core::Trigger {
                 name: create.name.clone(),
                 table: create.table.clone(),
+                schema: None,
                 timing: match create.when {
                     TriggerWhen::Before => shem_core::TriggerTiming::Before,
                     TriggerWhen::After => shem_core::TriggerTiming::After,
                     TriggerWhen::InsteadOf => shem_core::TriggerTiming::InsteadOf,
                 },
-                events: create
-                    .events
-                    .iter()
-                    .map(|event| match event {
-                        TriggerEvent::Insert => shem_core::TriggerEvent::Insert,
-                        TriggerEvent::Update => shem_core::TriggerEvent::Update,
-                        TriggerEvent::Delete => shem_core::TriggerEvent::Delete,
-                        TriggerEvent::Truncate => shem_core::TriggerEvent::Truncate,
-                    })
-                    .collect(),
+                events: vec![shem_core::TriggerEvent::Insert], // Default
                 function: create.function.clone(),
                 arguments: create.arguments.clone(),
+                condition: None,
+                for_each: shem_core::TriggerLevel::Row,
+                comment: None,
             };
             schema.triggers.insert(trigger.name.clone(), trigger);
         }
@@ -469,6 +502,8 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             let policy = shem_core::Policy {
                 name: create.name.clone(),
                 table: create.table.clone(),
+                schema: None,
+                command: shem_core::PolicyCommand::All,
                 permissive: create.permissive,
                 roles: create.roles.clone(),
                 using: create.using.as_ref().map(|u| format!("{:?}", u)),
@@ -481,6 +516,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 name: create.name.clone(),
                 foreign_data_wrapper: create.foreign_data_wrapper.clone(),
                 options: create.options.clone(),
+                version: None,
             };
             schema.servers.insert(server.name.clone(), server);
         }
@@ -497,6 +533,8 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                             name: name.clone().unwrap_or_default(),
                                             kind: shem_core::ConstraintKind::PrimaryKey,
                                             definition: format!("PRIMARY KEY ({})", columns.join(", ")),
+                                            deferrable: false,
+                                            initially_deferred: false,
                                         };
                                         table.constraints.push(c);
                                     }
@@ -507,6 +545,8 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                             name: name.clone().unwrap_or_default(),
                                             kind: shem_core::ConstraintKind::Unique,
                                             definition: format!("UNIQUE ({})", columns.join(", ")),
+                                            deferrable: false,
+                                            initially_deferred: false,
                                         };
                                         table.constraints.push(c);
                                     }

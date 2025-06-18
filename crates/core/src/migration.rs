@@ -6,7 +6,8 @@ use crate::schema::{
     Table, View, MaterializedView, Function, Procedure,
     Type, Domain, Sequence, Extension, Trigger, Policy, Server,
     TriggerEvent, TriggerTiming, CheckOption, ParameterMode, ReturnType,
-    TypeKind, ReturnKind, SortOrder,
+    TypeKind, ReturnKind, SortOrder, IndexMethod,
+    EnumType,
 };
 
 
@@ -69,13 +70,7 @@ pub fn generate_migration(from: &Schema, to: &Schema) -> Result<Migration> {
         }
     }
 
-    // Handle types
-    for (name, type_def) in &to.types {
-        if !from.types.contains_key(name) {
-            statements.push(generate_create_type(type_def)?);
-            rollback_statements.push(format!("DROP TYPE IF EXISTS {}", name));
-        }
-    }
+    // Note: Types are now handled as enums separately
 
     // Handle domains
     for (name, domain) in &to.domains {
@@ -130,6 +125,22 @@ pub fn generate_migration(from: &Schema, to: &Schema) -> Result<Migration> {
         }
     }
 
+    // Handle enums
+    for (name, enum_type) in &to.enums {
+        if !from.enums.contains_key(name) {
+            statements.push(generate_create_enum(enum_type)?);
+            rollback_statements.push(format!("DROP TYPE IF EXISTS {} CASCADE;", enum_type.name));
+        }
+    }
+
+    // Handle removed enums
+    for (name, enum_type) in &from.enums {
+        if !to.enums.contains_key(name) {
+            statements.push(format!("DROP TYPE IF EXISTS {} CASCADE;", enum_type.name));
+            rollback_statements.push(generate_create_enum(enum_type)?);
+        }
+    }
+
     Ok(Migration {
         version: chrono::Utc::now().format("%Y%m%d%H%M%S").to_string(),
         description: "Generated migration".to_string(),
@@ -146,7 +157,7 @@ fn generate_create_table(table: &Table) -> Result<String> {
     let mut columns = Vec::new();
 
     // Add columns
-    for (i, col) in table.columns.iter().enumerate() {
+    for (_i, col) in table.columns.iter().enumerate() {
         let mut col_def = format!("{} {}", col.name, col.type_name);
         if !col.nullable {
             col_def.push_str(" NOT NULL");
@@ -165,14 +176,14 @@ fn generate_create_table(table: &Table) -> Result<String> {
 
     // Add constraints
     for constraint in &table.constraints {
-        let sql = match constraint.kind {
+        let sql = match &constraint.kind {
             crate::ConstraintKind::PrimaryKey => {
                 format!("PRIMARY KEY {}", &constraint.definition["PRIMARY KEY".len()..].trim())
             }
             crate::ConstraintKind::Unique => {
                 format!("UNIQUE {}", &constraint.definition["UNIQUE".len()..].trim())
             }
-            crate::ConstraintKind::ForeignKey => {
+            crate::ConstraintKind::ForeignKey { references: _, on_delete: _, on_update: _ } => {
                 // Not implemented: you can add more parsing here
                 format!("-- FOREIGN KEY: {:?}", constraint)
             }
@@ -183,6 +194,10 @@ fn generate_create_table(table: &Table) -> Result<String> {
             crate::ConstraintKind::Exclusion => {
                 // Not implemented: you can add more parsing here
                 format!("-- EXCLUSION: {:?}", constraint)
+            }
+            crate::ConstraintKind::NotNull => {
+                // Not implemented: you can add more parsing here
+                format!("-- NOT NULL: {:?}", constraint)
             }
         };
         columns.push(sql);
@@ -389,7 +404,14 @@ fn generate_alter_table(old: &Table, new: &Table) -> Result<(Vec<String>, Vec<St
             let unique = if new_index.unique { "UNIQUE " } else { "" };
             up_statements.push(format!(
                 "CREATE {}INDEX {} ON {} USING {} ({});",
-                unique, name, new.name, new_index.method, columns.join(", ")
+                unique, name, new.name, match new_index.method {
+                    IndexMethod::Btree => "btree",
+                    IndexMethod::Hash => "hash",
+                    IndexMethod::Gist => "gist",
+                    IndexMethod::Spgist => "spgist",
+                    IndexMethod::Gin => "gin",
+                    IndexMethod::Brin => "brin",
+                }, columns.join(", ")
             ));
             down_statements.push(format!("DROP INDEX {};", name));
         }
@@ -417,7 +439,14 @@ fn generate_alter_table(old: &Table, new: &Table) -> Result<(Vec<String>, Vec<St
                 let unique = if old_index.unique { "UNIQUE " } else { "" };
                 down_statements.push(format!(
                     "CREATE {}INDEX {} ON {} USING {} ({});",
-                    unique, name, old.name, old_index.method, columns.join(", ")
+                    unique, name, old.name, match old_index.method {
+                        IndexMethod::Btree => "btree",
+                        IndexMethod::Hash => "hash",
+                        IndexMethod::Gist => "gist",
+                        IndexMethod::Spgist => "spgist",
+                        IndexMethod::Gin => "gin",
+                        IndexMethod::Brin => "brin",
+                    }, columns.join(", ")
                 ));
             }
         }
@@ -477,7 +506,10 @@ fn generate_create_function(func: &Function) -> Result<String> {
     match func.returns.kind {
         ReturnKind::Scalar => {
             sql.push_str(&format!("RETURNS {}", func.returns.type_name));
-        }
+        },
+        ReturnKind::Void => {
+            sql.push_str("RETURNS void");
+        },
         ReturnKind::Table => {
             sql.push_str(&format!("RETURNS TABLE ({})", func.returns.type_name));
         }
@@ -530,12 +562,12 @@ fn generate_create_procedure(proc: &Procedure) -> Result<String> {
 
 fn generate_create_type(type_def: &Type) -> Result<String> {
     match &type_def.kind {
-        TypeKind::Enum => {
+        TypeKind::Enum { values: _ } => {
             // For enums, we need to get the values from somewhere else
             // For now, we'll return an error since we don't have the enum values
             Err(Error::Schema("Enum values are required to create an enum type".into()))
         }
-        TypeKind::Composite => {
+        TypeKind::Composite { attributes: _ } => {
             // For composite types, we need the attributes
             // For now, we'll return an error since we don't have the attributes
             Err(Error::Schema("Composite type attributes are required to create a composite type".into()))
@@ -553,6 +585,12 @@ fn generate_create_type(type_def: &Type) -> Result<String> {
         TypeKind::Domain => {
             Err(Error::Schema("Domain type should be handled by generate_create_domain".into()))
         }
+        TypeKind::Array => {
+            Err(Error::Schema("Array types are not yet supported".into()))
+        }
+        TypeKind::Multirange => {
+            Err(Error::Schema("Multirange types are not yet supported".into()))
+        }
     }
 }
 
@@ -561,7 +599,7 @@ fn generate_create_domain(domain: &Domain) -> Result<String> {
     
     // Add constraints
     for constraint in &domain.constraints {
-        sql.push_str(&format!(" CHECK ({})", constraint));
+        sql.push_str(&format!(" CHECK ({})", constraint.check));
     }
     
     sql.push(';');
@@ -737,7 +775,7 @@ fn generate_create_extension(ext: &Extension) -> Result<String> {
 fn generate_create_trigger(trigger: &Trigger) -> Result<String> {
     let events: Vec<&str> = trigger.events.iter().map(|e| match e {
         TriggerEvent::Insert => "INSERT",
-        TriggerEvent::Update => "UPDATE",
+        TriggerEvent::Update { columns: _ } => "UPDATE",
         TriggerEvent::Delete => "DELETE",
         TriggerEvent::Truncate => "TRUNCATE",
     }).collect();
@@ -806,6 +844,27 @@ fn generate_create_server(server: &Server) -> Result<String> {
     }
 
     sql.push(';');
+    Ok(sql)
+}
+
+fn generate_create_enum(enum_type: &EnumType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", enum_type.name);
+
+    if let Some(schema) = &enum_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, enum_type.name);
+    }
+
+    sql.push_str(" AS ENUM (");
+
+    let values = enum_type.values
+        .iter()
+        .map(|v| format!("'{}'", v))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    sql.push_str(&values);
+    sql.push_str(");");
+
     Ok(sql)
 }
 

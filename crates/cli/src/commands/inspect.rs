@@ -34,7 +34,7 @@ pub async fn execute(path: &str, config: &Config) -> Result<()> {
     info!("  Materialized Views: {}", stats.materialized_views);
     info!("  Functions: {}", stats.functions);
     info!("  Procedures: {}", stats.procedures);
-    info!("  Types: {}", stats.types);
+    info!("  Types: {}", stats.enums);
     info!("  Domains: {}", stats.domains);
     info!("  Sequences: {}", stats.sequences);
     info!("  Extensions: {}", stats.extensions);
@@ -64,9 +64,9 @@ pub async fn execute(path: &str, config: &Config) -> Result<()> {
         }
     }
     
-    if !stats.type_names.is_empty() {
-        info!("\nTypes:");
-        for name in stats.type_names {
+    if !stats.enum_names.is_empty() {
+        info!("\nEnums:");
+        for name in stats.enum_names {
             info!("  {}", name);
         }
     }
@@ -81,7 +81,7 @@ struct SchemaStats {
     materialized_views: usize,
     functions: usize,
     procedures: usize,
-    types: usize,
+    enums: usize,
     domains: usize,
     sequences: usize,
     extensions: usize,
@@ -91,7 +91,7 @@ struct SchemaStats {
     table_names: Vec<String>,
     view_names: Vec<String>,
     function_names: Vec<String>,
-    type_names: Vec<String>,
+    enum_names: Vec<String>,
 }
 
 impl SchemaStats {
@@ -128,12 +128,11 @@ fn inspect_file(path: &Path, stats: &mut SchemaStats) -> Result<()> {
                 stats.function_names.push(create.name);
             }
             Statement::CreateEnum(create) => {
-                stats.types += 1;
-                stats.type_names.push(create.name);
+                stats.enums += 1;
+                stats.enum_names.push(create.name);
             }
             Statement::CreateType(create) => {
-                stats.types += 1;
-                stats.type_names.push(create.name);
+                stats.enums += 1;
             }
             Statement::CreateDomain(create) => {
                 stats.domains += 1;

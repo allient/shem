@@ -5,7 +5,7 @@ use crate::error::Result;
 
 use crate::schema::{
     Schema, Table, View, MaterializedView, Function, Procedure,
-    Type, Domain, Sequence, Extension, Trigger, Policy, Server,
+    EnumType, Domain, Sequence, Extension, Trigger, Policy, Server,
     Column, Constraint, Index, Parameter, ReturnType,
     TypeKind, ConstraintKind, IndexColumn, Identity, CheckOption,
     ParameterMode, SortOrder, TriggerTiming, TriggerEvent, ReturnKind
@@ -102,10 +102,10 @@ pub trait SqlGenerator: Send + Sync {
     fn generate_create_type(&self, type_def: &crate::Type) -> Result<String>;
     
     /// Generate CREATE ENUM SQL
-    fn create_enum(&self, enum_type: &Type) -> Result<String>;
+    fn create_enum(&self, enum_type: &EnumType) -> Result<String>;
     
     /// Generate ALTER ENUM SQL
-    fn alter_enum(&self, old: &Type, new: &Type) -> Result<(Vec<String>, Vec<String>)>;
+    fn alter_enum(&self, old: &EnumType, new: &EnumType) -> Result<(Vec<String>, Vec<String>)>;
     
     /// Generate CREATE DOMAIN SQL
     fn create_domain(&self, domain: &Domain) -> Result<String>;
@@ -137,7 +137,6 @@ pub enum Feature {
     MaterializedViews,
     Functions,
     Procedures,
-    Types,
     Enums,
     Domains,
     Sequences,

@@ -47,7 +47,6 @@ impl DatabaseDriver for PostgresDriver {
             Feature::MaterializedViews,
             Feature::Functions,
             Feature::Procedures,
-            Feature::Types,
             Feature::Enums,
             Feature::Domains,
             Feature::Sequences,

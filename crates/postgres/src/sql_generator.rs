@@ -139,16 +139,12 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn generate_create_type(&self, type_def: &Type) -> Result<String> {
-        match type_def.kind {
-            TypeKind::Enum => {
+        match &type_def.kind {
+            TypeKind::Enum { values: _ } => {
                 // TODO: Implement enum type creation
                 unimplemented!()
             },
-            TypeKind::Domain => {
-                // TODO: Implement domain type creation
-                unimplemented!()
-            },
-            TypeKind::Composite => {
+            TypeKind::Composite { attributes: _ } => {
                 // TODO: Implement composite type creation
                 unimplemented!()
             },
@@ -157,20 +153,58 @@ impl SqlGenerator for PostgresSqlGenerator {
                 unimplemented!()
             },
             TypeKind::Base => {
-                // Base types are built-in
-                Ok(String::new())
+                // TODO: Implement base type creation
+                unimplemented!()
+            },
+            TypeKind::Domain => {
+                // TODO: Implement domain type creation
+                unimplemented!()
+            },
+            TypeKind::Array => {
+                // TODO: Implement array type creation
+                unimplemented!()
+            },
+            TypeKind::Multirange => {
+                // TODO: Implement multirange type creation
+                unimplemented!()
             },
         }
     }
 
-    fn create_enum(&self, enum_type: &Type) -> Result<String> {
-        // TODO: Implement enum type creation
-        unimplemented!()
+    fn create_enum(&self, enum_type: &shem_core::EnumType) -> Result<String> {
+        let mut sql = format!("CREATE TYPE {}", enum_type.name);
+
+        if let Some(schema) = &enum_type.schema {
+            sql = format!("CREATE TYPE {}.{}", schema, enum_type.name);
+        }
+
+        sql.push_str(" AS ENUM (");
+
+        let values = enum_type.values
+            .iter()
+            .map(|v| format!("'{}'", v))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        sql.push_str(&values);
+        sql.push_str(");");
+
+        Ok(sql)
     }
 
-    fn alter_enum(&self, old: &Type, new: &Type) -> Result<(Vec<String>, Vec<String>)> {
-        // TODO: Implement enum type alteration
-        unimplemented!()
+    fn alter_enum(&self, old: &shem_core::EnumType, new: &shem_core::EnumType) -> Result<(Vec<String>, Vec<String>)> {
+        let mut up_statements = Vec::new();
+        let mut down_statements = Vec::new();
+
+        // For now, we'll drop and recreate the enum
+        // In a real implementation, you'd want to handle ADD VALUE and DROP VALUE
+        up_statements.push(format!("DROP TYPE IF EXISTS {} CASCADE;", old.name));
+        up_statements.push(self.create_enum(new)?);
+
+        down_statements.push(format!("DROP TYPE IF EXISTS {} CASCADE;", new.name));
+        down_statements.push(self.create_enum(old)?);
+
+        Ok((up_statements, down_statements))
     }
 
     fn create_domain(&self, domain: &Domain) -> Result<String> {
@@ -178,11 +212,9 @@ impl SqlGenerator for PostgresSqlGenerator {
             "CREATE DOMAIN {} AS {}",
             domain.name, domain.base_type
         );
-        if !domain.constraints.is_empty() {
-            sql.push_str(&format!(
-                " CHECK ({})",
-                domain.constraints.join(" AND ")
-            ));
+        let check_expr = domain.constraints.iter().map(|c| &c.check).cloned().collect::<Vec<_>>().join(" AND ");
+        if !check_expr.is_empty() {
+            sql.push_str(&format!(" CHECK ({})", check_expr));
         }
         sql.push(';');
         Ok(sql)
@@ -296,7 +328,7 @@ impl SqlGenerator for PostgresSqlGenerator {
     fn create_trigger(&self, trigger: &Trigger) -> Result<String> {
         let events: Vec<&str> = trigger.events.iter().map(|e| match e {
             TriggerEvent::Insert => "INSERT",
-            TriggerEvent::Update => "UPDATE",
+            TriggerEvent::Update { .. } => "UPDATE",
             TriggerEvent::Delete => "DELETE",
             TriggerEvent::Truncate => "TRUNCATE",
         }).collect();

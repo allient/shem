@@ -11,7 +11,9 @@ use shem_core::{
         GeneratedColumn, Identity, Index, IndexColumn, MaterializedView, Parameter, ParameterMode,
         Policy, Procedure, ReturnKind, ReturnType, Sequence, Server, SortOrder, Table, Trigger,
         TriggerEvent, TriggerTiming, Type, TypeKind, View,
-        EventTrigger, Collation, Rule, RuleEvent,
+        EventTrigger, Collation, Rule, RuleEvent, ConstraintTrigger, RangeType,
+        ParallelSafety, PolicyCommand, TriggerLevel, Volatility, CollationProvider,
+        EnumType,
     },
     traits::SchemaSerializer,
 };
@@ -64,10 +66,8 @@ pub async fn execute(
     info!("Schema written to {}", schema_file.display());
 
     // Handle enum types
-    for (name, type_def) in &schema.types {
-        if let Some(values) = get_enum_values(type_def) {
-            info!("Found enum type {} with values: {:?}", name, values);
-        }
+    for (name, enum_type) in &schema.enums {
+        info!("Found enum type {} with values: {:?}", name, enum_type.values);
     }
 
     Ok(())
@@ -99,14 +99,30 @@ impl SchemaSerializer for SqlSerializer {
         // Generate CREATE TYPE statements
         for (_, type_def) in &schema.types {
             match type_def.kind {
-                TypeKind::Enum => {
-                    sql.push_str(&generate_create_enum(type_def)?);
-                    sql.push_str(";\n\n");
-                }
-                _ => {
+                TypeKind::Composite { attributes: _ } => {
                     sql.push_str(&generate_create_type(type_def)?);
                     sql.push_str(";\n\n");
                 }
+                TypeKind::Enum { values: _ } => {
+                    sql.push_str(&generate_create_enum_from_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                TypeKind::Domain => {
+                    // Domain types should be handled by generate_create_domain
+                    return Err(Error::Schema(
+                        "Domain type should be handled by generate_create_domain".into(),
+                    ));
+                }
+                TypeKind::Range => {
+                    // Range types need special handling - they're stored with "range_" prefix
+                    sql.push_str(&generate_create_range_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                TypeKind::Base => {
+                    sql.push_str(&generate_create_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                _ => {}
             }
         }
 
@@ -158,6 +174,12 @@ impl SchemaSerializer for SqlSerializer {
             sql.push_str(";\n\n");
         }
 
+        // Generate CREATE CONSTRAINT TRIGGER statements
+        for (_, trigger) in &schema.constraint_triggers {
+            sql.push_str(&generate_create_constraint_trigger(trigger)?);
+            sql.push_str(";\n\n");
+        }
+
         // Generate CREATE EVENT TRIGGER statements
         for (_, event_trigger) in &schema.event_triggers {
             sql.push_str(&generate_create_event_trigger(event_trigger)?);
@@ -188,6 +210,9 @@ impl SchemaSerializer for SqlSerializer {
             sql.push_str(";\n\n");
         }
 
+        // Generate COMMENT statements
+        sql.push_str(&generate_comments(schema)?);
+
         Ok(sql)
     }
 
@@ -204,24 +229,23 @@ impl SchemaSerializer for SqlSerializer {
                         name: create.name,
                         schema: create.schema,
                         version: create.version.unwrap_or_default(),
+                        cascade: false,
+                        comment: None,
                     };
                     schema.extensions.insert(ext.name.clone(), ext);
                 }
                 Statement::CreateEnum(create) => {
-                    let type_def = Type {
+                    let enum_type = EnumType {
                         name: create.name,
                         schema: create.schema,
-                        kind: TypeKind::Enum,
+                        values: create.values,
+                        comment: None,
                     };
-                    schema.types.insert(type_def.name.clone(), type_def);
+                    schema.enums.insert(enum_type.name.clone(), enum_type);
                 }
                 Statement::CreateType(create) => {
-                    let type_def = Type {
-                        name: create.name,
-                        schema: create.schema,
-                        kind: TypeKind::Composite,
-                    };
-                    schema.types.insert(type_def.name.clone(), type_def);
+                    // Handle composite types - they can be stored in a separate collection if needed
+                    // For now, we'll skip them as they're not enums
                 }
                 Statement::CreateDomain(create) => {
                     let domain = Domain {
@@ -229,6 +253,9 @@ impl SchemaSerializer for SqlSerializer {
                         schema: create.schema,
                         base_type: format!("{:?}", create.data_type),
                         constraints: vec![], // TODO: Parse domain constraints
+                        default: None,
+                        not_null: false,
+                        comment: None,
                     };
                     schema.domains.insert(domain.name.clone(), domain);
                 }
@@ -236,12 +263,15 @@ impl SchemaSerializer for SqlSerializer {
                     let sequence = Sequence {
                         name: create.name,
                         schema: create.schema,
+                        data_type: "bigint".to_string(),
                         start: create.start.unwrap_or(1),
                         increment: create.increment.unwrap_or(1),
                         min_value: create.min_value,
                         max_value: create.max_value,
                         cache: create.cache.unwrap_or(1),
                         cycle: create.cycle,
+                        owned_by: None,
+                        comment: None,
                     };
                     schema.sequences.insert(sequence.name.clone(), sequence);
                 }
@@ -263,11 +293,17 @@ impl SchemaSerializer for SqlSerializer {
                                     increment: i.increment.unwrap_or(1),
                                     min_value: i.min_value,
                                     max_value: i.max_value,
+                                    cache: None,
+                                    cycle: false,
                                 }),
                                 generated: col.generated.map(|g| GeneratedColumn {
                                     expression: format!("{:?}", g.expression),
                                     stored: g.stored,
                                 }),
+                                comment: None,
+                                collation: None,
+                                storage: None,
+                                compression: None,
                             })
                             .collect(),
                         constraints: create
@@ -278,16 +314,22 @@ impl SchemaSerializer for SqlSerializer {
                                     name: name.unwrap_or_default(),
                                     kind: ConstraintKind::PrimaryKey,
                                     definition: format!("PRIMARY KEY ({})", columns.join(", ")),
+                                    deferrable: false,
+                                    initially_deferred: false,
                                 },
                                 TableConstraint::Unique { columns, name } => Constraint {
                                     name: name.unwrap_or_default(),
                                     kind: ConstraintKind::Unique,
                                     definition: format!("UNIQUE ({})", columns.join(", ")),
+                                    deferrable: false,
+                                    initially_deferred: false,
                                 },
                                 TableConstraint::Check { expression, name } => Constraint {
                                     name: name.unwrap_or_default(),
                                     kind: ConstraintKind::Check,
                                     definition: format!("CHECK ({:?})", expression),
+                                    deferrable: false,
+                                    initially_deferred: false,
                                 },
                                 TableConstraint::ForeignKey {
                                     columns,
@@ -295,13 +337,19 @@ impl SchemaSerializer for SqlSerializer {
                                     name,
                                 } => Constraint {
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::ForeignKey,
+                                    kind: ConstraintKind::ForeignKey {
+                                        references: format!("{}({})", references.table, references.columns.join(", ")),
+                                        on_delete: None,
+                                        on_update: None,
+                                    },
                                     definition: format!(
                                         "FOREIGN KEY ({}) REFERENCES {}({})",
                                         columns.join(", "),
                                         references.table,
                                         references.columns.join(", ")
                                     ),
+                                    deferrable: false,
+                                    initially_deferred: false,
                                 },
                                 TableConstraint::Exclusion {
                                     elements,
@@ -322,10 +370,17 @@ impl SchemaSerializer for SqlSerializer {
                                             .collect::<Vec<_>>()
                                             .join(", ")
                                     ),
+                                    deferrable: false,
+                                    initially_deferred: false,
                                 },
                             })
                             .collect(),
                         indexes: Vec::new(), // TODO: Extract indexes from CREATE INDEX statements
+                        comment: None,
+                        tablespace: None,
+                        inherits: Vec::new(),
+                        partition_by: None,
+                        storage_parameters: std::collections::HashMap::new(),
                     };
                     schema.tables.insert(table.name.clone(), table);
                 }
@@ -341,6 +396,9 @@ impl SchemaSerializer for SqlSerializer {
                                 ParserCheckOption::Cascaded => CheckOption::Cascaded,
                             })
                             .unwrap_or(CheckOption::None),
+                        comment: None,
+                        security_barrier: false,
+                        columns: Vec::new(),
                     };
                     schema.views.insert(view.name.clone(), view);
                 }
@@ -350,6 +408,10 @@ impl SchemaSerializer for SqlSerializer {
                         schema: create.schema,
                         definition: create.query,
                         check_option: CheckOption::None, // Materialized views don't have check options
+                        comment: None,
+                        tablespace: None,
+                        storage_parameters: std::collections::HashMap::new(),
+                        indexes: Vec::new(),
                     };
                     schema.materialized_views.insert(view.name.clone(), view);
                 }
@@ -394,6 +456,13 @@ impl SchemaSerializer for SqlSerializer {
                         },
                         language: create.language,
                         definition: create.body,
+                        comment: None,
+                        volatility: Volatility::Volatile,
+                        strict: false,
+                        security_definer: false,
+                        parallel_safety: ParallelSafety::Unsafe,
+                        cost: None,
+                        rows: None,
                     };
                     schema.functions.insert(function.name.clone(), function);
                 }
@@ -421,6 +490,8 @@ impl SchemaSerializer for SqlSerializer {
                             .collect(),
                         language: create.language,
                         definition: create.body,
+                        comment: None,
+                        security_definer: false,
                     };
                     schema.procedures.insert(procedure.name.clone(), procedure);
                 }
@@ -428,6 +499,7 @@ impl SchemaSerializer for SqlSerializer {
                     let trigger = Trigger {
                         name: create.name,
                         table: create.table,
+                        schema: None,
                         timing: match create.when {
                             TriggerWhen::Before => TriggerTiming::Before,
                             TriggerWhen::After => TriggerTiming::After,
@@ -438,13 +510,16 @@ impl SchemaSerializer for SqlSerializer {
                             .into_iter()
                             .map(|event| match event {
                                 ParserTriggerEvent::Insert => TriggerEvent::Insert,
-                                ParserTriggerEvent::Update => TriggerEvent::Update,
+                                ParserTriggerEvent::Update => TriggerEvent::Update { columns: None },
                                 ParserTriggerEvent::Delete => TriggerEvent::Delete,
                                 ParserTriggerEvent::Truncate => TriggerEvent::Truncate,
                             })
                             .collect(),
                         function: create.function,
                         arguments: create.arguments,
+                        condition: None,
+                        for_each: TriggerLevel::Row,
+                        comment: None,
                     };
                     schema.triggers.insert(trigger.name.clone(), trigger);
                 }
@@ -452,6 +527,8 @@ impl SchemaSerializer for SqlSerializer {
                     let policy = Policy {
                         name: create.name,
                         table: create.table,
+                        schema: None,
+                        command: PolicyCommand::All,
                         permissive: create.permissive,
                         roles: create.roles,
                         using: create.using.map(|e| format!("{:?}", e)),
@@ -464,6 +541,7 @@ impl SchemaSerializer for SqlSerializer {
                         name: create.name,
                         foreign_data_wrapper: create.foreign_data_wrapper,
                         options: create.options,
+                        version: None,
                     };
                     schema.servers.insert(server.name.clone(), server);
                 }
@@ -496,16 +574,24 @@ fn generate_create_extension(ext: &Extension) -> Result<String> {
     Ok(sql)
 }
 
-fn generate_create_enum(enum_type: &Type) -> Result<String> {
-    // Note: This is a placeholder since we don't have enum values in the Type struct
-    // In a real implementation, you'd need to store enum values in the Type struct
+fn generate_create_enum(enum_type: &EnumType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", enum_type.name);
 
     if let Some(schema) = &enum_type.schema {
         sql = format!("CREATE TYPE {}.{}", schema, enum_type.name);
     }
 
-    sql.push_str(" AS ENUM ()");
+    sql.push_str(" AS ENUM (");
+
+    let values = enum_type.values
+        .iter()
+        .map(|v| format!("'{}'", v))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    sql.push_str(&values);
+    sql.push_str(");");
+
     Ok(sql)
 }
 
@@ -516,24 +602,26 @@ fn generate_create_type(type_def: &Type) -> Result<String> {
         sql = format!("CREATE TYPE {}.{}", schema, type_def.name);
     }
 
-    match type_def.kind {
-        TypeKind::Composite => {
-            sql.push_str(" AS ()");
-        }
-        TypeKind::Enum => {
-            sql.push_str(" AS ENUM ()");
-        }
-        TypeKind::Domain => {
-            // Domain types should be handled by generate_create_domain
-            return Err(Error::Schema(
-                "Domain type should be handled by generate_create_domain".into(),
-            ));
+    match &type_def.kind {
+        TypeKind::Composite { attributes } => {
+            sql.push_str(" AS (");
+            let attrs = attributes
+                .iter()
+                .map(|attr| format!("{} {}", attr.name, attr.type_name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&attrs);
+            sql.push_str(");");
         }
         TypeKind::Range => {
-            sql.push_str(" AS RANGE");
+            sql.push_str(" AS RANGE (SUBTYPE = ");
+            if let Some(def) = &type_def.definition {
+                sql.push_str(def);
+            }
+            sql.push_str(");");
         }
-        TypeKind::Base => {
-            sql.push_str(" AS");
+        _ => {
+            sql.push_str("; -- Unsupported type kind");
         }
     }
 
@@ -550,7 +638,7 @@ fn generate_create_domain(domain: &Domain) -> Result<String> {
     sql.push_str(&format!(" AS {}", domain.base_type));
 
     for constraint in &domain.constraints {
-        sql.push_str(&format!(" CHECK ({})", constraint));
+        sql.push_str(&format!(" CHECK ({:?})", constraint));
     }
 
     Ok(sql)
@@ -738,6 +826,9 @@ fn generate_create_function(func: &Function) -> Result<String> {
         ReturnKind::SetOf => {
             sql.push_str(&format!("SETOF {}", func.returns.type_name));
         }
+        ReturnKind::Void => {
+            sql.push_str("void");
+        }
     }
 
     // Add language
@@ -808,12 +899,7 @@ fn generate_create_trigger(trigger: &Trigger) -> Result<String> {
     let events: Vec<&str> = trigger
         .events
         .iter()
-        .map(|e| match e {
-            TriggerEvent::Insert => "INSERT",
-            TriggerEvent::Update => "UPDATE",
-            TriggerEvent::Delete => "DELETE",
-            TriggerEvent::Truncate => "TRUNCATE",
-        })
+        .map(|e| trigger_event_to_str(e))
         .collect();
 
     let timing = match trigger.timing {
@@ -893,7 +979,7 @@ fn generate_create_event_trigger(trigger: &EventTrigger) -> Result<String> {
     };
     let enabled = if trigger.enabled { "ENABLE" } else { "DISABLE" };
     Ok(format!(
-        "CREATE EVENT TRIGGER {} ON {} EXECUTE FUNCTION {}{} {}",
+        "CREATE EVENT TRIGGER {} ON {:?} EXECUTE FUNCTION {}{} {}",
         trigger.name, trigger.event, trigger.function, tags, enabled
     ))
 }
@@ -907,11 +993,12 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
     if let Some(locale) = &collation.locale {
         options.push(format!("LOCALE = '{}'", locale));
     }
-    if let Some(ctype) = &collation.ctype {
-        options.push(format!("CTYPE = '{}'", ctype));
+    if let Some(lc_ctype) = &collation.lc_ctype {
+        options.push(format!("CTYPE = '{}'", lc_ctype));
     }
-    if !collation.provider.is_empty() {
-        options.push(format!("PROVIDER = '{}'", collation.provider));
+    match collation.provider {
+        CollationProvider::Libc => options.push("PROVIDER = 'libc'".to_string()),
+        CollationProvider::Icu => options.push("PROVIDER = 'icu'".to_string()),
     }
     if !options.is_empty() {
         sql.push_str(&format!(" ({} )", options.join(", ")));
@@ -920,36 +1007,172 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
 }
 
 fn generate_create_rule(rule: &Rule) -> Result<String> {
-    let event = match rule.event {
+    let event_str = match rule.event {
         RuleEvent::Select => "SELECT",
         RuleEvent::Update => "UPDATE",
         RuleEvent::Insert => "INSERT",
         RuleEvent::Delete => "DELETE",
     };
-    let instead = if rule.instead { "INSTEAD" } else { "" };
-    let mut sql = format!(
-        "CREATE RULE {} AS ON {} TO {} {} {}",
-        rule.name,
-        event,
-        rule.table,
-        instead,
-        rule.definition
-    );
-    if let Some(schema) = &rule.schema {
-        sql = format!("CREATE RULE {} AS ON {} TO {}.{} {} {}", rule.name, event, schema, rule.table, instead, rule.definition);
-    }
-    Ok(sql)
+    
+    let instead_str = if rule.instead { "INSTEAD" } else { "ALSO" };
+    
+    Ok(format!(
+        "CREATE RULE {} AS ON {} {} {} DO {}",
+        rule.name, event_str, instead_str, rule.table, rule.actions.join("; ")
+    ))
 }
 
-// Helper function to extract enum values from a type definition
-fn get_enum_values(type_def: &Type) -> Option<Vec<String>> {
-    match type_def.kind {
-        TypeKind::Enum => {
-            // TODO: Implement enum value extraction from database
-            // This would require querying the database to get the enum values
-            // For now, return None since we don't have enum values stored in the Type struct
-            None
+fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<String> {
+    let timing_str = match trigger.timing {
+        TriggerTiming::Before => "BEFORE",
+        TriggerTiming::After => "AFTER",
+        TriggerTiming::InsteadOf => "INSTEAD OF",
+    };
+    
+    let events_str = trigger.events.iter()
+        .map(|event| trigger_event_to_str(event))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    
+    let args_str = if !trigger.arguments.is_empty() {
+        format!("({})", trigger.arguments.join(", "))
+    } else {
+        String::new()
+    };
+    
+    Ok(format!(
+        "CREATE CONSTRAINT TRIGGER {} {} {} ON {} FOR EACH ROW EXECUTE FUNCTION {}{}",
+        trigger.name, timing_str, events_str, trigger.table, trigger.function, args_str
+    ))
+}
+
+fn generate_create_range_type(type_def: &Type) -> Result<String> {
+    // For range types, we need to get the detailed information from the RangeType struct
+    // Since we're storing range types with a "range_" prefix, we need to handle this specially
+    let name = if type_def.name.starts_with("range_") {
+        type_def.name.strip_prefix("range_").unwrap_or(&type_def.name)
+    } else {
+        &type_def.name
+    };
+    
+    // This is a simplified version - in a real implementation, you'd want to store
+    // the full RangeType information and use it here
+    Ok(format!(
+        "CREATE TYPE {} AS RANGE (SUBTYPE = {})",
+        name, "unknown_subtype" // TODO: Get actual subtype from RangeType
+    ))
+}
+
+fn generate_comments(schema: &Schema) -> Result<String> {
+    let mut comments = String::new();
+    
+    // Table comments
+    for (_, table) in &schema.tables {
+        if let Some(comment) = &table.comment {
+            comments.push_str(&format!(
+                "COMMENT ON TABLE {} IS '{}';\n",
+                table.name, comment.replace("'", "''")
+            ));
         }
-        _ => None,
+        
+        // Column comments
+        for column in &table.columns {
+            if let Some(comment) = &column.comment {
+                comments.push_str(&format!(
+                    "COMMENT ON COLUMN {}.{} IS '{}';\n",
+                    table.name, column.name, comment.replace("'", "''")
+                ));
+            }
+        }
     }
+    
+    // View comments
+    for (_, view) in &schema.views {
+        if let Some(comment) = &view.comment {
+            comments.push_str(&format!(
+                "COMMENT ON VIEW {} IS '{}';\n",
+                view.name, comment.replace("'", "''")
+            ));
+        }
+    }
+    
+    // Function comments
+    for (_, function) in &schema.functions {
+        if let Some(comment) = &function.comment {
+            comments.push_str(&format!(
+                "COMMENT ON FUNCTION {} IS '{}';\n",
+                function.name, comment.replace("'", "''")
+            ));
+        }
+    }
+    
+    // Type comments
+    for (_, enum_type) in &schema.enums {
+        if let Some(comment) = &enum_type.comment {
+            comments.push_str(&format!(
+                "COMMENT ON TYPE {} IS '{}';\n",
+                enum_type.name, comment.replace("'", "''")
+            ));
+        }
+    }
+    
+    // Domain comments
+    for (_, domain) in &schema.domains {
+        if let Some(comment) = &domain.comment {
+            comments.push_str(&format!(
+                "COMMENT ON DOMAIN {} IS '{}';\n",
+                domain.name, comment.replace("'", "''")
+            ));
+        }
+    }
+    
+    // Sequence comments
+    for (_, sequence) in &schema.sequences {
+        if let Some(comment) = &sequence.comment {
+            comments.push_str(&format!(
+                "COMMENT ON SEQUENCE {} IS '{}';\n",
+                sequence.name, comment.replace("'", "''")
+            ));
+        }
+    }
+    
+    if !comments.is_empty() {
+        comments.push('\n');
+    }
+    
+    Ok(comments)
+}
+
+fn trigger_event_to_str(event: &TriggerEvent) -> &'static str {
+    match event {
+        TriggerEvent::Insert => "INSERT",
+        TriggerEvent::Update { .. } => "UPDATE",
+        TriggerEvent::Delete => "DELETE",
+        TriggerEvent::Truncate => "TRUNCATE",
+    }
+}
+
+fn generate_create_enum_from_type(type_def: &Type) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", type_def.name);
+
+    if let Some(schema) = &type_def.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, type_def.name);
+    }
+
+    sql.push_str(" AS ENUM (");
+
+    if let TypeKind::Enum { values } = &type_def.kind {
+        let values_str = values
+            .iter()
+            .map(|v| format!("'{}'", v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&values_str);
+    } else {
+        return Err(Error::Schema("Expected enum type".into()));
+    }
+
+    sql.push_str(");");
+
+    Ok(sql)
 }
