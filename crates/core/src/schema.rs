@@ -510,6 +510,7 @@ pub enum EventTriggerEvent {
 pub enum CollationProvider {
     Libc,
     Icu,
+    Builtin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

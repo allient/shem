@@ -20,6 +20,6 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-supabse-cli-develop
+pg-schema-diff
 sample_project
 db_schema

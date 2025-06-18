@@ -999,6 +999,7 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
     match collation.provider {
         CollationProvider::Libc => options.push("PROVIDER = 'libc'".to_string()),
         CollationProvider::Icu => options.push("PROVIDER = 'icu'".to_string()),
+        CollationProvider::Builtin => options.push("PROVIDER = 'builtin'".to_string()),
     }
     if !options.is_empty() {
         sql.push_str(&format!(" ({} )", options.join(", ")));
