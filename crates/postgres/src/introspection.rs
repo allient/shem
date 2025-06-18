@@ -39,7 +39,7 @@ where
         schema.procedures.insert(proc.name.clone(), proc);
     }
 
-    // Introspect types
+    // Introspect types (including range types)
     let types = introspect_types(&*client).await?;
     for type_def in types {
         schema.types.insert(type_def.name.clone(), type_def);
@@ -63,10 +63,16 @@ where
         schema.extensions.insert(ext.name.clone(), ext);
     }
 
-    // Introspect triggers
+    // Introspect triggers (including constraint triggers)
     let triggers = introspect_triggers(&*client).await?;
     for trigger in triggers {
         schema.triggers.insert(trigger.name.clone(), trigger);
+    }
+
+    // Introspect event triggers
+    let event_triggers = introspect_event_triggers(&*client).await?;
+    for trigger in event_triggers {
+        schema.event_triggers.insert(trigger.name.clone(), trigger);
     }
 
     // Introspect policies
@@ -79,6 +85,18 @@ where
     let servers = introspect_servers(&*client).await?;
     for server in servers {
         schema.servers.insert(server.name.clone(), server);
+    }
+
+    // Introspect collations
+    let collations = introspect_collations(&*client).await?;
+    for collation in collations {
+        schema.collations.insert(collation.name.clone(), collation);
+    }
+
+    // Introspect rules
+    let rules = introspect_rules(&*client).await?;
+    for rule in rules {
+        schema.rules.insert(rule.name.clone(), rule);
     }
 
     Ok(schema)
@@ -630,11 +648,17 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
     for row in rows {
         let name: String = row.get("sequence_name");
         let schema: Option<String> = row.get("sequence_schema");
-        let start: i64 = row.get("start_value");
-        let min_value: Option<i64> = row.get("minimum_value");
-        let max_value: Option<i64> = row.get("maximum_value");
-        let increment: i64 = row.get("increment");
+        let start_str: String = row.get("start_value");
+        let min_str: Option<String> = row.get("minimum_value");
+        let max_str: Option<String> = row.get("maximum_value");
+        let increment_str: String = row.get("increment");
         let cycle_option: String = row.get("cycle_option");
+
+        // Parse string values to i64
+        let start: i64 = start_str.parse().unwrap_or(1);
+        let min_value: Option<i64> = min_str.and_then(|s| s.parse().ok());
+        let max_value: Option<i64> = max_str.and_then(|s| s.parse().ok());
+        let increment: i64 = increment_str.parse().unwrap_or(1);
 
         sequences.push(Sequence {
             name,
@@ -683,7 +707,8 @@ async fn introspect_triggers<C: GenericClient>(client: &C) -> Result<Vec<Trigger
             c.relname as table_name,
             p.proname as function_name,
             t.tgtype as trigger_type,
-            t.tgargs as trigger_arguments
+            t.tgargs as trigger_arguments,
+            t.tgconstraint as is_constraint_trigger
         FROM pg_trigger t
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_proc p ON t.tgfoid = p.oid
@@ -701,6 +726,12 @@ async fn introspect_triggers<C: GenericClient>(client: &C) -> Result<Vec<Trigger
         let function: String = row.get("function_name");
         let trigger_type: i16 = row.get("trigger_type");
         let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
+        let is_constraint_trigger: Option<u32> = row.get("is_constraint_trigger");
+
+        // Skip constraint triggers as they are handled by constraints
+        if is_constraint_trigger.is_some() {
+            continue;
+        }
 
         // Parse trigger type to determine timing and events
         let (timing, events) = parse_trigger_type(trigger_type);
@@ -732,9 +763,9 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
             c.relname as table_name,
             p.polpermissive as permissive,
             p.polroles as roles,
-            p.polcmd as command,
-            p.polqual as using_expression,
-            p.polwithcheck as check_expression
+            p.polcmd::text as command,
+            pg_get_expr(p.polqual, p.polrelid) as using_expression,
+            pg_get_expr(p.polwithcheck, p.polrelid) as check_expression
         FROM pg_policy p
         JOIN pg_class c ON p.polrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -748,7 +779,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         let name: String = row.get("policy_name");
         let table: String = row.get("table_name");
         let permissive: bool = row.get("permissive");
-        let roles: Vec<i32> = row.get("roles");
+        let roles: Vec<u32> = row.get("roles");
         let command: String = row.get("command");
         let using_expr: Option<String> = row.get("using_expression");
         let check_expr: Option<String> = row.get("check_expression");
@@ -801,6 +832,135 @@ async fn introspect_servers<C: GenericClient>(client: &C) -> Result<Vec<Server>>
     }
 
     Ok(servers)
+}
+
+async fn introspect_event_triggers<C: GenericClient>(client: &C) -> Result<Vec<EventTrigger>> {
+    let query = r#"
+        SELECT 
+            evtname as trigger_name,
+            evtevent as event,
+            evtowner as owner,
+            evtfoid as function_oid,
+            evtenabled::text as enabled,
+            evttags as tags
+        FROM pg_event_trigger
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut event_triggers = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("trigger_name");
+        let event: String = row.get("event");
+        let owner: u32 = row.get("owner");
+        let function_oid: u32 = row.get("function_oid");
+        let enabled_str: String = row.get("enabled");
+        let enabled = enabled_str.chars().next() == Some('O');
+        let tags: Option<Vec<String>> = row.get("tags");
+
+        // Get function name from OID
+        let func_query = "SELECT proname FROM pg_proc WHERE oid = $1";
+        let func_rows = client.query(func_query, &[&function_oid]).await?;
+        let function_name = if let Some(func_row) = func_rows.first() {
+            func_row.get::<_, String>("proname")
+        } else {
+            "unknown_function".to_string()
+        };
+
+        event_triggers.push(EventTrigger {
+            name,
+            event,
+            function: function_name,
+            enabled,
+            tags: tags.unwrap_or_default(),
+        });
+    }
+
+    Ok(event_triggers)
+}
+
+async fn introspect_collations<C: GenericClient>(client: &C) -> Result<Vec<Collation>> {
+    let query = r#"
+        SELECT 
+            c.collname as collation_name,
+            n.nspname as schema_name,
+            c.collcollate as locale,
+            c.collctype as ctype,
+            c.collprovider::text as provider
+        FROM pg_collation c
+        JOIN pg_namespace n ON c.collnamespace = n.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut collations = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("collation_name");
+        let schema: Option<String> = row.get("schema_name");
+        let locale: Option<String> = row.get("locale");
+        let ctype: Option<String> = row.get("ctype");
+        let provider: String = row.get("provider");
+
+        collations.push(Collation {
+            name,
+            schema,
+            locale,
+            ctype,
+            provider,
+        });
+    }
+
+    Ok(collations)
+}
+
+async fn introspect_rules<C: GenericClient>(client: &C) -> Result<Vec<Rule>> {
+    let query = r#"
+        SELECT 
+            r.rulename as rule_name,
+            c.relname as table_name,
+            n.nspname as schema_name,
+            r.ev_type as event_type,
+            r.is_instead as is_instead,
+            pg_get_ruledef(r.oid) as rule_definition
+        FROM pg_rewrite r
+        JOIN pg_class c ON r.ev_class = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND r.rulename != '_RETURN'  -- Exclude default rules
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut rules = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("rule_name");
+        let table: String = row.get("table_name");
+        let schema: Option<String> = row.get("schema_name");
+        let event_type: String = row.get("event_type");
+        let is_instead: bool = row.get("is_instead");
+        let definition: String = row.get("rule_definition");
+
+        // Parse event type
+        let event = match event_type.as_str() {
+            "1" => RuleEvent::Select,
+            "2" => RuleEvent::Update,
+            "3" => RuleEvent::Insert,
+            "4" => RuleEvent::Delete,
+            _ => RuleEvent::Select, // Default fallback
+        };
+
+        rules.push(Rule {
+            name,
+            table,
+            schema,
+            event,
+            instead: is_instead,
+            definition,
+        });
+    }
+
+    Ok(rules)
 }
 
 // Helper functions for parsing

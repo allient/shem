@@ -11,6 +11,7 @@ use shem_core::{
         GeneratedColumn, Identity, Index, IndexColumn, MaterializedView, Parameter, ParameterMode,
         Policy, Procedure, ReturnKind, ReturnType, Sequence, Server, SortOrder, Table, Trigger,
         TriggerEvent, TriggerTiming, Type, TypeKind, View,
+        EventTrigger, Collation, Rule, RuleEvent,
     },
     traits::SchemaSerializer,
 };
@@ -157,9 +158,27 @@ impl SchemaSerializer for SqlSerializer {
             sql.push_str(";\n\n");
         }
 
+        // Generate CREATE EVENT TRIGGER statements
+        for (_, event_trigger) in &schema.event_triggers {
+            sql.push_str(&generate_create_event_trigger(event_trigger)?);
+            sql.push_str(";\n\n");
+        }
+
         // Generate CREATE POLICY statements
         for (_, policy) in &schema.policies {
             sql.push_str(&generate_create_policy(policy)?);
+            sql.push_str(";\n\n");
+        }
+
+        // Generate CREATE COLLATION statements
+        for (_, collation) in &schema.collations {
+            sql.push_str(&generate_create_collation(collation)?);
+            sql.push_str(";\n\n");
+        }
+
+        // Generate CREATE RULE statements
+        for (_, rule) in &schema.rules {
+            sql.push_str(&generate_create_rule(rule)?);
             sql.push_str(";\n\n");
         }
 
@@ -862,6 +881,63 @@ fn generate_create_server(server: &Server) -> Result<String> {
         sql.push_str(")");
     }
 
+    Ok(sql)
+}
+
+fn generate_create_event_trigger(trigger: &EventTrigger) -> Result<String> {
+    // Placeholder: You may want to expand this for full event trigger support
+    let tags = if !trigger.tags.is_empty() {
+        format!(" TAGS ({})", trigger.tags.join(", "))
+    } else {
+        String::new()
+    };
+    let enabled = if trigger.enabled { "ENABLE" } else { "DISABLE" };
+    Ok(format!(
+        "CREATE EVENT TRIGGER {} ON {} EXECUTE FUNCTION {}{} {}",
+        trigger.name, trigger.event, trigger.function, tags, enabled
+    ))
+}
+
+fn generate_create_collation(collation: &Collation) -> Result<String> {
+    let mut sql = format!("CREATE COLLATION {}", collation.name);
+    if let Some(schema) = &collation.schema {
+        sql = format!("CREATE COLLATION {}.{}", schema, collation.name);
+    }
+    let mut options = Vec::new();
+    if let Some(locale) = &collation.locale {
+        options.push(format!("LOCALE = '{}'", locale));
+    }
+    if let Some(ctype) = &collation.ctype {
+        options.push(format!("CTYPE = '{}'", ctype));
+    }
+    if !collation.provider.is_empty() {
+        options.push(format!("PROVIDER = '{}'", collation.provider));
+    }
+    if !options.is_empty() {
+        sql.push_str(&format!(" ({} )", options.join(", ")));
+    }
+    Ok(sql)
+}
+
+fn generate_create_rule(rule: &Rule) -> Result<String> {
+    let event = match rule.event {
+        RuleEvent::Select => "SELECT",
+        RuleEvent::Update => "UPDATE",
+        RuleEvent::Insert => "INSERT",
+        RuleEvent::Delete => "DELETE",
+    };
+    let instead = if rule.instead { "INSTEAD" } else { "" };
+    let mut sql = format!(
+        "CREATE RULE {} AS ON {} TO {} {} {}",
+        rule.name,
+        event,
+        rule.table,
+        instead,
+        rule.definition
+    );
+    if let Some(schema) = &rule.schema {
+        sql = format!("CREATE RULE {} AS ON {} TO {}.{} {} {}", rule.name, event, schema, rule.table, instead, rule.definition);
+    }
     Ok(sql)
 }
 

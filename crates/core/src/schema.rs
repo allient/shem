@@ -16,8 +16,11 @@ pub struct Schema {
     pub sequences: HashMap<String, Sequence>,
     pub extensions: HashMap<String, Extension>,
     pub triggers: HashMap<String, Trigger>,
+    pub event_triggers: HashMap<String, EventTrigger>,
     pub policies: HashMap<String, Policy>,
     pub servers: HashMap<String, Server>,
+    pub collations: HashMap<String, Collation>,
+    pub rules: HashMap<String, Rule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -123,6 +126,34 @@ pub struct Server {
     pub name: String,
     pub foreign_data_wrapper: String,
     pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EventTrigger {
+    pub name: String,
+    pub event: String,
+    pub function: String,
+    pub enabled: bool,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Collation {
+    pub name: String,
+    pub schema: Option<String>,
+    pub locale: Option<String>,
+    pub ctype: Option<String>,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Rule {
+    pub name: String,
+    pub table: String,
+    pub schema: Option<String>,
+    pub event: RuleEvent,
+    pub instead: bool,
+    pub definition: String,
 }
 
 // Supporting types
@@ -249,6 +280,14 @@ pub enum ReturnKind {
     Scalar,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RuleEvent {
+    Select,
+    Update,
+    Insert,
+    Delete,
+}
+
 impl Schema {
     pub fn new() -> Self {
         Self {
@@ -262,8 +301,11 @@ impl Schema {
             sequences: HashMap::new(),
             extensions: HashMap::new(),
             triggers: HashMap::new(),
+            event_triggers: HashMap::new(),
             policies: HashMap::new(),
             servers: HashMap::new(),
+            collations: HashMap::new(),
+            rules: HashMap::new(),
         }
     }
 } 

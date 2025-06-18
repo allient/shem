@@ -267,6 +267,154 @@ MIT
 
 
 
+
+
+
+
+## Sample data
+-- ========== EXTENSIONS ==========
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "btree_gist";
+
+-- ========== DOMAIN ==========
+CREATE DOMAIN email AS TEXT
+  CHECK (VALUE ~* '^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$');
+
+-- ========== ENUM ==========
+CREATE TYPE user_role AS ENUM ('admin', 'user', 'guest');
+
+-- ========== COMPOSITE TYPE ==========
+CREATE TYPE address_type AS (
+    street TEXT,
+    city TEXT,
+    zip TEXT
+);
+
+-- ========== RANGE TYPE ==========
+CREATE TYPE int4range_custom AS RANGE (subtype = integer);
+
+-- ========== COLLATION ==========
+CREATE COLLATION german_ci (provider = icu, locale = 'de-DE-u-co-phonebk', deterministic = false);
+
+-- ========== SEQUENCE ==========
+CREATE SEQUENCE user_seq START 1000;
+
+-- ========== TABLES, COLUMNS, CHECK, UNIQUE, FK ==========
+CREATE TABLE departments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT UNIQUE NOT NULL,
+    budget NUMERIC CHECK (budget > 0)
+);
+
+CREATE TABLE employees (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email email NOT NULL UNIQUE,
+    role user_role NOT NULL DEFAULT 'user',
+    salary NUMERIC CHECK (salary >= 0),
+    department_id UUID REFERENCES departments(id),
+    address address_type,
+    created_at TIMESTAMP DEFAULT now(),
+    CONSTRAINT salary_nonzero CHECK (salary <> 0)
+);
+
+-- ========== INDEX ==========
+CREATE INDEX idx_employees_salary ON employees(salary);
+
+-- ========== EXCLUSION CONSTRAINT ==========
+CREATE TABLE meeting_rooms (
+    id SERIAL PRIMARY KEY,
+    room_name TEXT,
+    during TSRANGE,
+    EXCLUDE USING gist (room_name WITH =, during WITH &&)
+);
+
+-- ========== VIEW ==========
+CREATE VIEW active_employees AS
+SELECT id, email FROM employees WHERE role <> 'guest';
+
+-- ========== MATERIALIZED VIEW ==========
+CREATE MATERIALIZED VIEW department_budgets AS
+SELECT d.name, SUM(e.salary) AS total_salary
+FROM departments d
+JOIN employees e ON e.department_id = d.id
+GROUP BY d.name;
+
+-- ========== FUNCTION ==========
+CREATE FUNCTION get_department_budget(dept_id UUID) RETURNS NUMERIC AS $$
+    SELECT COALESCE(SUM(salary), 0)
+    FROM employees
+    WHERE department_id = dept_id;
+$$ LANGUAGE SQL;
+
+-- ========== PROCEDURE ==========
+CREATE PROCEDURE increase_salary_all(pct NUMERIC)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE employees SET salary = salary + (salary * pct);
+END;
+$$;
+
+-- ========== FOREIGN SERVER ==========
+CREATE SERVER foreign_pg_server
+  FOREIGN DATA WRAPPER postgres_fdw
+  OPTIONS (host 'localhost', dbname 'other_db', port '5432');
+
+-- ========== ROW-LEVEL SECURITY ==========
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY only_admins ON employees
+  FOR SELECT USING (role = 'admin');
+
+-- ========== TRIGGER FUNCTION & TRIGGER ==========
+CREATE FUNCTION log_insert() RETURNS trigger AS $$
+BEGIN
+    RAISE NOTICE 'Inserted row with ID: %', NEW.id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_log_insert
+AFTER INSERT ON employees
+FOR EACH ROW
+EXECUTE FUNCTION log_insert();
+
+-- ========== CONSTRAINT TRIGGER ==========
+CREATE FUNCTION validate_department_budget() RETURNS trigger AS $$
+BEGIN
+    IF (SELECT SUM(salary) FROM employees WHERE department_id = NEW.department_id) > 100000 THEN
+        RAISE EXCEPTION 'Department budget exceeded';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_budget_check
+AFTER INSERT OR UPDATE ON employees
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_department_budget();
+
+-- ========== EVENT TRIGGER ==========
+CREATE FUNCTION on_ddl_command() RETURNS event_trigger AS $$
+BEGIN
+    RAISE NOTICE 'DDL Command: %', tg_tag;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER ddl_logger
+ON ddl_command_start
+EXECUTE FUNCTION on_ddl_command();
+
+-- ========== COMMENTS ==========
+COMMENT ON TABLE employees IS 'Stores employee data';
+COMMENT ON COLUMN employees.email IS 'Work email of the employee';
+COMMENT ON FUNCTION get_department_budget IS 'Returns total budget per department';
+
+
+
+
+
 cargo check
 cargo build
 

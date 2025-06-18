@@ -40,4 +40,10 @@ Composite types
 Domain types
 Range types
 Foreign servers
-Triggers, constraint triggers and event triggers
+Triggers
+Range types
+Constraint triggers
+Event triggers
+Comments
+Collations
+Collations
