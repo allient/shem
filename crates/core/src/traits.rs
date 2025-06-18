@@ -1,34 +1,29 @@
+use crate::error::Result;
+use crate::schema::{
+    Domain, EnumType, Extension, Function, MaterializedView, Policy, Procedure, Schema, Sequence,
+    Server, Table, Trigger, Type, View,
+};
 use async_trait::async_trait;
 use std::fmt::Debug;
-use crate::*;
-use crate::error::Result;
-
-use crate::schema::{
-    Schema, Table, View, MaterializedView, Function, Procedure,
-    EnumType, Domain, Sequence, Extension, Trigger, Policy, Server,
-    Column, Constraint, Index, Parameter, ReturnType,
-    TypeKind, ConstraintKind, IndexColumn, Identity, CheckOption,
-    ParameterMode, SortOrder, TriggerTiming, TriggerEvent, ReturnKind
-};
 
 /// Database driver trait
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
     /// Get the driver name
     fn name(&self) -> &str;
-    
+
     /// Get the SQL dialect
     fn dialect(&self) -> &str;
-    
+
     /// Get supported features
     fn features(&self) -> &[Feature];
-    
+
     /// Get supported data types
     fn data_types(&self) -> Vec<String>;
-    
+
     /// Get SQL generator
     fn sql_generator(&self) -> Box<dyn SqlGenerator>;
-    
+
     /// Connect to the database
     async fn connect(&self, url: &str) -> Result<Box<dyn DatabaseConnection>>;
 }
@@ -38,22 +33,22 @@ pub trait DatabaseDriver: Send + Sync {
 pub trait DatabaseConnection: Send + Sync {
     /// Get the driver
     fn driver(&self) -> &dyn DatabaseDriver;
-    
+
     /// Introspect the database schema
     async fn introspect(&self) -> Result<Schema>;
-    
+
     /// Execute SQL statement
     async fn execute(&self, sql: &str) -> Result<()>;
-    
+
     /// Execute SQL query
     async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>>;
-    
+
     /// Begin transaction
     async fn begin(&self) -> Result<Box<dyn Transaction>>;
-    
+
     /// Close connection
     async fn close(self: Box<Self>) -> Result<()>;
-    
+
     /// Get connection metadata
     async fn metadata(&self) -> Result<ConnectionMetadata>;
 }
@@ -63,13 +58,13 @@ pub trait DatabaseConnection: Send + Sync {
 pub trait Transaction: Send + Sync {
     /// Execute SQL statement
     async fn execute(&self, sql: &str) -> Result<()>;
-    
+
     /// Execute SQL query
     async fn query(&self, sql: &str) -> Result<Vec<serde_json::Value>>;
-    
+
     /// Commit transaction
     async fn commit(self: Box<Self>) -> Result<()>;
-    
+
     /// Rollback transaction
     async fn rollback(self: Box<Self>) -> Result<()>;
 }
@@ -78,53 +73,53 @@ pub trait Transaction: Send + Sync {
 #[async_trait]
 pub trait SqlGenerator: Send + Sync {
     /// Generate CREATE TABLE SQL
-    fn generate_create_table(&self, table: &crate::Table) -> Result<String>;
-    
+    fn generate_create_table(&self, table: &Table) -> Result<String>;
+
     /// Generate ALTER TABLE SQL
-    fn generate_alter_table(&self, old: &crate::Table, new: &crate::Table) -> Result<(Vec<String>, Vec<String>)>;
-    
+    fn generate_alter_table(&self, old: &Table, new: &Table) -> Result<(Vec<String>, Vec<String>)>;
+
     /// Generate DROP TABLE SQL
-    fn generate_drop_table(&self, table: &crate::Table) -> Result<String>;
-    
+    fn generate_drop_table(&self, table: &Table) -> Result<String>;
+
     /// Generate CREATE VIEW SQL
     fn create_view(&self, view: &View) -> Result<String>;
-    
+
     /// Generate CREATE MATERIALIZED VIEW SQL
     fn create_materialized_view(&self, view: &MaterializedView) -> Result<String>;
-    
+
     /// Generate CREATE FUNCTION SQL
     fn create_function(&self, func: &Function) -> Result<String>;
-    
+
     /// Generate CREATE PROCEDURE SQL
     fn create_procedure(&self, proc: &Procedure) -> Result<String>;
-    
+
     /// Generate CREATE TYPE SQL
-    fn generate_create_type(&self, type_def: &crate::Type) -> Result<String>;
-    
+    fn generate_create_type(&self, type_def: &Type) -> Result<String>;
+
     /// Generate CREATE ENUM SQL
     fn create_enum(&self, enum_type: &EnumType) -> Result<String>;
-    
+
     /// Generate ALTER ENUM SQL
     fn alter_enum(&self, old: &EnumType, new: &EnumType) -> Result<(Vec<String>, Vec<String>)>;
-    
+
     /// Generate CREATE DOMAIN SQL
     fn create_domain(&self, domain: &Domain) -> Result<String>;
-    
+
     /// Generate CREATE SEQUENCE SQL
     fn create_sequence(&self, seq: &Sequence) -> Result<String>;
-    
+
     /// Generate ALTER SEQUENCE SQL
     fn alter_sequence(&self, old: &Sequence, new: &Sequence) -> Result<(Vec<String>, Vec<String>)>;
-    
+
     /// Generate CREATE EXTENSION SQL
     fn create_extension(&self, ext: &Extension) -> Result<String>;
-    
+
     /// Generate CREATE TRIGGER SQL
     fn create_trigger(&self, trigger: &Trigger) -> Result<String>;
-    
+
     /// Generate CREATE POLICY SQL
     fn create_policy(&self, policy: &Policy) -> Result<String>;
-    
+
     /// Generate CREATE SERVER SQL
     fn create_server(&self, server: &Server) -> Result<String>;
 }
@@ -164,40 +159,40 @@ pub enum Feature {
 pub struct ConnectionMetadata {
     /// Database version
     pub version: String,
-    
+
     /// Database name
     pub database: String,
-    
+
     /// Database user
     pub user: String,
-    
+
     /// Database host
     pub host: String,
-    
+
     /// Database port
     pub port: u16,
-    
+
     /// Database encoding
     pub encoding: String,
-    
+
     /// Database timezone
     pub timezone: String,
-    
+
     /// Database collation
     pub collation: String,
-    
+
     /// Database locale
     pub locale: String,
-    
+
     /// Database maximum connections
     pub max_connections: Option<i32>,
-    
+
     /// Database shared buffers
     pub shared_buffers: Option<String>,
-    
+
     /// Database work memory
     pub work_mem: Option<String>,
-    
+
     /// Database maintenance work memory
     pub maintenance_work_mem: Option<String>,
 }
@@ -207,10 +202,10 @@ pub struct ConnectionMetadata {
 pub trait SchemaSerializer: Send + Sync {
     /// Serialize schema to string
     async fn serialize(&self, schema: &Schema) -> Result<String>;
-    
+
     /// Deserialize schema from string
     async fn deserialize(&self, content: &str) -> Result<Schema>;
-    
+
     /// Get file extension
     fn extension(&self) -> &'static str;
 }
@@ -234,9 +229,13 @@ pub struct Migration {
 
 #[async_trait]
 pub trait AsyncSqlGenerator: Send + Sync {
-    async fn generate_create_table_async(&self, table: &crate::Table) -> Result<String>;
-    async fn generate_alter_table_async(&self, old: &crate::Table, new: &crate::Table) -> Result<(Vec<String>, Vec<String>)>;
-    async fn generate_drop_table_async(&self, table: &crate::Table) -> Result<String>;
+    async fn generate_create_table_async(&self, table: &Table) -> Result<String>;
+    async fn generate_alter_table_async(
+        &self,
+        old: &Table,
+        new: &Table,
+    ) -> Result<(Vec<String>, Vec<String>)>;
+    async fn generate_drop_table_async(&self, table: &Table) -> Result<String>;
     async fn generate_create_type_async(&self, type_def: &crate::Type) -> Result<String>;
 }
 
