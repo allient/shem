@@ -72,7 +72,7 @@ pub enum Command {
     Introspect {
         /// Database connection string
         #[arg(long)]
-        database_url: String,
+        database_url: Option<String>,
         /// Output directory
         #[arg(short, long, default_value = "schema")]
         output: PathBuf,
@@ -157,7 +157,12 @@ async fn main() -> Result<()> {
         Command::Introspect {
             database_url,
             output,
-        } => introspect::execute(database_url, output, &config).await,
+        } => introspect::execute(
+            database_url.or_else(|| config.database_url.clone()),
+            output,
+            &config,
+        )
+        .await,
         Command::Inspect { schema } => inspect::execute(schema.to_str().unwrap(), &config).await,
     };
 
