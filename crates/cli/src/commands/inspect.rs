@@ -1,160 +1,131 @@
-use anyhow::{Result, Context};
-use std::path::Path;
-use tracing::info;
-use shem_parser::parse_file;
-use shem_parser::ast::Statement;
 use crate::config::Config;
+use anyhow::{Result, bail};
+use shem_parser::ast::Statement;
+use shem_parser::parse_file;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tracing::info;
+
+fn resolve_and_check(path_str: &str, base_dir: &Path) -> Result<PathBuf> {
+    let path = fs::canonicalize(path_str)?;
+    if !path.starts_with(base_dir) {
+        bail!("Access denied: path outside allowed directory");
+    }
+    Ok(path)
+}
 
 pub async fn execute(path: &str, config: &Config) -> Result<()> {
-    let path = Path::new(path);
-    
+    let base_dir = std::env::current_dir()?;
+    let path = resolve_and_check(path, &base_dir)?;
+
     if !path.exists() {
-        anyhow::bail!("Schema path does not exist: {}", path.display());
+        bail!("Schema path does not exist: {}", path.display());
     }
-    
-    let mut stats = SchemaStats::new();
-    
-    if path.is_file() {
-        inspect_file(path, &mut stats)?;
-    } else if path.is_dir() {
-        // Inspect all .sql files in directory
-        for entry in walkdir::WalkDir::new(path)
+
+    let mut stats = SchemaStats::default();
+
+    let sql_files: Vec<_> = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        walkdir::WalkDir::new(path)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
-        {
-            inspect_file(entry.path(), &mut stats)?;
-        }
+            .map(|e| e.path().to_path_buf())
+            .collect()
+    };
+
+    info!("Found {} SQL files", sql_files.len());
+
+    for file in sql_files {
+        inspect_file(&file, &mut stats)?;
     }
-    
-    // Print schema statistics
-    info!("Schema Statistics:");
-    info!("  Tables: {}", stats.tables);
-    info!("  Views: {}", stats.views);
-    info!("  Materialized Views: {}", stats.materialized_views);
-    info!("  Functions: {}", stats.functions);
-    info!("  Procedures: {}", stats.procedures);
-    info!("  Types: {}", stats.enums);
-    info!("  Domains: {}", stats.domains);
-    info!("  Sequences: {}", stats.sequences);
-    info!("  Extensions: {}", stats.extensions);
-    info!("  Triggers: {}", stats.triggers);
-    info!("  Policies: {}", stats.policies);
-    info!("  Foreign Servers: {}", stats.servers);
-    
-    // Print object names
-    if !stats.table_names.is_empty() {
-        info!("\nTables:");
-        for name in stats.table_names {
-            info!("  {}", name);
-        }
-    }
-    
-    if !stats.view_names.is_empty() {
-        info!("\nViews:");
-        for name in stats.view_names {
-            info!("  {}", name);
-        }
-    }
-    
-    if !stats.function_names.is_empty() {
-        info!("\nFunctions:");
-        for name in stats.function_names {
-            info!("  {}", name);
-        }
-    }
-    
-    if !stats.enum_names.is_empty() {
-        info!("\nEnums:");
-        for name in stats.enum_names {
-            info!("  {}", name);
-        }
-    }
-    
+
+    stats.print_summary();
     Ok(())
 }
 
 #[derive(Default)]
 struct SchemaStats {
-    tables: usize,
-    views: usize,
-    materialized_views: usize,
-    functions: usize,
-    procedures: usize,
-    enums: usize,
-    domains: usize,
-    sequences: usize,
-    extensions: usize,
-    triggers: usize,
-    policies: usize,
-    servers: usize,
-    table_names: Vec<String>,
-    view_names: Vec<String>,
-    function_names: Vec<String>,
-    enum_names: Vec<String>,
+    counters: HashMap<&'static str, usize>,
+    named_lists: HashMap<&'static str, Vec<String>>,
 }
 
 impl SchemaStats {
-    fn new() -> Self {
-        Self::default()
+    fn count(&mut self, category: &'static str) {
+        *self.counters.entry(category).or_default() += 1;
+    }
+
+    fn add_name(&mut self, category: &'static str, name: String) {
+        self.named_lists.entry(category).or_default().push(name);
+    }
+
+    fn print_summary(&self) {
+        info!("Schema Statistics:");
+        for (key, count) in &self.counters {
+            info!("  {}: {}", key, count);
+        }
+
+        for (key, names) in &self.named_lists {
+            if !names.is_empty() {
+                info!("\n{}:", capitalize(key));
+                for name in names {
+                    info!("  {}", name);
+                }
+            }
+        }
     }
 }
 
 fn inspect_file(path: &Path, stats: &mut SchemaStats) -> Result<()> {
     info!("Inspecting {}", path.display());
-    
     let statements = parse_file(path)?;
-    
+
     for stmt in statements {
         match stmt {
-            Statement::CreateTable(create) => {
-                stats.tables += 1;
-                stats.table_names.push(create.name);
+            Statement::CreateTable(c) => {
+                stats.count("tables");
+                stats.add_name("tables", c.name);
             }
-            Statement::CreateView(create) => {
-                stats.views += 1;
-                stats.view_names.push(create.name);
+            Statement::CreateView(c) => {
+                stats.count("views");
+                stats.add_name("views", c.name);
             }
-            Statement::CreateMaterializedView(create) => {
-                stats.materialized_views += 1;
-                stats.view_names.push(create.name);
+            Statement::CreateMaterializedView(c) => {
+                stats.count("materialized_views");
+                stats.add_name("views", c.name); // same list
             }
-            Statement::CreateFunction(create) => {
-                stats.functions += 1;
-                stats.function_names.push(create.name);
+            Statement::CreateFunction(c) => {
+                stats.count("functions");
+                stats.add_name("functions", c.name);
             }
-            Statement::CreateProcedure(create) => {
-                stats.procedures += 1;
-                stats.function_names.push(create.name);
+            Statement::CreateProcedure(c) => {
+                stats.count("procedures");
+                stats.add_name("procedures", c.name);
             }
-            Statement::CreateEnum(create) => {
-                stats.enums += 1;
-                stats.enum_names.push(create.name);
+            Statement::CreateEnum(c) => {
+                stats.count("enums");
+                stats.add_name("enums", c.name);
             }
-            Statement::CreateType(create) => {
-                stats.enums += 1;
-            }
-            Statement::CreateDomain(create) => {
-                stats.domains += 1;
-            }
-            Statement::CreateSequence(create) => {
-                stats.sequences += 1;
-            }
-            Statement::CreateExtension(create) => {
-                stats.extensions += 1;
-            }
-            Statement::CreateTrigger(create) => {
-                stats.triggers += 1;
-            }
-            Statement::CreatePolicy(create) => {
-                stats.policies += 1;
-            }
-            Statement::CreateServer(create) => {
-                stats.servers += 1;
-            }
+            Statement::CreateType(_) => stats.count("types"),
+            Statement::CreateDomain(_) => stats.count("domains"),
+            Statement::CreateSequence(_) => stats.count("sequences"),
+            Statement::CreateExtension(_) => stats.count("extensions"),
+            Statement::CreateTrigger(_) => stats.count("triggers"),
+            Statement::CreatePolicy(_) => stats.count("policies"),
+            Statement::CreateServer(_) => stats.count("servers"),
             _ => {}
         }
     }
-    
+
     Ok(())
-} 
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}

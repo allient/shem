@@ -267,9 +267,103 @@ MIT
 
 
 
+## Postgres objects
+🟦 Data Structures
+| Object              | Description                                            |
+| ------------------- | ------------------------------------------------------ |
+| `Table`             | Stores rows of data in columns.                        |
+| `View`              | Virtual table defined by a SQL query.                  |
+| `Materialized View` | View with stored results for fast access.              |
+| `Composite Type`    | User-defined record/struct type.                       |
+| `Enum Type`         | Type with fixed set of text values.                    |
+| `Domain`            | Base type with constraints.                            |
+| `Range Type`        | Type that stores a range of values (e.g. `int4range`). |
 
 
+🟧 Constraints & Rules
+| Object                 | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `Primary Key`          | Unique, not-null identifier.                  |
+| `Foreign Key`          | Enforces link to another table's key.         |
+| `Unique`               | Disallows duplicate values.                   |
+| `Check`                | Enforces condition (e.g. `age > 0`).          |
+| `Not Null`             | Column must not be NULL.                      |
+| `Exclusion Constraint` | Prevents overlapping data (e.g. time ranges). |
+| `Rule`                 | Query rewriting mechanism (rarely used).      |
 
+🟨 Logic & Computation
+| Object          | Description                                            |
+| --------------- | ------------------------------------------------------ |
+| `Function`      | Returns a value, used in SQL.                          |
+| `Procedure`     | Executed via `CALL`, no return.                        |
+| `Trigger`       | Executes on row events (INSERT/UPDATE/DELETE).         |
+| `Event Trigger` | Executes on schema-level events (e.g. `CREATE TABLE`). |
+
+
+🟩 Security & Access Control
+| Object         | Description                |
+| -------------- | -------------------------- |
+| `Role/User`    | Database user or group.    |
+| `GRANT/REVOKE` | Access control.            |
+| `Policy`       | Row-Level Security filter. |
+
+🟪 Storage & Generation
+| Object       | Description                        |
+| ------------ | ---------------------------------- |
+| `Sequence`   | Auto-incrementing ID generator.    |
+| `Index`      | Speed up query performance.        |
+| `Tablespace` | Defines physical storage location. |
+| `Partition`  | Subtable for partitioned table.    |
+
+⬛ Extensions & Foreign Systems
+| Object           | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `Extension`      | Plugin package (e.g. `pgcrypto`, `uuid-ossp`).    |
+| `Foreign Table`  | Represents external data as a table.              |
+| `Foreign Server` | Configuration for an external database.           |
+| `FDW`            | Foreign Data Wrapper, interface for foreign data. |
+
+🟥 Miscellaneous
+| Object           | Description                                      |
+| ---------------- | ------------------------------------------------ |
+| `Schema`         | Logical namespace for grouping objects.          |
+| `Collation`      | Rules for text comparison/sorting.               |
+| `Cast`           | Conversion rules between types.                  |
+| `Operator`       | Custom operation (e.g., `#>`, `+=`).             |
+| `Operator Class` | Index behavior definition.                       |
+| `Aggregate`      | Custom aggregation logic (e.g. `avg`, `sum`).    |
+| `Language`       | PL/pgSQL, SQL, C, etc. for functions/procedures. |
+
+
+For your Shem declarative PostgreSQL migration tool, focus on supporting it
+
+<!-- markdown-table-sort-disable -->
+| Rank | Object Type | Short Description | Usage Freq. | Declarative Complexity | Category | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | **Table** | Fundamental data storage unit containing rows and columns. | Very High | **High** | Data Structure | ✅ Complete |
+| 2 | **Index** | A data structure that improves the speed of data retrieval. | Very High | **Medium** | Performance | ✅ Complete |
+| 3 | **Constraint** | Rules that enforce data integrity (e.g., PK, FK, UNIQUE, CHECK). | Very High | **Medium** | Integrity | ✅ Complete |
+| 4 | **Schema** | A namespace or folder that contains a collection of database objects. | Very High | **Simple** | Organization | 🔶 **Missing** |
+| 5 | **Function** | A reusable block of code that performs an action and returns a value. | High | **High** | Logic | ✅ Complete |
+| 6 | **View** | A virtual table based on the result-set of a SQL statement. | High | Low | Logic / Abstraction| ✅ Complete |
+| 7 | **Sequence** | A generator for producing unique integer sequences (e.g., for IDs). | High | Low | Data Structure | ✅ Complete |
+| 8 | **Extension** | A software package that adds new functionality to PostgreSQL. | High | Low | Administration | ✅ Complete |
+| 9 | **Enum Type** | A custom data type that consists of a static, ordered set of values. | Medium | Low | Data Type | ✅ Complete |
+| 10 | **Trigger** | Executes a function automatically when a DML event occurs on a table. | Medium | Medium | Logic | ✅ Complete |
+| 11 | **Materialized View** | A physically stored (cached) view for performance-intensive queries. | Medium | Medium | Performance | ✅ Complete |
+| 12 | **Procedure** | A block of code to perform actions, can include transaction control. | Medium | **High** | Logic | ✅ Complete |
+| 13 | **Domain** | A user-defined data type with custom constraints for reusability. | Medium | Low | Data Type | ✅ Complete |
+| 14 | **Policy** | A rule for Row-Level Security (RLS) defining row visibility. | Medium | Medium | Security | ✅ Complete |
+| 15 | **Composite Type**| A custom data type that groups multiple fields, like a `struct`. | Low | Low | Data Type | ✅ Complete |
+| 16 | **Foreign Server** | A definition of a connection to an external data source (FDW). | Low | Low | Integration | 🔶 **Missing** |
+| 17 | **Range Type** | A data type for representing a range of values (e.g., a time range). | Low | Medium | Data Type | ✅ Complete |
+| 18 | **Collation** | Defines the rules for sorting and comparing strings. | Low | Low | Data Type | 🔶 **Missing** |
+| 19 | **Rule** | A legacy query-rewrite system. (Largely superseded by Triggers). | Very Low | **High** | Logic (Legacy) | ✅ Complete |
+| 20 | **Event Trigger** | A trigger that fires in response to DDL events (e.g., `CREATE TABLE`). | Very Low | Medium | Administration | ✅ Complete |
+| 21 | **Constraint Trigger**| A special trigger tied to a constraint, often for deferrability. | Very Low | **High** | Logic | ✅ Complete |
+| 22 | **Cast** | Defines how to convert one data type into another. | Very Low | Medium | Data Type | 🔶 Missing |
+| 23 | **Aggregate** | A custom aggregation function (like `SUM` or `AVG`). | Very Low | **High** | Logic | 🔶 Missing |
+<!-- markdown-table-sort-enable -->
 
 ## Sample data
 -- ========== EXTENSIONS ==========
@@ -435,6 +529,8 @@ shem diff --database-url "postgresql://postgres:postgres@localhost:5432/myapp_de
 
 
 cargo run -- diff --database-url "postgresql://postgres:postgres@localhost:5432/myapp_dev"
+
+
 
 
 

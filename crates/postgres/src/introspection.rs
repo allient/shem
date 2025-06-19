@@ -43,8 +43,8 @@ where
     // Introspect types (composite types, not enums)
     let composite_types = introspect_composite_types(&*client).await?;
     for type_def in composite_types {
-        // Store composite types in a separate collection or handle them differently
-        // For now, we'll skip them as they're not enums
+        // Store composite types in the types collection
+        schema.types.insert(type_def.name.clone(), type_def);
     }
 
     // Introspect range types separately for detailed information
@@ -53,7 +53,17 @@ where
         // Store range types in the types collection with a special prefix
         schema
             .range_types
-            .insert(range_type.name.clone(), range_type);
+            .insert(range_type.name.clone(), range_type.clone());
+        
+        // Also store in types collection for serialization
+        let type_def = Type {
+            name: range_type.name.clone(),
+            schema: range_type.schema.clone(),
+            kind: TypeKind::Range,
+            comment: None,
+            definition: Some(range_type.subtype.clone()),
+        };
+        schema.types.insert(range_type.name.clone(), type_def);
     }
 
     // Introspect enums
@@ -541,14 +551,34 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND p.prokind = 'f'  -- user-defined functions only
         AND p.proowner > 1
+        AND l.lanname NOT IN ('internal', 'c')  -- exclude internal and C functions
         AND NOT EXISTS (
             SELECT 1 FROM pg_depend d
             JOIN pg_extension e ON d.refobjid = e.oid
             WHERE d.objid = p.oid AND d.deptype = 'e'
         )
         AND NOT EXISTS (
-            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = '' OR l.lanname = 'c'
+            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = ''
         )
+        AND NOT EXISTS (
+            -- Exclude automatically generated functions (like multirange constructors)
+            SELECT 1 FROM pg_depend d
+            JOIN pg_type t ON d.refobjid = t.oid
+            WHERE d.objid = p.oid 
+            AND d.deptype = 'a'  -- auto dependency
+            AND t.typtype = 'r'  -- range type
+        )
+        AND p.proname NOT LIKE '%_multirange'  -- exclude multirange functions
+        AND p.proname NOT LIKE '%_constructor%'  -- exclude constructor functions
+        AND p.proname NOT LIKE '%_send'  -- exclude send functions
+        AND p.proname NOT LIKE '%_recv'  -- exclude receive functions
+        AND p.proname NOT LIKE '%_in'  -- exclude input functions
+        AND p.proname NOT LIKE '%_out'  -- exclude output functions
+        AND p.proname NOT LIKE '%_typmod'  -- exclude typmod functions
+        AND p.proname NOT LIKE '%_analyze'  -- exclude analyze functions
+        AND p.proname NOT LIKE '%_options'  -- exclude options functions
+        AND p.proname NOT LIKE '%_canonical'  -- exclude canonical functions
+        AND p.proname NOT LIKE '%_subtype_diff'  -- exclude subtype diff functions
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -682,7 +712,7 @@ where
             t.typowner AS owner
         FROM pg_type t
         JOIN pg_namespace n ON n.oid = t.typnamespace
-        JOIN pg_class c ON c.relname = t.typname AND c.relnamespace = t.typnamespace
+        JOIN pg_class c ON c.relname = t.typname AND c.relnamespace = t.typnamespace AND c.relkind = 'c'
         JOIN pg_attribute att ON att.attrelid = c.oid
         LEFT JOIN pg_attrdef ad ON ad.adrelid = att.attrelid AND ad.adnum = att.attnum
         LEFT JOIN pg_collation col ON col.oid = att.attcollation
@@ -952,9 +982,16 @@ async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Exten
         SELECT 
             e.extname AS extension_name,
             e.extversion AS extension_version,
-            n.nspname AS schema_name
+            n.nspname AS schema_name,
+            obj_description(e.oid, 'pg_extension') AS comment,
+            e.extname NOT IN (
+                'plpgsql', 'pg_catalog', 'pg_trgm', 'pg_stat_statements',
+                'pgstattuple', 'pg_buffercache', 'pg_prewarm',
+                'pg_visibility', 'pg_freespacemap', 'pgrowlocks'
+            ) AS is_user_extension
         FROM pg_extension e
         JOIN pg_namespace n ON e.extnamespace = n.oid
+        WHERE e.extname NOT IN ('plpgsql')
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -1233,7 +1270,6 @@ where
         FROM pg_collation c
         JOIN pg_namespace n ON c.collnamespace = n.oid
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND c.collowner > 1
           AND NOT EXISTS (
               SELECT 1 FROM pg_depend d
               JOIN pg_extension e ON d.refobjid = e.oid
@@ -1259,10 +1295,13 @@ where
             _ => CollationProvider::Libc, // fallback
         };
 
+        // Use lc_collate as the primary locale, fallback to lc_ctype if needed
+        let locale = lc_collate.clone().or(lc_ctype.clone());
+
         collations.push(Collation {
             name,
             schema,
-            locale: lc_collate.clone(),
+            locale,
             lc_collate,
             lc_ctype,
             provider: provider_enum,
@@ -1282,7 +1321,7 @@ where
             r.rulename AS rule_name,
             c.relname AS table_name,
             n.nspname AS schema_name,
-            r.ev_type AS event_type,
+            r.ev_type::text AS event_type,
             r.is_instead AS is_instead,
             pg_get_ruledef(r.oid) AS rule_definition
         FROM pg_rewrite r
@@ -1317,6 +1356,18 @@ where
             _ => RuleEvent::Select,
         };
 
+        // Parse the rule definition to extract just the action part
+        let action = if definition.contains("DO ") {
+            // Extract everything after "DO "
+            if let Some(do_pos) = definition.find("DO ") {
+                definition[do_pos + 3..].trim().to_string()
+            } else {
+                definition.clone()
+            }
+        } else {
+            definition.clone()
+        };
+
         rules.push(Rule {
             name,
             table,
@@ -1324,7 +1375,7 @@ where
             event,
             instead: is_instead,
             condition: None,           // TODO: parse WHERE condition from definition
-            actions: vec![definition], // TODO: parse multiple actions if needed
+            actions: vec![action],     // Store just the action part
         });
     }
 
@@ -1555,17 +1606,53 @@ fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
             continue;
         }
 
-        // Simple parsing - in a real implementation, you'd want more sophisticated parsing
+        // Parse parameter mode and name
         let mut param_parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut mode = ParameterMode::In;
+        let mut name = String::new();
+        let mut type_name = String::new();
 
-        if param_parts.len() >= 2 {
-            let name = param_parts[0].to_string();
-            let type_name = param_parts[1].to_string();
+        if param_parts.is_empty() {
+            continue;
+        }
 
+        // Check for parameter mode keywords
+        let start_idx = match param_parts[0].to_uppercase().as_str() {
+            "IN" => {
+                mode = ParameterMode::In;
+                1
+            }
+            "OUT" => {
+                mode = ParameterMode::Out;
+                1
+            }
+            "INOUT" => {
+                mode = ParameterMode::InOut;
+                1
+            }
+            "VARIADIC" => {
+                mode = ParameterMode::Variadic;
+                1
+            }
+            _ => 0,
+        };
+
+        if param_parts.len() > start_idx {
+            if start_idx < param_parts.len() - 1 {
+                // We have both name and type
+                name = param_parts[start_idx].to_string();
+                type_name = param_parts[start_idx + 1].to_string();
+            } else {
+                // Only type name (no parameter name)
+                type_name = param_parts[start_idx].to_string();
+            }
+        }
+
+        if !type_name.is_empty() {
             parameters.push(Parameter {
                 name,
                 type_name,
-                mode: ParameterMode::In, // Default to IN
+                mode: if start_idx == 0 { ParameterMode::In } else { mode }, // Only use explicit mode if keyword was found
                 default: None,
             });
         }
