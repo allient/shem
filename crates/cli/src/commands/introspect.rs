@@ -1,24 +1,21 @@
 use anyhow::{Result as AnyhowResult, anyhow};
 use async_trait::async_trait;
+use petgraph::algo::toposort;
+use petgraph::graph::DiGraph;
+use regex;
 use std::path::PathBuf;
 use tracing::info;
-use std::collections::{HashMap as Map, HashSet, VecDeque};
-use petgraph::graph::DiGraph;
-use petgraph::algo::toposort;
-use petgraph::graph::NodeIndex;
-use regex;
 
 use crate::config::Config;
 use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
-        CheckOption, Column, Constraint, ConstraintKind, Domain, Extension, Function,
-        GeneratedColumn, Identity, Index, IndexColumn, MaterializedView, Parameter, ParameterMode,
-        Policy, Procedure, ReturnKind, ReturnType, Sequence, Server, SortOrder, Table, Trigger,
-        TriggerEvent, TriggerTiming, Type, TypeKind, View,
-        EventTrigger, Collation, Rule, RuleEvent, ConstraintTrigger, RangeType,
-        ParallelSafety, PolicyCommand, TriggerLevel, Volatility, CollationProvider,
-        EnumType,
+        CheckOption, Collation, CollationProvider, Column, Constraint, ConstraintKind,
+        ConstraintTrigger, Domain, EnumType, EventTrigger, Extension, Function, GeneratedColumn,
+        Identity, Index, IndexColumn, MaterializedView, ParallelSafety, Parameter, ParameterMode,
+        Policy, PolicyCommand, Procedure, RangeType, ReturnKind, ReturnType, Rule, RuleEvent,
+        Sequence, Server, SortOrder, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming,
+        Type, TypeKind, View, Volatility,
     },
     traits::SchemaSerializer,
 };
@@ -72,7 +69,10 @@ pub async fn execute(
 
     // Handle enum types
     for (name, enum_type) in &schema.enums {
-        info!("Found enum type {} with values: {:?}", name, enum_type.values);
+        info!(
+            "Found enum type {} with values: {:?}",
+            name, enum_type.values
+        );
     }
 
     Ok(())
@@ -352,7 +352,11 @@ impl SchemaSerializer for SqlSerializer {
                                 } => Constraint {
                                     name: name.unwrap_or_default(),
                                     kind: ConstraintKind::ForeignKey {
-                                        references: format!("{}({})", references.table, references.columns.join(", ")),
+                                        references: format!(
+                                            "{}({})",
+                                            references.table,
+                                            references.columns.join(", ")
+                                        ),
                                         on_delete: None,
                                         on_update: None,
                                     },
@@ -524,7 +528,9 @@ impl SchemaSerializer for SqlSerializer {
                             .into_iter()
                             .map(|event| match event {
                                 ParserTriggerEvent::Insert => TriggerEvent::Insert,
-                                ParserTriggerEvent::Update => TriggerEvent::Update { columns: None },
+                                ParserTriggerEvent::Update => {
+                                    TriggerEvent::Update { columns: None }
+                                }
                                 ParserTriggerEvent::Delete => TriggerEvent::Delete,
                                 ParserTriggerEvent::Truncate => TriggerEvent::Truncate,
                             })
@@ -572,46 +578,53 @@ impl SchemaSerializer for SqlSerializer {
 }
 
 /// Resolve table dependencies using petgraph for robust topological sorting
-fn resolve_table_dependencies(tables: &std::collections::HashMap<String, Table>) -> Result<Vec<String>> {
+fn resolve_table_dependencies(
+    tables: &std::collections::HashMap<String, Table>,
+) -> Result<Vec<String>> {
     let mut graph = DiGraph::new();
     let mut name_to_index = std::collections::HashMap::new();
-    let mut index_to_name = std::collections::HashMap::new();
-    
+
     // Add all tables as nodes
     for (table_name, _) in tables.iter() {
         let index = graph.add_node(table_name.clone());
         name_to_index.insert(table_name.clone(), index);
-        index_to_name.insert(index, table_name.clone());
     }
-    
-    // Add edges for foreign key dependencies
+
+    // Add edges based on FK dependencies
     for (table_name, table) in tables.iter() {
         for constraint in &table.constraints {
             if let Some(ref_table) = extract_fk_referenced_table(&constraint.definition, tables) {
-                if let (Some(&from_idx), Some(&to_idx)) = (name_to_index.get(&ref_table), name_to_index.get(table_name)) {
-                    // Edge: referenced table -> current table (so referenced comes first)
+                if let (Some(&from_idx), Some(&to_idx)) = (
+                    name_to_index.get(ref_table.as_str()),
+                    name_to_index.get(table_name.as_str()),
+                ) {
                     graph.add_edge(from_idx, to_idx, ());
                 }
             }
         }
     }
-    
+
     // Topological sort
-    let sorted_indices = toposort(&graph, None)
-        .map_err(|_| Error::Schema("Circular dependency detected in table constraints".to_string()))?;
-    
+    let sorted_indices = toposort(&graph, None).map_err(|_| {
+        Error::Schema("Circular dependency detected in table constraints".to_string())
+    })?;
+
     // Convert indices back to table names
-    let sorted_names: Vec<String> = sorted_indices
-        .into_iter()
-        .filter_map(|idx| index_to_name.get(&idx).cloned())
+    let sorted_names = sorted_indices
+        .iter()
+        .filter_map(|&idx| graph.node_weight(idx).cloned())
+        .map(String::from)
         .collect();
-    
+
     Ok(sorted_names)
 }
 
 /// Extract referenced table name from a FOREIGN KEY constraint definition
 /// Returns the schema-qualified name if present in the tables map
-fn extract_fk_referenced_table(constraint_def: &str, tables: &std::collections::HashMap<String, Table>) -> Option<String> {
+fn extract_fk_referenced_table(
+    constraint_def: &str,
+    tables: &std::collections::HashMap<String, Table>,
+) -> Option<String> {
     // Look for REFERENCES <table> or REFERENCES <schema>.<table>
     let re = regex::Regex::new(r"REFERENCES ([\w\.]+)").ok()?;
     if let Some(caps) = re.captures(constraint_def) {
@@ -622,7 +635,10 @@ fn extract_fk_referenced_table(constraint_def: &str, tables: &std::collections::
         }
         // Try to match unqualified name (e.g., just table name)
         // If only one table matches the unqualified name, use it
-        let matches: Vec<_> = tables.keys().filter(|k| k.split('.').last() == Some(ref_name)).collect();
+        let matches: Vec<_> = tables
+            .keys()
+            .filter(|k| k.split('.').last() == Some(ref_name))
+            .collect();
         if matches.len() == 1 {
             return Some(matches[0].clone());
         }
@@ -656,7 +672,8 @@ fn generate_create_enum(enum_type: &EnumType) -> Result<String> {
 
     sql.push_str(" AS ENUM (");
 
-    let values = enum_type.values
+    let values = enum_type
+        .values
         .iter()
         .map(|v| format!("'{}'", v))
         .collect::<Vec<_>>()
@@ -1093,12 +1110,16 @@ fn generate_create_rule(rule: &Rule) -> Result<String> {
         RuleEvent::Insert => "INSERT",
         RuleEvent::Delete => "DELETE",
     };
-    
+
     let instead_str = if rule.instead { "INSTEAD" } else { "ALSO" };
-    
+
     Ok(format!(
         "CREATE RULE {} AS ON {} {} {} DO {}",
-        rule.name, event_str, instead_str, rule.table, rule.actions.join("; ")
+        rule.name,
+        event_str,
+        instead_str,
+        rule.table,
+        rule.actions.join("; ")
     ))
 }
 
@@ -1108,18 +1129,20 @@ fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<Str
         TriggerTiming::After => "AFTER",
         TriggerTiming::InsteadOf => "INSTEAD OF",
     };
-    
-    let events_str = trigger.events.iter()
+
+    let events_str = trigger
+        .events
+        .iter()
         .map(|event| trigger_event_to_str(event))
         .collect::<Vec<_>>()
         .join(" OR ");
-    
+
     let args_str = if !trigger.arguments.is_empty() {
         format!("({})", trigger.arguments.join(", "))
     } else {
         String::new()
     };
-    
+
     Ok(format!(
         "CREATE CONSTRAINT TRIGGER {} {} {} ON {} FOR EACH ROW EXECUTE FUNCTION {}{}",
         trigger.name, timing_str, events_str, trigger.table, trigger.function, args_str
@@ -1130,96 +1153,108 @@ fn generate_create_range_type(type_def: &Type) -> Result<String> {
     // For range types, we need to get the detailed information from the RangeType struct
     // Since we're storing range types with a "range_" prefix, we need to handle this specially
     let name = if type_def.name.starts_with("range_") {
-        type_def.name.strip_prefix("range_").unwrap_or(&type_def.name)
+        type_def
+            .name
+            .strip_prefix("range_")
+            .unwrap_or(&type_def.name)
     } else {
         &type_def.name
     };
-    
+
     // This is a simplified version - in a real implementation, you'd want to store
     // the full RangeType information and use it here
     Ok(format!(
         "CREATE TYPE {} AS RANGE (SUBTYPE = {})",
-        name, "unknown_subtype" // TODO: Get actual subtype from RangeType
+        name,
+        "unknown_subtype" // TODO: Get actual subtype from RangeType
     ))
 }
 
 fn generate_comments(schema: &Schema) -> Result<String> {
     let mut comments = String::new();
-    
+
     // Table comments
     for (_, table) in &schema.tables {
         if let Some(comment) = &table.comment {
             comments.push_str(&format!(
                 "COMMENT ON TABLE {} IS '{}';\n",
-                table.name, comment.replace("'", "''")
+                table.name,
+                comment.replace("'", "''")
             ));
         }
-        
+
         // Column comments
         for column in &table.columns {
             if let Some(comment) = &column.comment {
                 comments.push_str(&format!(
                     "COMMENT ON COLUMN {}.{} IS '{}';\n",
-                    table.name, column.name, comment.replace("'", "''")
+                    table.name,
+                    column.name,
+                    comment.replace("'", "''")
                 ));
             }
         }
     }
-    
+
     // View comments
     for (_, view) in &schema.views {
         if let Some(comment) = &view.comment {
             comments.push_str(&format!(
                 "COMMENT ON VIEW {} IS '{}';\n",
-                view.name, comment.replace("'", "''")
+                view.name,
+                comment.replace("'", "''")
             ));
         }
     }
-    
+
     // Function comments
     for (_, function) in &schema.functions {
         if let Some(comment) = &function.comment {
             comments.push_str(&format!(
                 "COMMENT ON FUNCTION {} IS '{}';\n",
-                function.name, comment.replace("'", "''")
+                function.name,
+                comment.replace("'", "''")
             ));
         }
     }
-    
+
     // Type comments
     for (_, enum_type) in &schema.enums {
         if let Some(comment) = &enum_type.comment {
             comments.push_str(&format!(
                 "COMMENT ON TYPE {} IS '{}';\n",
-                enum_type.name, comment.replace("'", "''")
+                enum_type.name,
+                comment.replace("'", "''")
             ));
         }
     }
-    
+
     // Domain comments
     for (_, domain) in &schema.domains {
         if let Some(comment) = &domain.comment {
             comments.push_str(&format!(
                 "COMMENT ON DOMAIN {} IS '{}';\n",
-                domain.name, comment.replace("'", "''")
+                domain.name,
+                comment.replace("'", "''")
             ));
         }
     }
-    
+
     // Sequence comments
     for (_, sequence) in &schema.sequences {
         if let Some(comment) = &sequence.comment {
             comments.push_str(&format!(
                 "COMMENT ON SEQUENCE {} IS '{}';\n",
-                sequence.name, comment.replace("'", "''")
+                sequence.name,
+                comment.replace("'", "''")
             ));
         }
     }
-    
+
     if !comments.is_empty() {
         comments.push('\n');
     }
-    
+
     Ok(comments)
 }
 
