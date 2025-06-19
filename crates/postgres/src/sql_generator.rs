@@ -320,7 +320,7 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn create_extension(&self, ext: &Extension) -> Result<String> {
         Ok(format!(
-            "CREATE EXTENSION IF NOT EXISTS {} VERSION '{}';",
+            "CREATE EXTENSION IF NOT EXISTS \"{}\" VERSION '{}';",
             ext.name, ext.version
         ))
     }

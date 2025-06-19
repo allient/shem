@@ -2,6 +2,11 @@ use anyhow::{Result as AnyhowResult, anyhow};
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tracing::info;
+use std::collections::{HashMap as Map, HashSet, VecDeque};
+use petgraph::graph::DiGraph;
+use petgraph::algo::toposort;
+use petgraph::graph::NodeIndex;
+use regex;
 
 use crate::config::Config;
 use shem_core::{
@@ -90,39 +95,20 @@ impl SchemaSerializer for SqlSerializer {
     async fn serialize(&self, schema: &Schema) -> Result<String> {
         let mut sql = String::new();
 
-        // Generate CREATE EXTENSION statements
+        // Generate CREATE EXTENSION statements first
         for (_, ext) in &schema.extensions {
             sql.push_str(&generate_create_extension(ext)?);
             sql.push_str(";\n\n");
         }
 
-        // Generate CREATE TYPE statements
+        // Generate CREATE TYPE statements (enums first, then other types)
         for (_, type_def) in &schema.types {
             match type_def.kind {
-                TypeKind::Composite { attributes: _ } => {
-                    sql.push_str(&generate_create_type(type_def)?);
-                    sql.push_str(";\n\n");
-                }
                 TypeKind::Enum { values: _ } => {
                     sql.push_str(&generate_create_enum_from_type(type_def)?);
                     sql.push_str(";\n\n");
                 }
-                TypeKind::Domain => {
-                    // Domain types should be handled by generate_create_domain
-                    return Err(Error::Schema(
-                        "Domain type should be handled by generate_create_domain".into(),
-                    ));
-                }
-                TypeKind::Range => {
-                    // Range types need special handling - they're stored with "range_" prefix
-                    sql.push_str(&generate_create_range_type(type_def)?);
-                    sql.push_str(";\n\n");
-                }
-                TypeKind::Base => {
-                    sql.push_str(&generate_create_type(type_def)?);
-                    sql.push_str(";\n\n");
-                }
-                _ => {}
+                _ => {} // Handle other types later
             }
         }
 
@@ -138,10 +124,13 @@ impl SchemaSerializer for SqlSerializer {
             sql.push_str(";\n\n");
         }
 
-        // Generate CREATE TABLE statements
-        for (_, table) in &schema.tables {
-            sql.push_str(&generate_create_table(table)?);
-            sql.push_str(";\n\n");
+        // Generate CREATE TABLE statements in dependency order
+        let table_order = resolve_table_dependencies(&schema.tables)?;
+        for table_name in table_order {
+            if let Some(table) = schema.tables.get(&table_name) {
+                sql.push_str(&generate_create_table(table)?);
+                sql.push_str(";\n\n");
+            }
         }
 
         // Generate CREATE VIEW statements
@@ -208,6 +197,31 @@ impl SchemaSerializer for SqlSerializer {
         for (_, server) in &schema.servers {
             sql.push_str(&generate_create_server(server)?);
             sql.push_str(";\n\n");
+        }
+
+        // Generate remaining CREATE TYPE statements (composite, range, etc.)
+        for (_, type_def) in &schema.types {
+            match type_def.kind {
+                TypeKind::Composite { attributes: _ } => {
+                    sql.push_str(&generate_create_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                TypeKind::Range => {
+                    sql.push_str(&generate_create_range_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                TypeKind::Base => {
+                    sql.push_str(&generate_create_type(type_def)?);
+                    sql.push_str(";\n\n");
+                }
+                TypeKind::Enum { values: _ } => {
+                    // Already handled above
+                }
+                TypeKind::Domain => {
+                    // Already handled above
+                }
+                _ => {}
+            }
         }
 
         // Generate COMMENT statements
@@ -557,11 +571,70 @@ impl SchemaSerializer for SqlSerializer {
     }
 }
 
+/// Resolve table dependencies using petgraph for robust topological sorting
+fn resolve_table_dependencies(tables: &std::collections::HashMap<String, Table>) -> Result<Vec<String>> {
+    let mut graph = DiGraph::new();
+    let mut name_to_index = std::collections::HashMap::new();
+    let mut index_to_name = std::collections::HashMap::new();
+    
+    // Add all tables as nodes
+    for (table_name, _) in tables.iter() {
+        let index = graph.add_node(table_name.clone());
+        name_to_index.insert(table_name.clone(), index);
+        index_to_name.insert(index, table_name.clone());
+    }
+    
+    // Add edges for foreign key dependencies
+    for (table_name, table) in tables.iter() {
+        for constraint in &table.constraints {
+            if let Some(ref_table) = extract_fk_referenced_table(&constraint.definition, tables) {
+                if let (Some(&from_idx), Some(&to_idx)) = (name_to_index.get(&ref_table), name_to_index.get(table_name)) {
+                    // Edge: referenced table -> current table (so referenced comes first)
+                    graph.add_edge(from_idx, to_idx, ());
+                }
+            }
+        }
+    }
+    
+    // Topological sort
+    let sorted_indices = toposort(&graph, None)
+        .map_err(|_| Error::Schema("Circular dependency detected in table constraints".to_string()))?;
+    
+    // Convert indices back to table names
+    let sorted_names: Vec<String> = sorted_indices
+        .into_iter()
+        .filter_map(|idx| index_to_name.get(&idx).cloned())
+        .collect();
+    
+    Ok(sorted_names)
+}
+
+/// Extract referenced table name from a FOREIGN KEY constraint definition
+/// Returns the schema-qualified name if present in the tables map
+fn extract_fk_referenced_table(constraint_def: &str, tables: &std::collections::HashMap<String, Table>) -> Option<String> {
+    // Look for REFERENCES <table> or REFERENCES <schema>.<table>
+    let re = regex::Regex::new(r"REFERENCES ([\w\.]+)").ok()?;
+    if let Some(caps) = re.captures(constraint_def) {
+        let ref_name = caps.get(1)?.as_str();
+        // Try to match schema-qualified name first
+        if tables.contains_key(ref_name) {
+            return Some(ref_name.to_string());
+        }
+        // Try to match unqualified name (e.g., just table name)
+        // If only one table matches the unqualified name, use it
+        let matches: Vec<_> = tables.keys().filter(|k| k.split('.').last() == Some(ref_name)).collect();
+        if matches.len() == 1 {
+            return Some(matches[0].clone());
+        }
+    }
+    None
+}
+
 // Helper functions for generating SQL statements
 // These are similar to the ones in migration.rs but without the down migrations
 
 fn generate_create_extension(ext: &Extension) -> Result<String> {
-    let mut sql = format!("CREATE EXTENSION IF NOT EXISTS {}", ext.name);
+    let mut sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext.name);
 
     if let Some(schema) = &ext.schema {
         sql.push_str(&format!(" SCHEMA {}", schema));
@@ -697,8 +770,11 @@ fn generate_create_table(table: &Table) -> Result<String> {
             col_def.push_str(" NOT NULL");
         }
 
+        // Only add DEFAULT if there's no GENERATED ALWAYS AS clause
         if let Some(default) = &column.default {
-            col_def.push_str(&format!(" DEFAULT {}", default));
+            if column.generated.is_none() {
+                col_def.push_str(&format!(" DEFAULT {}", default));
+            }
         }
 
         if let Some(identity) = &column.identity {
@@ -727,9 +803,12 @@ fn generate_create_table(table: &Table) -> Result<String> {
         columns.push(col_def);
     }
 
-    // Add constraints
+    // Add constraints (excluding redundant NOT NULL constraints)
     for constraint in &table.constraints {
-        columns.push(constraint.definition.clone());
+        // Skip redundant NOT NULL constraints that are already declared in column definitions
+        if !constraint.definition.contains("IS NOT NULL") {
+            columns.push(constraint.definition.clone());
+        }
     }
 
     sql.push_str(&columns.join(",\n    "));

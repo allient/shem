@@ -59,7 +59,17 @@ where
     // Introspect enums
     let enums = introspect_enums(&*client).await?;
     for enum_type in enums {
-        schema.enums.insert(enum_type.name.clone(), enum_type);
+        schema.enums.insert(enum_type.name.clone(), enum_type.clone());
+        
+        // Also store in types collection for serialization
+        let type_def = Type {
+            name: enum_type.name.clone(),
+            schema: enum_type.schema.clone(),
+            kind: TypeKind::Enum { values: enum_type.values.clone() },
+            comment: enum_type.comment.clone(),
+            definition: None,
+        };
+        schema.types.insert(enum_type.name.clone(), type_def);
     }
 
     // Introspect domains
@@ -189,17 +199,28 @@ async fn introspect_columns<C: GenericClient>(
 ) -> Result<Vec<Column>> {
     let query = r#"
         SELECT 
-            c.column_name,
-            c.data_type,
-            c.is_nullable = 'YES' as is_nullable,
-            c.column_default,
+            a.attname as column_name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) as type_name,
+            NOT a.attnotnull as is_nullable,
+            pg_get_expr(ad.adbin, ad.adrelid) as column_default,
             c.identity_generation,
-            c.generation_expression
-        FROM information_schema.columns c
-        JOIN pg_class pgc ON pgc.relname = c.table_name
-        WHERE c.table_schema = $1
-        AND c.table_name = $2
-        ORDER BY c.ordinal_position
+            c.generation_expression,
+            a.attcollation as collation_oid,
+            col.collname as collation_name
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class t ON a.attrelid = t.oid
+        JOIN pg_catalog.pg_namespace n ON t.relnamespace = n.oid
+        LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+        LEFT JOIN information_schema.columns c ON 
+            c.table_schema = n.nspname 
+            AND c.table_name = t.relname 
+            AND c.column_name = a.attname
+        LEFT JOIN pg_catalog.pg_collation col ON col.oid = a.attcollation
+        WHERE n.nspname = $1
+        AND t.relname = $2
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+        ORDER BY a.attnum
     "#;
 
     let rows = client.query(query, &[schema, &table.to_string()]).await?;
@@ -207,7 +228,7 @@ async fn introspect_columns<C: GenericClient>(
 
     for row in rows {
         let name: String = row.get("column_name");
-        let type_name: String = row.get("data_type");
+        let type_name: String = row.get("type_name");
         let nullable: bool = row.get("is_nullable");
         let default: Option<String> = row.get("column_default");
         let identity: Option<Identity> = match row.get::<_, Option<String>>("identity_generation") {
@@ -237,6 +258,7 @@ async fn introspect_columns<C: GenericClient>(
                 expression: expr,
                 stored: true,
             });
+        let collation: Option<String> = row.get("collation_name");
 
         columns.push(Column {
             name,
@@ -246,7 +268,7 @@ async fn introspect_columns<C: GenericClient>(
             identity,
             generated,
             comment: None,
-            collation: None,   // TODO: Get column collation
+            collation,
             storage: None,     // TODO: Get storage type
             compression: None, // TODO: Get compression method
         });
@@ -262,26 +284,20 @@ async fn introspect_constraints<C: GenericClient>(
 ) -> Result<Vec<Constraint>> {
     let query = r#"
         SELECT 
-            tc.constraint_name,
-            tc.constraint_type,
-            kcu.column_name,
-            ccu.table_schema AS foreign_table_schema,
-            ccu.table_name AS foreign_table_name,
-            ccu.column_name AS foreign_column_name,
-            rc.update_rule,
-            rc.delete_rule
-        FROM information_schema.table_constraints tc
-        LEFT JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-        LEFT JOIN information_schema.referential_constraints rc
-            ON tc.constraint_name = rc.constraint_name
-            AND tc.table_schema = rc.constraint_schema
-        LEFT JOIN information_schema.constraint_column_usage ccu
-            ON rc.unique_constraint_name = ccu.constraint_name
-            AND rc.constraint_schema = ccu.table_schema
-        WHERE tc.table_schema = $1
-        AND tc.table_name = $2
+            c.conname as constraint_name,
+            c.contype::text as constraint_type,
+            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) as column_names,
+            c.condeferrable as deferrable,
+            c.condeferred as initially_deferred,
+            pg_get_constraintdef(c.oid) as constraint_definition
+        FROM pg_catalog.pg_constraint c
+        JOIN pg_catalog.pg_class t ON c.conrelid = t.oid
+        JOIN pg_catalog.pg_namespace n ON t.relnamespace = n.oid
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        WHERE n.nspname = $1
+        AND t.relname = $2
+        GROUP BY c.oid, c.conname, c.contype, c.condeferrable, c.condeferred, c.conkey
+        ORDER BY c.conname
     "#;
 
     let rows = client.query(query, &[schema, &table.to_string()]).await?;
@@ -289,61 +305,36 @@ async fn introspect_constraints<C: GenericClient>(
 
     for row in rows {
         let name: String = row.get("constraint_name");
-        let constraint_type: String = row.get("constraint_type");
-        let kind = match constraint_type.as_str() {
-            "PRIMARY KEY" => ConstraintKind::PrimaryKey,
-            "FOREIGN KEY" => {
-                let foreign_table = format!(
-                    "{}.{}",
-                    row.get::<_, String>("foreign_table_schema"),
-                    row.get::<_, String>("foreign_table_name")
-                );
-                let update_rule = row.get::<_, Option<String>>("update_rule");
-                let delete_rule = row.get::<_, Option<String>>("delete_rule");
+        let constraint_type_str: String = row.get("constraint_type");
+        let constraint_type: char = constraint_type_str.chars().next().unwrap_or('x');
+        let column_names: Vec<String> = row.get("column_names");
+        let deferrable: bool = row.get("deferrable");
+        let initially_deferred: bool = row.get("initially_deferred");
+        let definition: String = row.get("constraint_definition");
+
+        let kind = match constraint_type {
+            'p' => ConstraintKind::PrimaryKey,
+            'f' => {
+                // For foreign keys, we'll extract the referenced table from the constraint definition
+                let references = if let Some(ref_match) = definition.find("REFERENCES ") {
+                    let ref_part = &definition[ref_match + 11..];
+                    if let Some(paren_pos) = ref_part.find('(') {
+                        ref_part[..paren_pos].trim().to_string()
+                    } else {
+                        ref_part.trim().to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
 
                 ConstraintKind::ForeignKey {
-                    references: foreign_table,
-                    on_delete: None, // TODO: Parse referential action
-                    on_update: None, // TODO: Parse referential action
-                }
-            }
-            "UNIQUE" => ConstraintKind::Unique,
-            "CHECK" => ConstraintKind::Check,
-            _ => continue,
-        };
-
-        let definition = match kind {
-            ConstraintKind::PrimaryKey => {
-                format!("PRIMARY KEY ({})", row.get::<_, String>("column_name"))
-            }
-            ConstraintKind::ForeignKey { ref references, .. } => {
-                let foreign_column = row.get::<_, String>("foreign_column_name");
-                let update_rule = row.get::<_, Option<String>>("update_rule");
-                let delete_rule = row.get::<_, Option<String>>("delete_rule");
-                format!(
-                    "FOREIGN KEY ({}) REFERENCES {} ({}) ON UPDATE {} ON DELETE {}",
-                    row.get::<_, String>("column_name"),
                     references,
-                    foreign_column,
-                    update_rule.unwrap_or_else(|| "NO ACTION".to_string()),
-                    delete_rule.unwrap_or_else(|| "NO ACTION".to_string())
-                )
-            }
-            ConstraintKind::Unique => format!("UNIQUE ({})", row.get::<_, String>("column_name")),
-            ConstraintKind::Check => {
-                // For check constraints, we need to get the check clause from a separate query
-                let check_query = r#"
-                    SELECT check_clause 
-                    FROM information_schema.check_constraints 
-                    WHERE constraint_name = $1 AND constraint_schema = $2
-                "#;
-                let check_rows = client.query(check_query, &[&name, schema]).await?;
-                if let Some(check_row) = check_rows.first() {
-                    check_row.get::<_, String>("check_clause")
-                } else {
-                    format!("CHECK (unknown)")
+                    on_delete: None, // TODO: Parse from definition if needed
+                    on_update: None,
                 }
             }
+            'u' => ConstraintKind::Unique,
+            'c' => ConstraintKind::Check,
             _ => continue,
         };
 
@@ -351,8 +342,8 @@ async fn introspect_constraints<C: GenericClient>(
             name,
             kind,
             definition,
-            deferrable: false,         // TODO: Get deferrable information
-            initially_deferred: false, // TODO: Get initially deferred information
+            deferrable,
+            initially_deferred,
         });
     }
 
