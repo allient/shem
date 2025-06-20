@@ -27,7 +27,7 @@ test:
 
 # Run introspect tests
 test-introspect:
-	./scripts/test-introspect.sh all
+	cargo test -p shem-postgres --test simple_introspect_test -- --nocapture
 
 # Run specific feature test
 test-feature:
@@ -35,7 +35,7 @@ test-feature:
 		echo "Error: FEATURE is required. Example: make test-feature FEATURE=tables"; \
 		exit 1; \
 	fi
-	./scripts/test-introspect.sh feature $(FEATURE)
+	cargo test -p shem-postgres --test simple_introspect_test test_$(FEATURE)_introspect -- --nocapture
 
 # Run cargo check
 check:
@@ -57,6 +57,9 @@ db-status:
 check-postgres:
 	./scripts/test-introspect.sh check
 
-# Run full introspect test with all objects
-test-full:
-	./scripts/test-introspect.sh full 
+# Run all introspect tests individually
+test-all-features:
+	cargo test -p shem-postgres --test simple_introspect_test test_tables_introspect -- --nocapture
+	cargo test -p shem-postgres --test simple_introspect_test test_enums_introspect -- --nocapture
+	cargo test -p shem-postgres --test simple_introspect_test test_functions_introspect -- --nocapture
+	cargo test -p shem-postgres --test simple_introspect_test test_extensions_introspect -- --nocapture 

@@ -535,3 +535,6 @@ cargo run -- diff --database-url "postgresql://postgres:postgres@localhost:5432/
 
 
 cargo run --bin shem introspect
+
+
+cargo test test_extensions_serialized_content_standalone -- --nocapture

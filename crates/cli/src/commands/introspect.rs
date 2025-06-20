@@ -13,9 +13,8 @@ use shem_core::{
         CheckOption, Collation, CollationProvider, Column, Constraint, ConstraintKind,
         ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
         GeneratedColumn, Identity, MaterializedView, ParallelSafety, Parameter, ParameterMode,
-        Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence,
-        Server, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View,
-        Volatility,
+        Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
+        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View, Volatility,
     },
     traits::SchemaSerializer,
 };
@@ -48,7 +47,6 @@ enum SchemaObject<'a> {
     EventTrigger(&'a EventTrigger),
     Policy(&'a Policy),
     Rule(&'a Rule),
-    Server(&'a Server),
 }
 
 impl<'a> SchemaObject<'a> {
@@ -71,7 +69,6 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::EventTrigger(t) => t.name.clone(),
             SchemaObject::Policy(p) => p.name.clone(),
             SchemaObject::Rule(r) => r.name.clone(),
-            SchemaObject::Server(s) => s.name.clone(),
         }
     }
 
@@ -94,7 +91,6 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::EventTrigger(_) => None, // Event triggers don't have schemas
             SchemaObject::Policy(p) => p.schema.clone(),
             SchemaObject::Rule(r) => r.schema.clone(),
-            SchemaObject::Server(_) => None, // Servers don't have schemas
         }
     }
 
@@ -144,14 +140,6 @@ pub async fn execute(
         .map_err(|e| anyhow!("Failed to write schema file: {}", e))?;
 
     info!("Schema written to {}", schema_file.display());
-
-    // Handle enum types
-    for (name, enum_type) in &schema.enums {
-        info!(
-            "Found enum type {} with values: {:?}",
-            name, enum_type.values
-        );
-    }
 
     Ok(())
 }
@@ -248,10 +236,6 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 SchemaObject::Rule(rule) => {
                     sql.push_str(&generate_create_rule(rule)?);
-                    sql.push_str(";\n\n");
-                }
-                SchemaObject::Server(server) => {
-                    sql.push_str(&generate_create_server(server)?);
                     sql.push_str(";\n\n");
                 }
             }
@@ -589,15 +573,7 @@ impl SchemaSerializer for SqlSerializer {
                     };
                     schema.policies.insert(policy.name.clone(), policy);
                 }
-                Statement::CreateServer(create) => {
-                    let server = Server {
-                        name: create.name,
-                        foreign_data_wrapper: create.foreign_data_wrapper,
-                        options: create.options,
-                        version: None,
-                    };
-                    schema.servers.insert(server.name.clone(), server);
-                }
+
                 _ => {}
             }
         }
@@ -1361,9 +1337,7 @@ fn extract_view_dependencies(definition: &str, schema: &Schema) -> Vec<String> {
     dependencies
 }
 
-// Helper functions for generating SQL statements
 // These are similar to the ones in migration.rs but without the down migrations
-
 fn generate_create_extension(ext: &Extension) -> Result<String> {
     let mut sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext.name);
 
@@ -1820,26 +1794,6 @@ fn generate_create_policy(policy: &Policy) -> Result<String> {
 
     if let Some(check) = &policy.check {
         sql.push_str(&format!(" WITH CHECK ({})", check));
-    }
-
-    Ok(sql)
-}
-
-fn generate_create_server(server: &Server) -> Result<String> {
-    let mut sql = format!(
-        "CREATE SERVER {} FOREIGN DATA WRAPPER {}",
-        server.name, server.foreign_data_wrapper
-    );
-
-    if !server.options.is_empty() {
-        sql.push_str(" OPTIONS (");
-        let options: Vec<String> = server
-            .options
-            .iter()
-            .map(|(k, v)| format!("{} '{}'", k, v))
-            .collect();
-        sql.push_str(&options.join(", "));
-        sql.push_str(")");
     }
 
     Ok(sql)
