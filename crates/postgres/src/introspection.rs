@@ -545,7 +545,7 @@ async fn introspect_materialized_views<C: GenericClient>(
             tablespace: None,                   // TODO: Get tablespace information
             storage_parameters: HashMap::new(), // TODO: Get storage parameters
             indexes: Vec::new(),                // TODO: Get materialized view indexes
-            populate_with_data,                 // Use actual data presence to determine WITH DATA vs WITH NO DATA
+            populate_with_data, // Use actual data presence to determine WITH DATA vs WITH NO DATA
         });
     }
 
@@ -1750,41 +1750,4 @@ fn parse_server_options(options: &[String]) -> std::collections::HashMap<String,
     }
 
     options_map
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use shem_core::PolicyCommand;
-
-    #[test]
-    fn test_policy_command_parsing() {
-        // Test the policy command parsing logic we fixed
-        let test_cases = vec![
-            (1, PolicyCommand::Select),
-            (2, PolicyCommand::Insert),
-            (3, PolicyCommand::Update),
-            (4, PolicyCommand::Delete),
-            (5, PolicyCommand::All),
-        ];
-
-        for (input, expected) in test_cases {
-            let result = match input {
-                1 => PolicyCommand::Select,
-                2 => PolicyCommand::Insert,
-                3 => PolicyCommand::Update,
-                4 => PolicyCommand::Delete,
-                5 => PolicyCommand::All,
-                _ => PolicyCommand::All, // Default fallback
-            };
-
-            assert_eq!(
-                result, expected,
-                "Policy command parsing failed for input {}",
-                input
-            );
-        }
-
-        println!("✅ Policy command parsing test passed!");
-    }
 }

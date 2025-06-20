@@ -6,6 +6,7 @@ use shem_core::{
     Transaction,
 };
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio_postgres::{Client, Config, NoTls};
 
 pub mod introspection;
@@ -15,21 +16,11 @@ pub use sql_generator::PostgresSqlGenerator;
 
 /// PostgreSQL database driver
 #[derive(Debug, Clone)]
-pub struct PostgresDriver {
-    sql_generator: Arc<PostgresSqlGenerator>,
-}
+pub struct PostgresDriver;
 
 impl PostgresDriver {
     pub fn new() -> Self {
-        Self {
-            sql_generator: Arc::new(PostgresSqlGenerator),
-        }
-    }
-}
-
-impl Default for PostgresDriver {
-    fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 
@@ -138,7 +129,7 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     fn sql_generator(&self) -> Box<dyn SqlGenerator> {
-        Box::new((*self.sql_generator).clone())
+        Box::new(PostgresSqlGenerator)
     }
 
     async fn connect(&self, url: &str) -> Result<Box<dyn DatabaseConnection>> {
@@ -158,8 +149,6 @@ impl DatabaseDriver for PostgresDriver {
         }))
     }
 }
-
-use tokio::sync::Mutex;
 
 /// PostgreSQL database connection
 #[derive(Debug)]
@@ -293,7 +282,6 @@ impl DatabaseConnection for PostgresConnection {
             >(transaction)
         };
         Ok(Box::new(PostgresTransaction {
-            client: Arc::clone(&self.client),
             transaction: Some(transaction),
         }))
     }
@@ -307,7 +295,6 @@ impl DatabaseConnection for PostgresConnection {
 
 /// PostgreSQL transaction
 pub struct PostgresTransaction {
-    client: Arc<Mutex<Client>>,
     transaction: Option<tokio_postgres::Transaction<'static>>,
 }
 
