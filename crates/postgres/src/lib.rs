@@ -138,7 +138,7 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     fn sql_generator(&self) -> Box<dyn SqlGenerator> {
-        Box::new(PostgresSqlGenerator)
+        Box::new((*self.sql_generator).clone())
     }
 
     async fn connect(&self, url: &str) -> Result<Box<dyn DatabaseConnection>> {

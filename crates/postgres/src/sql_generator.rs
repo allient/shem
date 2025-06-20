@@ -14,7 +14,7 @@
  */
 use shem_core::{
     CheckOption, Collation, ConstraintTrigger, Domain, EventTrigger, Extension, Function, Index,
-    IndexMethod, MaterializedView, ParameterMode, Policy, Procedure, Rule, Sequence, Server,
+    IndexMethod, MaterializedView, ParameterMode, Policy, PolicyCommand, Procedure, Rule, Sequence, Server,
     SqlGenerator, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View,
 };
 use shem_core::{EnumType, Result};
@@ -931,7 +931,7 @@ impl SqlGenerator for PostgresSqlGenerator {
             String::new()
         };
 
-        let when = if let Some(condition) = &trigger.when {
+        let when = if let Some(condition) = &trigger.condition {
             format!(" WHEN ({})", condition)
         } else {
             String::new()
@@ -958,8 +958,18 @@ impl SqlGenerator for PostgresSqlGenerator {
             }
         );
 
+        // Add command type
+        let command_str = match policy.command {
+            PolicyCommand::All => "ALL",
+            PolicyCommand::Select => "SELECT",
+            PolicyCommand::Insert => "INSERT",
+            PolicyCommand::Update => "UPDATE",
+            PolicyCommand::Delete => "DELETE",
+        };
+        sql.push_str(&format!(" FOR {}", command_str));
+
         if !policy.roles.is_empty() {
-            sql.push_str(&format!(" FOR {}", policy.roles.join(", ")));
+            sql.push_str(&format!(" TO {}", policy.roles.join(", ")));
         }
 
         if let Some(using) = &policy.using {
@@ -975,17 +985,29 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_server(&self, server: &Server) -> Result<String> {
-        let options = server
-            .options
-            .iter()
-            .map(|(k, v)| format!("{} '{}'", k, v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let server_name = Self::quote_identifier(&server.name);
+        let fdw = Self::quote_identifier(&server.foreign_data_wrapper);
 
-        Ok(format!(
-            "CREATE SERVER {} FOREIGN DATA WRAPPER {} OPTIONS ({});",
-            server.name, server.foreign_data_wrapper, options
-        ))
+        let mut sql = format!("CREATE SERVER {} FOREIGN DATA WRAPPER {}", server_name, fdw);
+
+        // Add VERSION if present
+        if let Some(version) = &server.version {
+            sql.push_str(&format!(" VERSION '{}'", version.replace('\'', "''")));
+        }
+
+        // Add OPTIONS if present
+        if !server.options.is_empty() {
+            let options = server
+                .options
+                .iter()
+                .map(|(k, v)| format!("{} '{}'", Self::quote_identifier(k), v.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" OPTIONS ({})", options));
+        }
+
+        sql.push(';');
+        Ok(sql)
     }
 
     fn drop_view(&self, view: &View) -> Result<String> {

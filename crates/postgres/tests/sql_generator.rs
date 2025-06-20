@@ -486,6 +486,7 @@ fn test_drop_trigger() {
         condition: None,
         for_each: TriggerLevel::Row,
         comment: None,
+        when: None,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.drop_trigger(&trig).unwrap();

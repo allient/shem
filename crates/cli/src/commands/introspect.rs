@@ -558,6 +558,7 @@ impl SchemaSerializer for SqlSerializer {
                         condition: None,
                         for_each: TriggerLevel::Row,
                         comment: None,
+                        when: None,
                     };
                     schema.triggers.insert(trigger.name.clone(), trigger);
                 }

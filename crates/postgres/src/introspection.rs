@@ -1098,6 +1098,7 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
             condition: None, // Optional: parse from pg_get_triggerdef if needed
             for_each: TriggerLevel::Row, // Optional: improve if you parse tgtype bits
             comment: None,
+            when: None, // Optional: parse from trigger definition if needed
         });
     }
 

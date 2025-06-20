@@ -500,6 +500,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 arguments: create.arguments.clone(),
                 condition: None,
                 for_each: shem_core::TriggerLevel::Row,
+                when: None,
                 comment: None,
             };
             schema.triggers.insert(trigger.name.clone(), trigger);
