@@ -6,15 +6,15 @@ use shem_core::{
 };
 use shem_parser::{
     ast::{
-        CheckOption, ParameterMode, Statement as ParserStatement, TableConstraint, TriggerEvent,
-        TriggerWhen, PolicyCommand,
+        CheckOption, ParameterMode, PolicyCommand, Statement as ParserStatement, TableConstraint,
+        TriggerWhen,
     },
     parse_file,
 };
 use shem_postgres::PostgresDriver;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
-use std::collections::BTreeMap;
 
 pub async fn execute(
     schema: PathBuf,
@@ -24,7 +24,8 @@ pub async fn execute(
     config: &Config,
 ) -> Result<()> {
     // Try to load schema files from config first, fall back to provided path
-    let schema_files = if config.declarative.enabled && !config.declarative.schema_paths.is_empty() {
+    let schema_files = if config.declarative.enabled && !config.declarative.schema_paths.is_empty()
+    {
         info!("Using declarative schema paths from config");
         config.load_schema_files()?
     } else {
@@ -63,7 +64,13 @@ pub async fn execute(
             // Sanitize the name for use in filename
             let sanitized_name = migration_name
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect::<String>();
             format!("migrations/{}_{}.sql", timestamp, sanitized_name)
         } else {
@@ -97,10 +104,10 @@ fn load_schema_from_files(files: &[PathBuf]) -> Result<Schema> {
         } else if file_path.is_dir() {
             // Load all .sql files in directory, ordered by filename
             info!("Loading schemas from directory: {}", file_path.display());
-            
+
             // Use BTreeMap to maintain order by filename
             let mut ordered_files = BTreeMap::new();
-            
+
             // First, collect all SQL files and their paths
             for entry in walkdir::WalkDir::new(file_path)
                 .into_iter()
@@ -108,10 +115,11 @@ fn load_schema_from_files(files: &[PathBuf]) -> Result<Schema> {
                 .filter(|e| e.path().extension().map_or(false, |ext| ext == "sql"))
             {
                 let path = entry.path().to_path_buf();
-                let filename = path.file_name()
+                let filename = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| anyhow::anyhow!("Invalid filename: {}", path.display()))?;
-                
+
                 ordered_files.insert(filename.to_string(), path);
             }
 
@@ -129,11 +137,6 @@ fn load_schema_from_files(files: &[PathBuf]) -> Result<Schema> {
     }
 
     Ok(schema)
-}
-
-// Keep the old function for backward compatibility
-fn load_schema(path: &PathBuf) -> Result<Schema> {
-    load_schema_from_files(&[path.clone()])
 }
 
 fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Result<()> {
@@ -290,11 +293,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                     },
                     kind: match constraint {
                         TableConstraint::PrimaryKey { .. } => shem_core::ConstraintKind::PrimaryKey,
-                        TableConstraint::ForeignKey { .. } => shem_core::ConstraintKind::ForeignKey {
-                            references: "".to_string(),
-                            on_delete: None,
-                            on_update: None,
-                        },
+                        TableConstraint::ForeignKey { .. } => {
+                            shem_core::ConstraintKind::ForeignKey {
+                                references: "".to_string(),
+                                on_delete: None,
+                                on_update: None,
+                            }
+                        }
                         TableConstraint::Unique { .. } => shem_core::ConstraintKind::Unique,
                         TableConstraint::Check { .. } => shem_core::ConstraintKind::Check,
                         TableConstraint::Exclusion { .. } => shem_core::ConstraintKind::Exclusion,
@@ -437,7 +442,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             };
             schema.enums.insert(enum_type.name.clone(), enum_type);
         }
-        ParserStatement::CreateType(create) => {
+        ParserStatement::CreateType(_create) => {
             // Handle composite types - they can be stored in a separate collection if needed
             // For now, we'll skip them as they're not enums
         }
@@ -538,7 +543,10 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                         let c = shem_core::Constraint {
                                             name: name.clone().unwrap_or_default(),
                                             kind: shem_core::ConstraintKind::PrimaryKey,
-                                            definition: format!("PRIMARY KEY ({})", columns.join(", ")),
+                                            definition: format!(
+                                                "PRIMARY KEY ({})",
+                                                columns.join(", ")
+                                            ),
                                             deferrable: false,
                                             initially_deferred: false,
                                         };

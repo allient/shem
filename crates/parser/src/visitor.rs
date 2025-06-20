@@ -1,12 +1,15 @@
-use anyhow::{Result, Context};
-use pg_query::{Node, ParseResult, protobuf::{self, node}};
 use crate::ast::{self, *};
+use anyhow::{Context, Result};
+use pg_query::{
+    protobuf::{self, node},
+    Node, ParseResult,
+};
 use std::collections::HashMap;
 
 /// Parse statements from PostgreSQL parse result
 pub fn parse_statements(result: &ParseResult) -> Result<Vec<Statement>> {
     let mut statements = Vec::new();
-    
+
     for stmt in &result.protobuf.stmts {
         let node = stmt.stmt.as_ref().context("Missing statement node")?;
         let statement = match node.node.as_ref().context("Missing node variant")? {
@@ -27,7 +30,7 @@ pub fn parse_statements(result: &ParseResult) -> Result<Vec<Statement>> {
         };
         statements.push(statement);
     }
-    
+
     Ok(statements)
 }
 
@@ -35,7 +38,7 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
     let name = get_qualified_name(stmt.relation.as_ref().context("Missing relation")?)?;
     let mut columns = Vec::new();
     let mut constraints = Vec::new();
-    
+
     // Parse table elements (columns and constraints)
     for element in &stmt.table_elts {
         match element.node.as_ref().context("Empty node")? {
@@ -50,9 +53,11 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
             _ => continue,
         }
     }
-    
+
     // Parse inheritance
-    let inherits = stmt.inh_relations.iter()
+    let inherits = stmt
+        .inh_relations
+        .iter()
         .filter_map(|rel| {
             if let Some(node::Node::RangeVar(range_var)) = &rel.node {
                 get_qualified_name(range_var).ok()
@@ -61,7 +66,7 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
             }
         })
         .collect();
-    
+
     // Parse partition info
     let partition_by = if let Some(part) = &stmt.partspec {
         Some(parse_partition_definition(&Node {
@@ -70,10 +75,10 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
     } else {
         None
     };
-    
+
     // Parse table options
     let with_options = parse_with_options(&stmt.options)?;
-    
+
     Ok(Statement::CreateTable(CreateTable {
         name,
         schema: None, // TODO: Parse schema
@@ -83,13 +88,15 @@ fn parse_create_table(stmt: &protobuf::CreateStmt) -> Result<Statement> {
         inherits,
         with_options,
         tablespace: None, // TODO: Parse tablespace
-        comment: None, // TODO: Parse comment
+        comment: None,    // TODO: Parse comment
     }))
 }
 
 fn parse_create_view(stmt: &protobuf::ViewStmt) -> Result<Statement> {
     let name = get_qualified_name(stmt.view.as_ref().context("Missing view name")?)?;
-    let columns = stmt.aliases.iter()
+    let columns = stmt
+        .aliases
+        .iter()
         .filter_map(|alias| {
             if let Some(node::Node::String(str_val)) = &alias.node {
                 Some(str_val.sval.clone())
@@ -98,20 +105,22 @@ fn parse_create_view(stmt: &protobuf::ViewStmt) -> Result<Statement> {
             }
         })
         .collect();
-    
-    let query = stmt.query.as_ref()
+
+    let query = stmt
+        .query
+        .as_ref()
         .context("Missing view query")?
         .to_string_representation()?;
-    
+
     let with_options = parse_with_options(&stmt.options)?;
-    
+
     let check_option = match protobuf::ViewCheckOption::try_from(stmt.with_check_option) {
         Ok(protobuf::ViewCheckOption::NoCheckOption) => None,
         Ok(protobuf::ViewCheckOption::LocalCheckOption) => Some(CheckOption::Local),
         Ok(protobuf::ViewCheckOption::CascadedCheckOption) => Some(CheckOption::Cascaded),
         _ => None,
     };
-    
+
     Ok(Statement::CreateView(CreateView {
         name,
         schema: None, // TODO: Parse schema
@@ -126,7 +135,7 @@ fn parse_create_view(stmt: &protobuf::ViewStmt) -> Result<Statement> {
 fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statement> {
     let name = get_qualified_name_from_nodes(&stmt.funcname)?;
     let mut parameters = Vec::new();
-    
+
     // Parse function parameters
     for param in &stmt.parameters {
         if let Some(node) = &param.node {
@@ -135,7 +144,7 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
             }
         }
     }
-    
+
     // Parse return type
     let returns = if let Some(return_type) = &stmt.return_type {
         parse_function_return(&Node {
@@ -144,13 +153,15 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
     } else {
         FunctionReturn::Type(DataType::Text) // Default to Text instead of Void
     };
-    
+
     // Parse function options
-    let (language, behavior, security, parallel, cost, rows, support) = 
+    let (language, behavior, security, parallel, cost, rows, support) =
         parse_function_options(&stmt.options)?;
-    
+
     // Get function body from options - try multiple approaches
-    let body = stmt.options.iter()
+    let body = stmt
+        .options
+        .iter()
         .find_map(|opt| {
             if let Some(node::Node::DefElem(def)) = &opt.node {
                 if def.defname == "as" {
@@ -159,7 +170,9 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
                             Some(str_val.sval.clone())
                         } else if let Some(node::Node::List(list)) = &arg.node {
                             // Handle case where body is stored as a list of strings
-                            let body_parts: Vec<String> = list.items.iter()
+                            let body_parts: Vec<String> = list
+                                .items
+                                .iter()
                                 .filter_map(|item| {
                                     if let Some(node::Node::String(str_val)) = &item.node {
                                         Some(str_val.sval.clone())
@@ -190,7 +203,7 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
             // If we can't find the body in options, provide a default
             "SELECT 1".to_string()
         });
-    
+
     Ok(Statement::CreateFunction(CreateFunction {
         name,
         schema: None, // TODO: Parse schema
@@ -237,15 +250,15 @@ fn parse_column_def(col: &protobuf::ColumnDef) -> Result<(ColumnDefinition, Vec<
     } else {
         DataType::Text // Default to Text if no type specified
     };
-    
+
     let default = if let Some(expr) = &col.raw_default {
         Some(parse_expression(expr)?)
     } else {
         None
     };
-    
+
     let not_null = col.is_not_null;
-    
+
     // Handle generated column - col.generated is a String
     let generated = if !col.generated.is_empty() {
         Some(parse_generated_column(&Node {
@@ -256,7 +269,7 @@ fn parse_column_def(col: &protobuf::ColumnDef) -> Result<(ColumnDefinition, Vec<
     } else {
         None
     };
-    
+
     // Handle identity column
     let identity = if !col.identity.is_empty() {
         Some(parse_identity_column(&col.identity)?)
@@ -265,29 +278,39 @@ fn parse_column_def(col: &protobuf::ColumnDef) -> Result<(ColumnDefinition, Vec<
     };
 
     let comment = None; // TODO: Parse comment from appropriate field
-    
+
     // Parse inline constraints from col.constraints
     let mut inline_constraints = Vec::new();
     for constraint_node in &col.constraints {
         if let Some(node::Node::Constraint(constraint)) = &constraint_node.node {
             match constraint.contype {
-                1 => { // PRIMARY KEY
+                1 => {
+                    // PRIMARY KEY
                     inline_constraints.push(TableConstraint::PrimaryKey {
                         columns: vec![name.clone()],
-                        name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                        name: if constraint.conname.is_empty() {
+                            None
+                        } else {
+                            Some(constraint.conname.clone())
+                        },
                     });
                 }
-                2 => { // UNIQUE
+                2 => {
+                    // UNIQUE
                     inline_constraints.push(TableConstraint::Unique {
                         columns: vec![name.clone()],
-                        name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                        name: if constraint.conname.is_empty() {
+                            None
+                        } else {
+                            Some(constraint.conname.clone())
+                        },
                     });
                 }
                 _ => {}
             }
         }
     }
-    
+
     let column = ColumnDefinition {
         name,
         data_type,
@@ -297,7 +320,7 @@ fn parse_column_def(col: &protobuf::ColumnDef) -> Result<(ColumnDefinition, Vec<
         identity,
         comment,
     };
-    
+
     Ok((column, inline_constraints))
 }
 
@@ -333,12 +356,12 @@ fn parse_data_type(type_name: &protobuf::TypeName) -> Result<DataType> {
     }
 }
 
-fn parse_expression(expr: &protobuf::Node) -> Result<Expression> {
+fn parse_expression(_expr: &protobuf::Node) -> Result<Expression> {
     // TODO: Implement full expression parsing
     Ok(Expression::Literal(Literal::Null)) // Placeholder
 }
 
-fn parse_generated_column(expr: &protobuf::Node) -> Result<GeneratedColumn> {
+fn parse_generated_column(_expr: &protobuf::Node) -> Result<GeneratedColumn> {
     // TODO: Implement generated column parsing
     Ok(GeneratedColumn {
         expression: Expression::Literal(Literal::Null),
@@ -346,7 +369,7 @@ fn parse_generated_column(expr: &protobuf::Node) -> Result<GeneratedColumn> {
     })
 }
 
-fn parse_identity_column(s: &str) -> Result<IdentityColumn> {
+fn parse_identity_column(_s: &str) -> Result<IdentityColumn> {
     // TODO: Implement identity column parsing
     Ok(IdentityColumn {
         always: false,
@@ -368,25 +391,38 @@ fn parse_table_constraint(constraint: &protobuf::Constraint) -> Result<TableCons
         }
     }
     match constraint.contype {
-        1 => { // PRIMARY KEY
+        1 => {
+            // PRIMARY KEY
             let columns = constraint.keys.iter().filter_map(node_to_string).collect();
             Ok(TableConstraint::PrimaryKey {
                 columns,
-                name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                name: if constraint.conname.is_empty() {
+                    None
+                } else {
+                    Some(constraint.conname.clone())
+                },
             })
         }
-        2 => { // UNIQUE
+        2 => {
+            // UNIQUE
             let columns = constraint.keys.iter().filter_map(node_to_string).collect();
             Ok(TableConstraint::Unique {
                 columns,
-                name: if constraint.conname.is_empty() { None } else { Some(constraint.conname.clone()) },
+                name: if constraint.conname.is_empty() {
+                    None
+                } else {
+                    Some(constraint.conname.clone())
+                },
             })
         }
-        _ => Ok(TableConstraint::PrimaryKey { columns: Vec::new(), name: None }), // fallback
+        _ => Ok(TableConstraint::PrimaryKey {
+            columns: Vec::new(),
+            name: None,
+        }), // fallback
     }
 }
 
-fn parse_partition_definition(part: &protobuf::Node) -> Result<PartitionDefinition> {
+fn parse_partition_definition(_part: &protobuf::Node) -> Result<PartitionDefinition> {
     // TODO: Implement partition parsing
     Ok(PartitionDefinition {
         strategy: PartitionStrategy::Range,
@@ -395,8 +431,8 @@ fn parse_partition_definition(part: &protobuf::Node) -> Result<PartitionDefiniti
     })
 }
 
-fn parse_with_options(options: &[protobuf::Node]) -> Result<HashMap<String, String>> {
-    let mut map = HashMap::new();
+fn parse_with_options(_options: &[protobuf::Node]) -> Result<HashMap<String, String>> {
+    let map = HashMap::new();
     // TODO: Implement options parsing
     Ok(map)
 }
@@ -408,13 +444,13 @@ fn parse_function_parameter(param: &protobuf::FunctionParameter) -> Result<Funct
     } else {
         None
     };
-    
+
     let data_type = if let Some(type_name) = &param.arg_type {
         parse_data_type(type_name)?
     } else {
         DataType::Text // Default to Text if no type specified
     };
-    
+
     let mode = match protobuf::FunctionParameterMode::try_from(param.mode) {
         Ok(protobuf::FunctionParameterMode::FuncParamIn) => Some(ParameterMode::In),
         Ok(protobuf::FunctionParameterMode::FuncParamOut) => Some(ParameterMode::Out),
@@ -422,7 +458,7 @@ fn parse_function_parameter(param: &protobuf::FunctionParameter) -> Result<Funct
         Ok(protobuf::FunctionParameterMode::FuncParamVariadic) => Some(ParameterMode::Variadic),
         _ => None,
     };
-    
+
     Ok(FunctionParameter {
         name,
         data_type,
@@ -431,12 +467,14 @@ fn parse_function_parameter(param: &protobuf::FunctionParameter) -> Result<Funct
     })
 }
 
-fn parse_function_return(return_type: &protobuf::Node) -> Result<FunctionReturn> {
+fn parse_function_return(_return_type: &protobuf::Node) -> Result<FunctionReturn> {
     // TODO: Implement return type parsing
     Ok(FunctionReturn::Type(DataType::Text))
 }
 
-fn parse_function_options(options: &[protobuf::Node]) -> Result<(
+fn parse_function_options(
+    _options: &[protobuf::Node],
+) -> Result<(
     String,
     FunctionBehavior,
     SecurityType,
@@ -460,7 +498,9 @@ fn parse_function_options(options: &[protobuf::Node]) -> Result<(
 // Additional parsing functions for other statement types
 fn parse_create_enum(stmt: &protobuf::CreateEnumStmt) -> Result<Statement> {
     let name = get_qualified_name_from_nodes(&stmt.type_name)?;
-    let values = stmt.vals.iter()
+    let values = stmt
+        .vals
+        .iter()
         .filter_map(|val| {
             if let Some(node::Node::String(str_val)) = &val.node {
                 Some(str_val.sval.clone())
@@ -469,7 +509,7 @@ fn parse_create_enum(stmt: &protobuf::CreateEnumStmt) -> Result<Statement> {
             }
         })
         .collect();
-    
+
     Ok(Statement::CreateEnum(CreateEnum {
         name,
         schema: None, // TODO: Parse schema
@@ -483,7 +523,7 @@ fn parse_create_type(stmt: &protobuf::CompositeTypeStmt) -> Result<Statement> {
     } else {
         return Err(anyhow::anyhow!("Missing type name"));
     };
-    
+
     let mut attributes = Vec::new();
     for element in &stmt.coldeflist {
         if let Some(node) = &element.node {
@@ -500,7 +540,7 @@ fn parse_create_type(stmt: &protobuf::CompositeTypeStmt) -> Result<Statement> {
             }
         }
     }
-    
+
     Ok(Statement::CreateType(CreateType {
         name,
         schema: None, // TODO: Parse schema
@@ -531,11 +571,11 @@ fn parse_create_domain(stmt: &protobuf::CreateDomainStmt) -> Result<Statement> {
     } else {
         DataType::Text
     };
-    
+
     let default = None; // TODO: Parse default from constraints
     let not_null = false; // TODO: Parse from constraints
     let check = None; // TODO: Parse from constraints
-    
+
     Ok(Statement::CreateDomain(CreateDomain {
         name,
         schema: None, // TODO: Parse schema
@@ -553,19 +593,17 @@ fn parse_create_sequence(stmt: &protobuf::CreateSeqStmt) -> Result<Statement> {
     } else {
         return Err(anyhow::anyhow!("Missing sequence name"));
     };
-    
-    let with_options = parse_with_options(&stmt.options)?;
-    
+
     Ok(Statement::CreateSequence(CreateSequence {
         name,
-        schema: None, // TODO: Parse schema
-        start: None, // TODO: Parse from options
+        schema: None,    // TODO: Parse schema
+        start: None,     // TODO: Parse from options
         increment: None, // TODO: Parse from options
         min_value: None, // TODO: Parse from options
         max_value: None, // TODO: Parse from options
-        cache: None, // TODO: Parse from options
-        cycle: false, // TODO: Parse from options
-        owned_by: None, // TODO: Parse from options
+        cache: None,     // TODO: Parse from options
+        cycle: false,    // TODO: Parse from options
+        owned_by: None,  // TODO: Parse from options
     }))
 }
 
@@ -574,7 +612,7 @@ fn parse_create_extension(stmt: &protobuf::CreateExtensionStmt) -> Result<Statem
     let schema = None; // TODO: Parse schema from options
     let version = None; // TODO: Parse version from options
     let cascade = false; // TODO: Parse cascade from options
-    
+
     Ok(Statement::CreateExtension(ast::CreateExtension {
         name,
         schema,
@@ -591,7 +629,7 @@ fn parse_create_trigger(stmt: &protobuf::CreateTrigStmt) -> Result<Statement> {
     let events = vec![TriggerEvent::Insert]; // TODO: Parse from events
     let function = get_qualified_name_from_nodes(&stmt.funcname)?;
     let arguments = Vec::new(); // TODO: Parse from args
-    
+
     Ok(Statement::CreateTrigger(CreateTrigger {
         name,
         table,
@@ -608,7 +646,7 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
     let table = get_qualified_name(stmt.table.as_ref().context("Missing table")?)?;
     let schema = None; // TODO: Parse schema
     let permissive = stmt.permissive;
-    
+
     // Parse the command name
     let command = match stmt.cmd_name.as_str() {
         "" => PolicyCommand::Select, // Default to SELECT if not specified
@@ -619,7 +657,7 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
         "DELETE" => PolicyCommand::Delete,
         _ => PolicyCommand::All, // Default fallback
     };
-    
+
     Ok(Statement::CreatePolicy(CreatePolicy {
         name,
         table,
@@ -627,8 +665,8 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
         command,
         permissive,
         roles: Vec::new(), // TODO: Parse roles
-        using: None, // TODO: Parse using expression
-        with_check: None, // TODO: Parse with check expression
+        using: None,       // TODO: Parse using expression
+        with_check: None,  // TODO: Parse with check expression
     }))
 }
 
@@ -638,7 +676,7 @@ fn parse_create_server(stmt: &protobuf::CreateForeignServerStmt) -> Result<State
     let version = None; // TODO: Parse from options
     let foreign_data_wrapper = stmt.fdwname.clone();
     let options = parse_with_options(&stmt.options)?;
-    
+
     Ok(Statement::CreateServer(CreateServer {
         name,
         server_type,
@@ -652,7 +690,7 @@ fn parse_alter_table(stmt: &protobuf::AlterTableStmt) -> Result<Statement> {
     let name = get_qualified_name(stmt.relation.as_ref().context("Missing relation")?)?;
     let schema = None; // TODO: Parse schema
     let mut actions = Vec::new();
-    
+
     for cmd in &stmt.cmds {
         if let Some(node) = &cmd.node {
             actions.push(parse_alter_table_action(&Node {
@@ -660,7 +698,7 @@ fn parse_alter_table(stmt: &protobuf::AlterTableStmt) -> Result<Statement> {
             })?);
         }
     }
-    
+
     Ok(Statement::AlterTable(AlterTable {
         name,
         schema,
@@ -673,28 +711,28 @@ fn parse_drop_object(stmt: &protobuf::DropStmt) -> Result<Statement> {
         Ok(typ) => parse_object_type(&typ)?,
         Err(_) => return Err(anyhow::anyhow!("Invalid object type")),
     };
-    
-    let names = stmt.objects.iter()
+
+    let names = stmt
+        .objects
+        .iter()
         .filter_map(|obj| get_object_name(obj).ok())
         .collect::<Vec<_>>();
-    
-    let name = names.first()
-        .context("Missing object name")?
-        .clone();
-    
+
+    let name = names.first().context("Missing object name")?.clone();
+
     let schema = if names.len() > 1 {
         Some(names[0].clone())
     } else {
         None
     };
-    
+
     let cascade = match protobuf::DropBehavior::try_from(stmt.behavior) {
         Ok(protobuf::DropBehavior::DropCascade) => true,
         _ => false,
     };
-    
+
     let restrict = !cascade;
-    
+
     Ok(Statement::DropObject(DropObject {
         object_type,
         name,
@@ -705,16 +743,6 @@ fn parse_drop_object(stmt: &protobuf::DropStmt) -> Result<Statement> {
 }
 
 // Helper functions
-
-fn get_role_name(role: &protobuf::Node) -> Result<String> {
-    if let Some(node) = &role.node {
-        if let node::Node::RoleSpec(role) = node {
-            return Ok(role.rolename.clone());
-        }
-    }
-    Err(anyhow::anyhow!("Invalid role specification"))
-}
-
 fn get_object_name(obj: &protobuf::Node) -> Result<String> {
     if let Some(node) = &obj.node {
         if let node::Node::String(obj) = node {
@@ -741,20 +769,14 @@ fn parse_object_type(typ: &protobuf::ObjectType) -> Result<ObjectType> {
     }
 }
 
-fn parse_drop_behavior(behavior: &protobuf::DropBehavior) -> Result<DropBehavior> {
-    match behavior {
-        protobuf::DropBehavior::DropRestrict => Ok(DropBehavior::Restrict),
-        protobuf::DropBehavior::DropCascade => Ok(DropBehavior::Cascade),
-        _ => Ok(DropBehavior::Restrict),
-    }
-}
-
 fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
     use protobuf::AlterTableType::*;
     if let Some(node::Node::AlterTableCmd(cmd)) = &cmd.node {
         match protobuf::AlterTableType::try_from(cmd.subtype) {
             Ok(AtAddColumn) => {
-                let col = cmd.def.as_ref()
+                let col = cmd
+                    .def
+                    .as_ref()
                     .and_then(|node| match &node.node {
                         Some(node::Node::ColumnDef(col)) => Some(col),
                         _ => None,
@@ -763,23 +785,27 @@ fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
                 let (column, _) = parse_column_def(col)?;
                 Ok(AlterTableAction::AddColumn(column))
             }
-            Ok(AtDropColumn) => {
-                Ok(AlterTableAction::DropColumn(cmd.name.to_string()))
-            }
+            Ok(AtDropColumn) => Ok(AlterTableAction::DropColumn(cmd.name.to_string())),
             Ok(AtAlterColumnType) => {
-                let type_name = cmd.def.as_ref()
+                let type_name = cmd
+                    .def
+                    .as_ref()
                     .and_then(|node| match &node.node {
                         Some(node::Node::TypeName(type_name)) => Some(type_name),
                         _ => None,
                     })
-                    .ok_or_else(|| anyhow::anyhow!("Expected TypeName node for ALTER COLUMN TYPE"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Expected TypeName node for ALTER COLUMN TYPE")
+                    })?;
                 Ok(AlterTableAction::AlterColumn {
                     name: cmd.name.to_string(),
                     action: AlterColumnAction::SetDataType(parse_data_type(type_name)?),
                 })
             }
             Ok(AtColumnDefault) => {
-                let str_val = cmd.def.as_ref()
+                let str_val = cmd
+                    .def
+                    .as_ref()
                     .and_then(|node| match &node.node {
                         Some(node::Node::String(s)) => Some(s),
                         _ => None,
@@ -793,36 +819,36 @@ fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
                 } else {
                     Ok(AlterTableAction::AlterColumn {
                         name: cmd.name.to_string(),
-                        action: AlterColumnAction::SetDefault(
-                            parse_expression(&Node { node: Some(node::Node::String(str_val.clone())) })?
-                        ),
+                        action: AlterColumnAction::SetDefault(parse_expression(&Node {
+                            node: Some(node::Node::String(str_val.clone())),
+                        })?),
                     })
                 }
             }
-            Ok(AtSetNotNull) => {
-                Ok(AlterTableAction::AlterColumn {
-                    name: cmd.name.to_string(),
-                    action: AlterColumnAction::SetNotNull,
-                })
-            }
-            Ok(AtDropNotNull) => {
-                Ok(AlterTableAction::AlterColumn {
-                    name: cmd.name.to_string(),
-                    action: AlterColumnAction::DropNotNull,
-                })
-            }
+            Ok(AtSetNotNull) => Ok(AlterTableAction::AlterColumn {
+                name: cmd.name.to_string(),
+                action: AlterColumnAction::SetNotNull,
+            }),
+            Ok(AtDropNotNull) => Ok(AlterTableAction::AlterColumn {
+                name: cmd.name.to_string(),
+                action: AlterColumnAction::DropNotNull,
+            }),
             Ok(AtAddConstraint) => {
-                let constraint = cmd.def.as_ref()
+                let constraint = cmd
+                    .def
+                    .as_ref()
                     .and_then(|node| match &node.node {
                         Some(node::Node::Constraint(constraint)) => Some(constraint),
                         _ => None,
                     })
-                    .ok_or_else(|| anyhow::anyhow!("Expected Constraint node for ADD CONSTRAINT"))?;
-                Ok(AlterTableAction::AddConstraint(parse_table_constraint(constraint)?))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Expected Constraint node for ADD CONSTRAINT")
+                    })?;
+                Ok(AlterTableAction::AddConstraint(parse_table_constraint(
+                    constraint,
+                )?))
             }
-            Ok(AtDropConstraint) => {
-                Ok(AlterTableAction::DropConstraint(cmd.name.to_string()))
-            }
+            Ok(AtDropConstraint) => Ok(AlterTableAction::DropConstraint(cmd.name.to_string())),
             Ok(AtEnableRowSecurity) => Ok(AlterTableAction::EnableRowLevelSecurity),
             Ok(AtDisableRowSecurity) => Ok(AlterTableAction::DisableRowLevelSecurity),
             Ok(AtForceRowSecurity) => Ok(AlterTableAction::ForceRowLevelSecurity),
@@ -835,45 +861,6 @@ fn parse_alter_table_action(cmd: &protobuf::Node) -> Result<AlterTableAction> {
         }
     } else {
         Err(anyhow::anyhow!("Expected AlterTableCmd node"))
-    }
-}
-
-
-// Helper function to parse partition bounds
-fn parse_partition_bounds(bound_spec: &protobuf::PartitionBoundSpec) -> Result<PartitionBounds> {
-    match bound_spec.strategy.as_str() {
-        "range" => {
-            let mut bounds = Vec::new();
-            for bound in &bound_spec.lowerdatums {
-                if let Some(node) = &bound.node {
-                    bounds.push(parse_expression(&Node {
-                        node: Some(node.clone()),
-                    })?);
-                }
-            }
-            Ok(PartitionBounds::Range(bounds))
-        }
-        "list" => {
-            let mut bounds = Vec::new();
-            for bound in &bound_spec.listdatums {
-                if let Some(node) = &bound.node {
-                    bounds.push(parse_expression(&Node {
-                        node: Some(node.clone()),
-                    })?);
-                }
-            }
-            Ok(PartitionBounds::List(bounds))
-        }
-        "hash" => {
-            if let Some(node) = bound_spec.listdatums.first() {
-                Ok(PartitionBounds::Hash(parse_expression(&Node {
-                    node: Some(node.node.as_ref().context("Missing hash datum node")?.clone()),
-                })?))
-            } else {
-                Err(anyhow::anyhow!("Missing hash datum"))
-            }
-        }
-        _ => Err(anyhow::anyhow!("Unknown partition strategy")),
     }
 }
 
@@ -895,4 +882,4 @@ impl std::fmt::Display for AlterTableAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
-} 
+}

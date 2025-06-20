@@ -1,11 +1,11 @@
 use crate::config::Config;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use shem_parser::ast::Statement;
 use shem_parser::parse_file;
 use std::path::Path;
 use tracing::{error, info};
 
-pub async fn execute(path: &str, config: &Config) -> Result<()> {
+pub async fn execute(path: &str, _config: &Config) -> Result<()> {
     let path = Path::new(path);
 
     if !path.exists() {

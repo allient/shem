@@ -1,8 +1,12 @@
-use shem_core::{Result, Error, DatabaseDriver, DatabaseConnection, ConnectionMetadata, Transaction, Schema, Table, View, MaterializedView, Function, Procedure, Type, Domain, Sequence, Extension, Trigger, Policy, Server, Feature, SqlGenerator};
 use async_trait::async_trait;
-use tokio_postgres::{Client, Config, NoTls, types::FromSql};
-use tracing::info;
+use base64::engine::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use shem_core::{
+    ConnectionMetadata, DatabaseConnection, DatabaseDriver, Feature, Result, Schema, SqlGenerator,
+    Transaction,
+};
 use std::sync::Arc;
+use tokio_postgres::{Client, Config, NoTls};
 
 pub mod introspection;
 pub mod sql_generator;
@@ -73,30 +77,64 @@ impl DatabaseDriver for PostgresDriver {
 
     fn data_types(&self) -> Vec<String> {
         vec![
-            "smallint".to_string(), "integer".to_string(), "bigint".to_string(),
-            "decimal".to_string(), "numeric".to_string(), "real".to_string(), "double precision".to_string(),
-            "smallserial".to_string(), "serial".to_string(), "bigserial".to_string(),
+            "smallint".to_string(),
+            "integer".to_string(),
+            "bigint".to_string(),
+            "decimal".to_string(),
+            "numeric".to_string(),
+            "real".to_string(),
+            "double precision".to_string(),
+            "smallserial".to_string(),
+            "serial".to_string(),
+            "bigserial".to_string(),
             "money".to_string(),
-            "character varying".to_string(), "varchar".to_string(), "character".to_string(), "char".to_string(), "text".to_string(),
+            "character varying".to_string(),
+            "varchar".to_string(),
+            "character".to_string(),
+            "char".to_string(),
+            "text".to_string(),
             "bytea".to_string(),
-            "timestamp".to_string(), "timestamp with time zone".to_string(), "timestamptz".to_string(),
-            "date".to_string(), "time".to_string(), "time with time zone".to_string(), "timetz".to_string(),
+            "timestamp".to_string(),
+            "timestamp with time zone".to_string(),
+            "timestamptz".to_string(),
+            "date".to_string(),
+            "time".to_string(),
+            "time with time zone".to_string(),
+            "timetz".to_string(),
             "interval".to_string(),
-            "boolean".to_string(), "bool".to_string(),
-            "point".to_string(), "line".to_string(), "lseg".to_string(), "box".to_string(), "path".to_string(), "polygon".to_string(), "circle".to_string(),
-            "cidr".to_string(), "inet".to_string(), "macaddr".to_string(), "macaddr8".to_string(),
-            "bit".to_string(), "bit varying".to_string(),
+            "boolean".to_string(),
+            "bool".to_string(),
+            "point".to_string(),
+            "line".to_string(),
+            "lseg".to_string(),
+            "box".to_string(),
+            "path".to_string(),
+            "polygon".to_string(),
+            "circle".to_string(),
+            "cidr".to_string(),
+            "inet".to_string(),
+            "macaddr".to_string(),
+            "macaddr8".to_string(),
+            "bit".to_string(),
+            "bit varying".to_string(),
             "uuid".to_string(),
             "xml".to_string(),
-            "json".to_string(), "jsonb".to_string(),
+            "json".to_string(),
+            "jsonb".to_string(),
             "array".to_string(),
             "hstore".to_string(),
             "ltree".to_string(),
             "pg_lsn".to_string(),
             "pg_snapshot".to_string(),
-            "tsquery".to_string(), "tsvector".to_string(),
+            "tsquery".to_string(),
+            "tsvector".to_string(),
             "txid_snapshot".to_string(),
-            "int4range".to_string(), "int8range".to_string(), "numrange".to_string(), "tsrange".to_string(), "tstzrange".to_string(), "daterange".to_string(),
+            "int4range".to_string(),
+            "int8range".to_string(),
+            "numrange".to_string(),
+            "tsrange".to_string(),
+            "tstzrange".to_string(),
+            "daterange".to_string(),
         ]
     }
 
@@ -208,22 +246,28 @@ impl DatabaseConnection for PostgresConnection {
                         serde_json::from_str(&json_str)?
                     }
                     "bool" => serde_json::Value::Bool(row.get(i)),
-                    "int2" | "int4" | "int8" => serde_json::Value::Number(serde_json::Number::from(row.get::<_, i64>(i))),
+                    "int2" | "int4" | "int8" => {
+                        serde_json::Value::Number(serde_json::Number::from(row.get::<_, i64>(i)))
+                    }
                     "float4" | "float8" => {
                         let float_val: f64 = row.get(i);
                         match serde_json::Number::from_f64(float_val) {
                             Some(num) => serde_json::Value::Number(num),
-                            None => serde_json::Value::Number(serde_json::Number::from_f64(0.0).unwrap())
+                            None => serde_json::Value::Number(
+                                serde_json::Number::from_f64(0.0).unwrap(),
+                            ),
                         }
-                    },
-                    "text" | "varchar" | "char" | "name" | "uuid" => serde_json::Value::String(row.get(i)),
+                    }
+                    "text" | "varchar" | "char" | "name" | "uuid" => {
+                        serde_json::Value::String(row.get(i))
+                    }
                     "timestamp" | "timestamptz" | "date" | "time" | "timetz" => {
                         let ts: chrono::DateTime<chrono::Utc> = row.get(i);
                         serde_json::Value::String(ts.to_rfc3339())
                     }
                     "bytea" => {
                         let bytes: Vec<u8> = row.get(i);
-                        serde_json::Value::String(base64::encode(&bytes))
+                        serde_json::Value::String(BASE64.encode(&bytes))
                     }
                     _ => {
                         // For other types, convert to string
@@ -244,11 +288,14 @@ impl DatabaseConnection for PostgresConnection {
         let transaction = client.transaction().await?;
         // Convert the transaction to 'static by moving it into a Box
         let transaction = unsafe {
-            std::mem::transmute::<tokio_postgres::Transaction<'_>, tokio_postgres::Transaction<'static>>(transaction)
+            std::mem::transmute::<
+                tokio_postgres::Transaction<'_>,
+                tokio_postgres::Transaction<'static>,
+            >(transaction)
         };
-        Ok(Box::new(PostgresTransaction { 
+        Ok(Box::new(PostgresTransaction {
             client: Arc::clone(&self.client),
-            transaction: Some(transaction)
+            transaction: Some(transaction),
         }))
     }
 
@@ -297,22 +344,28 @@ impl Transaction for PostgresTransaction {
                             serde_json::from_str(&json_str)?
                         }
                         "bool" => serde_json::Value::Bool(row.get(i)),
-                        "int2" | "int4" | "int8" => serde_json::Value::Number(serde_json::Number::from(row.get::<_, i64>(i))),
+                        "int2" | "int4" | "int8" => serde_json::Value::Number(
+                            serde_json::Number::from(row.get::<_, i64>(i)),
+                        ),
                         "float4" | "float8" => {
                             let float_val: f64 = row.get(i);
                             match serde_json::Number::from_f64(float_val) {
                                 Some(num) => serde_json::Value::Number(num),
-                                None => serde_json::Value::Number(serde_json::Number::from_f64(0.0).unwrap())
+                                None => serde_json::Value::Number(
+                                    serde_json::Number::from_f64(0.0).unwrap(),
+                                ),
                             }
-                        },
-                        "text" | "varchar" | "char" | "name" | "uuid" => serde_json::Value::String(row.get(i)),
+                        }
+                        "text" | "varchar" | "char" | "name" | "uuid" => {
+                            serde_json::Value::String(row.get(i))
+                        }
                         "timestamp" | "timestamptz" | "date" | "time" | "timetz" => {
                             let ts: chrono::DateTime<chrono::Utc> = row.get(i);
                             serde_json::Value::String(ts.to_rfc3339())
                         }
                         "bytea" => {
                             let bytes: Vec<u8> = row.get(i);
-                            serde_json::Value::String(base64::encode(&bytes))
+                            serde_json::Value::String(BASE64.encode(&bytes))
                         }
                         _ => {
                             // For other types, convert to string

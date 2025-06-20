@@ -11,19 +11,18 @@ use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
         CheckOption, Collation, CollationProvider, Column, Constraint, ConstraintKind,
-        ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function, GeneratedColumn,
-        Identity, Index, IndexColumn, MaterializedView, ParallelSafety, Parameter, ParameterMode,
-        Policy, PolicyCommand, Procedure, RangeType, ReturnKind, ReturnType, Rule, RuleEvent,
-        Sequence, Server, SortOrder, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming,
-        Type, TypeKind, View, Volatility,
+        ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
+        GeneratedColumn, Identity, MaterializedView, ParallelSafety, Parameter, ParameterMode,
+        Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence,
+        Server, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View,
+        Volatility,
     },
     traits::SchemaSerializer,
 };
 use shem_parser::{
     ast::{
-        CheckOption as ParserCheckOption, Expression, FunctionReturn,
-        ParameterMode as ParserParameterMode, SortOrder as ParserSortOrder, Statement,
-        TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
+        CheckOption as ParserCheckOption, FunctionReturn, ParameterMode as ParserParameterMode,
+        Statement, TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
     },
     parse_sql,
 };
@@ -108,7 +107,6 @@ impl<'a> SchemaObject<'a> {
     }
 }
 
-
 pub async fn execute(
     database_url: Option<String>,
     output: PathBuf,
@@ -158,12 +156,12 @@ pub async fn execute(
     Ok(())
 }
 
-fn get_driver(config: &Config) -> AnyhowResult<Box<dyn DatabaseDriver>> {
+fn get_driver(_config: &Config) -> AnyhowResult<Box<dyn DatabaseDriver>> {
     // TODO: Support multiple database drivers
     Ok(Box::new(PostgresDriver::new()))
 }
 
-fn get_serializer(config: &Config) -> AnyhowResult<Box<dyn SchemaSerializer>> {
+fn get_serializer(_config: &Config) -> AnyhowResult<Box<dyn SchemaSerializer>> {
     // TODO: Support multiple serializers
     Ok(Box::new(SqlSerializer))
 }
@@ -292,7 +290,7 @@ impl SchemaSerializer for SqlSerializer {
                     };
                     schema.enums.insert(enum_type.name.clone(), enum_type);
                 }
-                Statement::CreateType(create) => {
+                Statement::CreateType(_create) => {
                     // Handle composite types - they can be stored in a separate collection if needed
                     // For now, we'll skip them as they're not enums
                 }
@@ -695,7 +693,7 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
                     continue; // Skip if we can't find the table
                 }
             };
-            
+
             if let Some(&dep_idx) = table_name_to_index.get(&dep_key) {
                 table_graph.add_edge(dep_idx, *idx, ());
             }
@@ -707,7 +705,11 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
             .iter()
             .filter_map(|&idx| table_graph.node_weight(idx).cloned())
             .collect::<Vec<_>>(),
-        Err(_) => schema.tables.values().map(|t| SchemaObject::Table(t)).collect(),
+        Err(_) => schema
+            .tables
+            .values()
+            .map(|t| SchemaObject::Table(t))
+            .collect(),
     };
     ordered_objects.extend(sorted_tables);
 
@@ -765,7 +767,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _ext) in &schema.extensions {
         let key = format!("extension:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate extension name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate extension name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("extension:{}", name));
         }
@@ -775,7 +780,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _type_def) in &schema.types {
         let key = format!("type:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate type name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate type name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("type:{}", name));
         }
@@ -785,7 +793,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _domain) in &schema.domains {
         let key = format!("domain:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate domain name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate domain name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("domain:{}", name));
         }
@@ -795,7 +806,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, table) in &schema.tables {
         let key = format!("table:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate table name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate table name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("table:{}", name));
         }
@@ -804,7 +818,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
         let mut column_names = std::collections::HashSet::new();
         for column in &table.columns {
             if !column_names.insert(&column.name) {
-                errors.push(format!("Duplicate column name '{}' in table '{}'", column.name, name));
+                errors.push(format!(
+                    "Duplicate column name '{}' in table '{}'",
+                    column.name, name
+                ));
             }
         }
     }
@@ -813,7 +830,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _func) in &schema.functions {
         let key = format!("function:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate function name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate function name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("function:{}", name));
         }
@@ -823,7 +843,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _proc) in &schema.procedures {
         let key = format!("procedure:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate procedure name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate procedure name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("procedure:{}", name));
         }
@@ -833,7 +856,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _trigger) in &schema.triggers {
         let key = format!("trigger:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate trigger name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate trigger name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("trigger:{}", name));
         }
@@ -843,7 +869,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _trigger) in &schema.constraint_triggers {
         let key = format!("constraint_trigger:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate constraint trigger name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate constraint trigger name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("constraint_trigger:{}", name));
         }
@@ -853,7 +882,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _policy) in &schema.policies {
         let key = format!("policy:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate policy name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate policy name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("policy:{}", name));
         }
@@ -863,7 +895,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _rule) in &schema.rules {
         let key = format!("rule:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate rule name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate rule name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("rule:{}", name));
         }
@@ -873,7 +908,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _seq) in &schema.sequences {
         let key = format!("sequence:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate sequence name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate sequence name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("sequence:{}", name));
         }
@@ -883,7 +921,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _view) in &schema.views {
         let key = format!("view:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate view name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate view name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("view:{}", name));
         }
@@ -893,7 +934,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _view) in &schema.materialized_views {
         let key = format!("materialized_view:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate materialized view name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate materialized view name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("materialized_view:{}", name));
         }
@@ -903,7 +947,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _collation) in &schema.collations {
         let key = format!("collation:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate collation name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate collation name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("collation:{}", name));
         }
@@ -913,7 +960,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _server) in &schema.servers {
         let key = format!("server:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate server name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate server name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("server:{}", name));
         }
@@ -923,7 +973,10 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
     for (name, _trigger) in &schema.event_triggers {
         let key = format!("event_trigger:{}", name);
         if let Some(existing) = object_names.get(&key) {
-            errors.push(format!("Duplicate event trigger name: {} (already used by {})", name, existing));
+            errors.push(format!(
+                "Duplicate event trigger name: {} (already used by {})",
+                name, existing
+            ));
         } else {
             object_names.insert(key, format!("event_trigger:{}", name));
         }
@@ -959,7 +1012,8 @@ fn get_object_dependencies(obj: &SchemaObject, schema: &Schema) -> Vec<String> {
             }
             // Tables depend on other tables through foreign key constraints
             for constraint in &table.constraints {
-                if let Some(ref_table) = extract_fk_referenced_table(&constraint.definition, schema) {
+                if let Some(ref_table) = extract_fk_referenced_table(&constraint.definition, schema)
+                {
                     dependencies.push(ref_table);
                 }
             }
@@ -999,7 +1053,7 @@ fn get_object_dependencies(obj: &SchemaObject, schema: &Schema) -> Vec<String> {
                 trigger.table.clone()
             };
             dependencies.push(table_name);
-            
+
             let func_name = if let Some(schema) = &trigger.schema {
                 format!("{}.{}", schema, trigger.function)
             } else {
@@ -1015,7 +1069,7 @@ fn get_object_dependencies(obj: &SchemaObject, schema: &Schema) -> Vec<String> {
                 trigger.table.clone()
             };
             dependencies.push(table_name);
-            
+
             let func_name = if let Some(schema) = &trigger.schema {
                 format!("{}.{}", schema, trigger.function)
             } else {
@@ -1079,14 +1133,14 @@ fn extract_fk_referenced_table(constraint_def: &str, schema: &Schema) -> Option<
     let re = regex::Regex::new(r"REFERENCES ([\w\.]+)").ok()?;
     if let Some(caps) = re.captures(constraint_def) {
         let ref_name = caps.get(1)?.as_str();
-        
+
         // Extract just the table name (without schema)
         let table_name = if ref_name.contains('.') {
             ref_name.split('.').last().unwrap_or(ref_name).to_string()
         } else {
             ref_name.to_string()
         };
-        
+
         // Check if this table exists in our schema
         if schema.tables.contains_key(&table_name) {
             return Some(table_name);
@@ -1105,7 +1159,7 @@ fn extract_type_dependency(type_name: &str) -> Option<String> {
         }
         return None; // Array of builtin type is not a dependency
     }
-    
+
     // Handle regular types - extract the base type name
     let base_type = type_name
         .split('(')
@@ -1113,18 +1167,22 @@ fn extract_type_dependency(type_name: &str) -> Option<String> {
         .unwrap_or(type_name)
         .trim()
         .to_lowercase();
-    
+
     // Remove schema qualification for dependency lookup
     let type_name_without_schema = if base_type.contains('.') {
-        base_type.split('.').last().unwrap_or(&base_type).to_string()
+        base_type
+            .split('.')
+            .last()
+            .unwrap_or(&base_type)
+            .to_string()
     } else {
         base_type
     };
-    
+
     if !is_builtin_type(&type_name_without_schema) {
         return Some(type_name_without_schema);
     }
-    
+
     None
 }
 
@@ -1139,40 +1197,133 @@ fn is_builtin_type(type_name: &str) -> bool {
         .to_lowercase();
 
     let builtin_types = [
-        "integer", "int", "bigint", "smallint", "text", "varchar", "char", "boolean", "bool",
-        "numeric", "decimal", "real", "double precision", "float", "money", "date", "time",
-        "timestamp", "timestamptz", "interval", "bytea", "uuid", "inet", "cidr", "macaddr",
-        "macaddr8", "json", "jsonb", "xml", "bit", "varbit", "point", "line", "lseg", "box",
-        "path", "polygon", "circle", "tsvector", "tsquery", "name", "citext", "serial", "bigserial",
-        "oid", "xid", "tid", "cid", "pg_lsn", "pg_snapshot", "unknown", "void", "trigger",
-        "event_trigger", "language_handler", "fdw_handler", "index_am_handler", "tsm_handler",
-        "internal", "opaque", "anyelement", "anyarray", "anyenum", "anynonarray", "anycompatible",
-        "anycompatiblearray", "anycompatiblenonarray", "cstring", "pg_node_tree", "pg_ndistinct",
-        "pg_dependencies", "pg_mcv_list", "pg_ddl_command", "pg_type", "pg_attribute", "pg_proc",
-        "pg_class", "pg_namespace", "pg_constraint", "pg_trigger", "pg_event_trigger", "pg_rewrite",
-        "pg_statistic", "pg_statistic_ext", "pg_statistic_ext_data", "pg_foreign_data_wrapper",
-        "pg_foreign_server", "pg_user_mapping", "pg_default_acl", "pg_init_privs", "pg_seclabel",
-        "pg_shseclabel", "pg_collation", "pg_range", "pg_transform", "pg_sequence", "pg_publication",
-        "pg_publication_namespace", "pg_publication_rel", "pg_subscription", "pg_subscription_rel",
-        "pg_roles", "pg_policies", "character", "character varying", "time without time zone",
-        "time with time zone", "timestamp without time zone", "timestamp with time zone",
+        "integer",
+        "int",
+        "bigint",
+        "smallint",
+        "text",
+        "varchar",
+        "char",
+        "boolean",
+        "bool",
+        "numeric",
+        "decimal",
+        "real",
+        "double precision",
+        "float",
+        "money",
+        "date",
+        "time",
+        "timestamp",
+        "timestamptz",
+        "interval",
+        "bytea",
+        "uuid",
+        "inet",
+        "cidr",
+        "macaddr",
+        "macaddr8",
+        "json",
+        "jsonb",
+        "xml",
+        "bit",
+        "varbit",
+        "point",
+        "line",
+        "lseg",
+        "box",
+        "path",
+        "polygon",
+        "circle",
+        "tsvector",
+        "tsquery",
+        "name",
+        "citext",
+        "serial",
+        "bigserial",
+        "oid",
+        "xid",
+        "tid",
+        "cid",
+        "pg_lsn",
+        "pg_snapshot",
+        "unknown",
+        "void",
+        "trigger",
+        "event_trigger",
+        "language_handler",
+        "fdw_handler",
+        "index_am_handler",
+        "tsm_handler",
+        "internal",
+        "opaque",
+        "anyelement",
+        "anyarray",
+        "anyenum",
+        "anynonarray",
+        "anycompatible",
+        "anycompatiblearray",
+        "anycompatiblenonarray",
+        "cstring",
+        "pg_node_tree",
+        "pg_ndistinct",
+        "pg_dependencies",
+        "pg_mcv_list",
+        "pg_ddl_command",
+        "pg_type",
+        "pg_attribute",
+        "pg_proc",
+        "pg_class",
+        "pg_namespace",
+        "pg_constraint",
+        "pg_trigger",
+        "pg_event_trigger",
+        "pg_rewrite",
+        "pg_statistic",
+        "pg_statistic_ext",
+        "pg_statistic_ext_data",
+        "pg_foreign_data_wrapper",
+        "pg_foreign_server",
+        "pg_user_mapping",
+        "pg_default_acl",
+        "pg_init_privs",
+        "pg_seclabel",
+        "pg_shseclabel",
+        "pg_collation",
+        "pg_range",
+        "pg_transform",
+        "pg_sequence",
+        "pg_publication",
+        "pg_publication_namespace",
+        "pg_publication_rel",
+        "pg_subscription",
+        "pg_subscription_rel",
+        "pg_roles",
+        "pg_policies",
+        "character",
+        "character varying",
+        "time without time zone",
+        "time with time zone",
+        "timestamp without time zone",
+        "timestamp with time zone",
         "bit varying",
     ];
-    
+
     builtin_types.contains(&base_type.as_str())
 }
 
 /// Extract dependencies from view definitions
 fn extract_view_dependencies(definition: &str, schema: &Schema) -> Vec<String> {
     let mut dependencies = Vec::new();
-    
+
     // More comprehensive regex to find table references in SELECT statements
     // This handles schema-qualified names and table aliases
-    let re = regex::Regex::new(r#"(?i)\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*\.?[a-zA-Z_][a-zA-Z0-9_]*)"#).unwrap();
+    let re = regex::Regex::new(r#"(?i)\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*\.?[a-zA-Z_][a-zA-Z0-9_]*)"#)
+        .unwrap();
     for cap in re.captures_iter(definition) {
         if let Some(table_name) = cap.get(1) {
             let table_name = table_name.as_str();
-            
+
             // Handle schema-qualified names
             if table_name.contains('.') {
                 if schema.tables.contains_key(table_name) {
@@ -1186,13 +1337,15 @@ fn extract_view_dependencies(definition: &str, schema: &Schema) -> Vec<String> {
             }
         }
     }
-    
+
     // Also look for JOIN clauses
-    let join_re = regex::Regex::new(r#"(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*\.?[a-zA-Z_][a-zA-Z0-9_]*)"#).unwrap();
+    let join_re =
+        regex::Regex::new(r#"(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*\.?[a-zA-Z_][a-zA-Z0-9_]*)"#)
+            .unwrap();
     for cap in join_re.captures_iter(definition) {
         if let Some(table_name) = cap.get(1) {
             let table_name = table_name.as_str();
-            
+
             if table_name.contains('.') {
                 if schema.tables.contains_key(table_name) {
                     dependencies.push(table_name.to_string());
@@ -1204,7 +1357,7 @@ fn extract_view_dependencies(definition: &str, schema: &Schema) -> Vec<String> {
             }
         }
     }
-    
+
     dependencies
 }
 
@@ -1295,7 +1448,7 @@ fn generate_create_domain(domain: &Domain) -> Result<String> {
     for constraint in &domain.constraints {
         // Remove "CHECK" prefix if it exists in the constraint expression
         let check_expr = if constraint.check.starts_with("CHECK (") {
-            &constraint.check[7..constraint.check.len()-1] // Remove "CHECK (" and ")"
+            &constraint.check[7..constraint.check.len() - 1] // Remove "CHECK (" and ")"
         } else if constraint.check.starts_with("CHECK ") {
             &constraint.check[6..] // Remove "CHECK "
         } else {
@@ -1645,7 +1798,7 @@ fn generate_create_policy(policy: &Policy) -> Result<String> {
     let command_str = match policy.command {
         PolicyCommand::All => "ALL",
         PolicyCommand::Select => "SELECT",
-        PolicyCommand::Insert => "INSERT", 
+        PolicyCommand::Insert => "INSERT",
         PolicyCommand::Update => "UPDATE",
         PolicyCommand::Delete => "DELETE",
     };
@@ -1698,15 +1851,15 @@ fn generate_create_event_trigger(trigger: &EventTrigger) -> Result<String> {
     } else {
         String::new()
     };
-    
+
     // Map event enum to lowercase string
     let event_name = match trigger.event {
         EventTriggerEvent::DdlCommandStart => "ddl_command_start",
-        EventTriggerEvent::DdlCommandEnd => "ddl_command_end", 
+        EventTriggerEvent::DdlCommandEnd => "ddl_command_end",
         EventTriggerEvent::SqlDrop => "sql_drop",
         EventTriggerEvent::TableRewrite => "table_rewrite",
     };
-    
+
     Ok(format!(
         "CREATE EVENT TRIGGER {} ON {} EXECUTE FUNCTION {}(){}",
         trigger.name, event_name, trigger.function, tags
@@ -1719,7 +1872,7 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
         sql = format!("CREATE COLLATION {}.{}", schema, collation.name);
     }
     let mut options = Vec::new();
-    
+
     // Always include locale if available (either from locale or lc_collate field)
     if let Some(locale) = &collation.locale {
         options.push(format!("LOCALE = '{}'", locale));
@@ -1730,7 +1883,7 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
         // For now, let's use a default locale to avoid the error
         options.push("LOCALE = 'C'".to_string());
     }
-    
+
     if let Some(lc_ctype) = &collation.lc_ctype {
         options.push(format!("CTYPE = '{}'", lc_ctype));
     }
@@ -1757,16 +1910,23 @@ fn generate_create_rule(rule: &Rule) -> Result<String> {
     };
 
     // Check if the action already contains INSTEAD to avoid duplication
-    let action_contains_instead = rule.actions.iter().any(|action| action.to_uppercase().contains("INSTEAD"));
-    
-    let instead_str = if rule.instead && !action_contains_instead { 
-        "INSTEAD " 
-    } else { 
-        "" 
+    let action_contains_instead = rule
+        .actions
+        .iter()
+        .any(|action| action.to_uppercase().contains("INSTEAD"));
+
+    let instead_str = if rule.instead && !action_contains_instead {
+        "INSTEAD "
+    } else {
+        ""
     };
 
     // Strip trailing semicolons from each action
-    let cleaned_actions: Vec<String> = rule.actions.iter().map(|a| a.trim_end_matches(';').trim().to_string()).collect();
+    let cleaned_actions: Vec<String> = rule
+        .actions
+        .iter()
+        .map(|a| a.trim_end_matches(';').trim().to_string())
+        .collect();
 
     Ok(format!(
         "CREATE RULE {} AS ON {} TO {} {}DO {}",
@@ -1817,7 +1977,10 @@ fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<Str
         sql.push_str("\nWHEN (NEW.decimal_val <= 0)");
     }
 
-    sql.push_str(&format!("\nEXECUTE FUNCTION {}(){}", trigger.function, args_str));
+    sql.push_str(&format!(
+        "\nEXECUTE FUNCTION {}(){}",
+        trigger.function, args_str
+    ));
 
     Ok(sql)
 }

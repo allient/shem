@@ -1,7 +1,5 @@
 use anyhow::Result;
-use pg_query::{Node, ParseResult};
 use std::path::Path;
-use crate::ast::{Statement, SchemaDefinition};
 
 pub mod ast;
 mod visitor;
@@ -26,7 +24,7 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 pub fn parse_schema(sql: &str) -> Result<SchemaDefinition> {
     let statements = parse_sql(sql)?;
     let mut schema = SchemaDefinition::new();
-    
+
     for stmt in statements {
         match stmt {
             Statement::CreateTable(create) => schema.tables.push(create),
@@ -45,14 +43,14 @@ pub fn parse_schema(sql: &str) -> Result<SchemaDefinition> {
             _ => continue,
         }
     }
-    
+
     Ok(schema)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_create_table() {
         let sql = r#"
@@ -63,10 +61,10 @@ mod tests {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         "#;
-        
+
         let statements = parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
-        
+
         if let Statement::CreateTable(create) = &statements[0] {
             assert_eq!(create.name, "users");
             assert_eq!(create.columns.len(), 4);
@@ -81,10 +79,10 @@ mod tests {
             CREATE POLICY select_policy ON sample_data
                 FOR SELECT USING (bool_val = TRUE);
         "#;
-        
+
         let statements = parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);
-        
+
         if let Statement::CreatePolicy(create) = &statements[0] {
             assert_eq!(create.name, "select_policy");
             assert_eq!(create.table, "sample_data");

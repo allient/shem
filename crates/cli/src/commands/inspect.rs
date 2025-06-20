@@ -15,7 +15,7 @@ fn resolve_and_check(path_str: &str, base_dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub async fn execute(path: &str, config: &Config) -> Result<()> {
+pub async fn execute(path: &str, _config: &Config) -> Result<()> {
     let base_dir = std::env::current_dir()?;
     let path = resolve_and_check(path, &base_dir)?;
 

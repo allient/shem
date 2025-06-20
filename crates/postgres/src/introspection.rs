@@ -54,7 +54,7 @@ where
         schema
             .range_types
             .insert(range_type.name.clone(), range_type.clone());
-        
+
         // Also store in types collection for serialization
         let type_def = Type {
             name: range_type.name.clone(),
@@ -69,13 +69,17 @@ where
     // Introspect enums
     let enums = introspect_enums(&*client).await?;
     for enum_type in enums {
-        schema.enums.insert(enum_type.name.clone(), enum_type.clone());
-        
+        schema
+            .enums
+            .insert(enum_type.name.clone(), enum_type.clone());
+
         // Also store in types collection for serialization
         let type_def = Type {
             name: enum_type.name.clone(),
             schema: enum_type.schema.clone(),
-            kind: TypeKind::Enum { values: enum_type.values.clone() },
+            kind: TypeKind::Enum {
+                values: enum_type.values.clone(),
+            },
             comment: enum_type.comment.clone(),
             definition: None,
         };
@@ -317,7 +321,7 @@ async fn introspect_constraints<C: GenericClient>(
         let name: String = row.get("constraint_name");
         let constraint_type_str: String = row.get("constraint_type");
         let constraint_type: char = constraint_type_str.chars().next().unwrap_or('x');
-        let column_names: Vec<String> = row.get("column_names");
+        let _column_names: Vec<String> = row.get("column_names");
         let deferrable: bool = row.get("deferrable");
         let initially_deferred: bool = row.get("initially_deferred");
         let definition: String = row.get("constraint_definition");
@@ -394,7 +398,7 @@ async fn introspect_indexes<C: GenericClient>(
         let is_unique: bool = row.get("is_unique");
         let method: String = row.get("index_method");
         let where_clause: Option<String> = row.get("where_clause");
-        let definition: String = row.get("index_definition");
+        let _definition: String = row.get("index_definition");
 
         // Convert method string to IndexMethod enum
         let index_method = match method.as_str() {
@@ -733,7 +737,8 @@ where
     let rows = client.query(query, &[]).await?;
 
     use std::collections::BTreeMap;
-    let mut grouped: BTreeMap<(String, String), (Vec<Column>, Option<String>, u32)> = BTreeMap::new();
+    let mut grouped: BTreeMap<(String, String), (Vec<Column>, Option<String>, u32)> =
+        BTreeMap::new();
 
     for row in rows {
         let name: String = row.get("name");
@@ -763,9 +768,9 @@ where
             type_name: attr_type,
             nullable: !is_not_null,
             default: default_expr,
-            identity: None, // Composite types don't have identity columns
+            identity: None,  // Composite types don't have identity columns
             generated: None, // Composite types don't have generated columns
-            comment: None, // Could be enhanced to get column comments if needed
+            comment: None,   // Could be enhanced to get column comments if needed
             collation: collation_name,
             storage,
             compression,
@@ -834,7 +839,7 @@ where
     for row in rows {
         let name: String = row.get("domain_name");
         let schema: String = row.get("domain_schema");
-        let base_type: String = row.get("base_type");
+        let _base_type: String = row.get("base_type");
         let formatted_base_type: String = row.get("formatted_base_type");
         let default: Option<String> = row.get("domain_default");
         let check_clause: Option<String> = row.get("check_clause");
@@ -930,7 +935,9 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
         };
 
         // Get owned_by information if available
-        let owned_by = if let (Some(table_oid), Some(column_num)) = (owned_by_table_oid, owned_by_column_num) {
+        let owned_by = if let (Some(table_oid), Some(column_num)) =
+            (owned_by_table_oid, owned_by_column_num)
+        {
             // Query to get table and column name
             let owned_query = r#"
                 SELECT 
@@ -942,8 +949,11 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
                 JOIN pg_attribute a ON a.attrelid = c.oid
                 WHERE c.oid = $1 AND a.attnum = $2
             "#;
-            
-            if let Ok(owned_rows) = client.query(owned_query, &[&(table_oid as i32), &column_num]).await {
+
+            if let Ok(owned_rows) = client
+                .query(owned_query, &[&(table_oid as i32), &column_num])
+                .await
+            {
                 if let Some(owned_row) = owned_rows.first() {
                     let table_schema: String = owned_row.get("table_schema");
                     let table_name: String = owned_row.get("table_name");
@@ -1375,8 +1385,8 @@ where
             schema,
             event,
             instead: is_instead,
-            condition: None,           // TODO: parse WHERE condition from definition
-            actions: vec![action],     // Store just the action part
+            condition: None,       // TODO: parse WHERE condition from definition
+            actions: vec![action], // Store just the action part
         });
     }
 
@@ -1608,7 +1618,7 @@ fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
         }
 
         // Parse parameter mode and name
-        let mut param_parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let param_parts: Vec<&str> = trimmed.split_whitespace().collect();
         let mut mode = ParameterMode::In;
         let mut name = String::new();
         let mut type_name = String::new();
@@ -1653,7 +1663,11 @@ fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
             parameters.push(Parameter {
                 name,
                 type_name,
-                mode: if start_idx == 0 { ParameterMode::In } else { mode }, // Only use explicit mode if keyword was found
+                mode: if start_idx == 0 {
+                    ParameterMode::In
+                } else {
+                    mode
+                }, // Only use explicit mode if keyword was found
                 default: None,
             });
         }
@@ -1748,10 +1762,14 @@ mod tests {
                 5 => PolicyCommand::All,
                 _ => PolicyCommand::All, // Default fallback
             };
-            
-            assert_eq!(result, expected, "Policy command parsing failed for input {}", input);
+
+            assert_eq!(
+                result, expected,
+                "Policy command parsing failed for input {}",
+                input
+            );
         }
-        
+
         println!("✅ Policy command parsing test passed!");
     }
 }

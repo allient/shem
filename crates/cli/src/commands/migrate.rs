@@ -1,6 +1,6 @@
-use anyhow::{Result, Context};
+use anyhow::Result;
 use std::path::PathBuf;
-use tracing::{info, warn, error};
+use tracing::info;
 use crate::config::Config;
 use shem_core::{
     DatabaseDriver,
@@ -213,7 +213,7 @@ fn parse_migration(content: &str) -> Result<Migration> {
     })
 }
 
-async fn record_migration(tx: &Box<dyn Transaction>, name: &str, migration: &Migration) -> Result<()> {
+async fn record_migration(tx: &Box<dyn Transaction>, name: &str, _migration: &Migration) -> Result<()> {
     let sql = format!("INSERT INTO schema_migrations (name) VALUES ('{}')", name.replace('\'', "''"));
     tx.execute(&sql).await?;
     Ok(())

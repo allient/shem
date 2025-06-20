@@ -105,32 +105,3 @@ impl Config {
         Ok(files)
     }
 }
-
-pub async fn load_config(path: &Path) -> Result<Config> {
-    if !path.exists() {
-        return Ok(Config::default());
-    }
-
-    let content = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-
-    toml::from_str(&content).with_context(|| "Failed to parse TOML config")
-}
-
-pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
-    let content =
-        toml::to_string_pretty(config).with_context(|| "Failed to serialize TOML config")?;
-
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
-    }
-
-    tokio::fs::write(path, content)
-        .await
-        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-
-    Ok(())
-}
