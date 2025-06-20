@@ -290,6 +290,7 @@ pub struct CreatePolicy {
     pub name: String,
     pub table: String,
     pub schema: Option<String>,
+    pub command: PolicyCommand,
     pub permissive: bool,
     pub roles: Vec<String>,
     pub using: Option<Expression>,
@@ -615,4 +616,13 @@ pub enum TriggerEvent {
 pub enum DropBehavior {
     Restrict,
     Cascade,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PolicyCommand {
+    All,
+    Select,
+    Insert,
+    Update,
+    Delete,
 } 

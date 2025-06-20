@@ -7,7 +7,7 @@ use shem_core::{
 use shem_parser::{
     ast::{
         CheckOption, ParameterMode, Statement as ParserStatement, TableConstraint, TriggerEvent,
-        TriggerWhen,
+        TriggerWhen, PolicyCommand,
     },
     parse_file,
 };
@@ -503,7 +503,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 name: create.name.clone(),
                 table: create.table.clone(),
                 schema: None,
-                command: shem_core::PolicyCommand::All,
+                command: match create.command {
+                    PolicyCommand::All => shem_core::PolicyCommand::All,
+                    PolicyCommand::Select => shem_core::PolicyCommand::Select,
+                    PolicyCommand::Insert => shem_core::PolicyCommand::Insert,
+                    PolicyCommand::Update => shem_core::PolicyCommand::Update,
+                    PolicyCommand::Delete => shem_core::PolicyCommand::Delete,
+                },
                 permissive: create.permissive,
                 roles: create.roles.clone(),
                 using: create.using.as_ref().map(|u| format!("{:?}", u)),

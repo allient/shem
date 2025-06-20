@@ -74,4 +74,23 @@ mod tests {
             panic!("Expected CreateTable statement");
         }
     }
+
+    #[test]
+    fn test_parse_create_policy() {
+        let sql = r#"
+            CREATE POLICY select_policy ON sample_data
+                FOR SELECT USING (bool_val = TRUE);
+        "#;
+        
+        let statements = parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+        
+        if let Statement::CreatePolicy(create) = &statements[0] {
+            assert_eq!(create.name, "select_policy");
+            assert_eq!(create.table, "sample_data");
+            assert_eq!(create.command, PolicyCommand::Select);
+        } else {
+            panic!("Expected CreatePolicy statement");
+        }
+    }
 }

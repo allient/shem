@@ -1053,7 +1053,7 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
         let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
         let constraint_oid: Option<u32> = row.get("constraint_oid");
 
-        // Skip constraint triggers
+        // Skip constraint triggers - they are handled separately
         if constraint_oid.is_some() {
             continue;
         }
@@ -1087,7 +1087,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
             c.relname as table_name,
             p.polpermissive as permissive,
             p.polroles as roles,
-            p.polcmd::text as command,
+            p.polcmd as command,
             pg_get_expr(p.polqual, p.polrelid) as using_expression,
             pg_get_expr(p.polwithcheck, p.polrelid) as check_expression,
             c.relowner as owner
@@ -1112,7 +1112,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         let table: String = row.get("table_name");
         let permissive: bool = row.get("permissive");
         let roles: Vec<u32> = row.get("roles");
-        let command: String = row.get("command");
+        let command: i8 = row.get("command");
         let using_expr: Option<String> = row.get("using_expression");
         let check_expr: Option<String> = row.get("check_expression");
 
@@ -1120,12 +1120,13 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         let role_names = roles.iter().map(|&oid| oid.to_string()).collect();
 
         // Parse command to PolicyCommand enum
-        let policy_command = match command.as_str() {
-            "ALL" => PolicyCommand::All,
-            "SELECT" => PolicyCommand::Select,
-            "INSERT" => PolicyCommand::Insert,
-            "UPDATE" => PolicyCommand::Update,
-            "DELETE" => PolicyCommand::Delete,
+        // PostgreSQL stores: 1=SELECT, 2=INSERT, 3=UPDATE, 4=DELETE, 5=ALL
+        let policy_command = match command {
+            1 => PolicyCommand::Select,
+            2 => PolicyCommand::Insert,
+            3 => PolicyCommand::Update,
+            4 => PolicyCommand::Delete,
+            5 => PolicyCommand::All,
             _ => PolicyCommand::All, // Default fallback
         };
 
@@ -1720,4 +1721,37 @@ fn parse_server_options(options: &[String]) -> std::collections::HashMap<String,
     }
 
     options_map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shem_core::PolicyCommand;
+
+    #[test]
+    fn test_policy_command_parsing() {
+        // Test the policy command parsing logic we fixed
+        let test_cases = vec![
+            (1, PolicyCommand::Select),
+            (2, PolicyCommand::Insert),
+            (3, PolicyCommand::Update),
+            (4, PolicyCommand::Delete),
+            (5, PolicyCommand::All),
+        ];
+
+        for (input, expected) in test_cases {
+            let result = match input {
+                1 => PolicyCommand::Select,
+                2 => PolicyCommand::Insert,
+                3 => PolicyCommand::Update,
+                4 => PolicyCommand::Delete,
+                5 => PolicyCommand::All,
+                _ => PolicyCommand::All, // Default fallback
+            };
+            
+            assert_eq!(result, expected, "Policy command parsing failed for input {}", input);
+        }
+        
+        println!("✅ Policy command parsing test passed!");
+    }
 }

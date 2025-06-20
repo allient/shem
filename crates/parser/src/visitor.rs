@@ -607,12 +607,24 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
     let name = stmt.policy_name.clone();
     let table = get_qualified_name(stmt.table.as_ref().context("Missing table")?)?;
     let schema = None; // TODO: Parse schema
-    let permissive = true; // TODO: Parse from policy type
+    let permissive = stmt.permissive;
+    
+    // Parse the command name
+    let command = match stmt.cmd_name.as_str() {
+        "" => PolicyCommand::Select, // Default to SELECT if not specified
+        "ALL" => PolicyCommand::All,
+        "SELECT" => PolicyCommand::Select,
+        "INSERT" => PolicyCommand::Insert,
+        "UPDATE" => PolicyCommand::Update,
+        "DELETE" => PolicyCommand::Delete,
+        _ => PolicyCommand::All, // Default fallback
+    };
     
     Ok(Statement::CreatePolicy(CreatePolicy {
         name,
         table,
         schema,
+        command,
         permissive,
         roles: Vec::new(), // TODO: Parse roles
         using: None, // TODO: Parse using expression
