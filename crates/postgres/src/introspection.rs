@@ -1,6 +1,5 @@
 use shem_core::Result;
 use shem_core::schema::*;
-use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 
 /// Introspect PostgreSQL database schema
@@ -9,6 +8,12 @@ where
     C: GenericClient + Sync,
 {
     let mut schema = Schema::new();
+
+    // Introspect named schemas
+    let named_schemas = introspect_named_schemas(&*client).await?;
+    for named_schema in named_schemas {
+        schema.named_schemas.insert(named_schema.name.clone(), named_schema);
+    }
 
     // Introspect tables
     let tables = introspect_tables(&*client).await?;
@@ -148,6 +153,48 @@ where
         schema.rules.insert(rule.name.clone(), rule);
     }
 
+    // Introspect publications
+    let publications = introspect_publications(&*client).await?;
+    for publication in publications {
+        schema.publications.insert(publication.name.clone(), publication);
+    }
+
+    // Introspect subscriptions
+    let subscriptions = introspect_subscriptions(&*client).await?;
+    for subscription in subscriptions {
+        schema.subscriptions.insert(subscription.name.clone(), subscription);
+    }
+
+    // Introspect roles
+    let roles = introspect_roles(&*client).await?;
+    for role in roles {
+        schema.roles.insert(role.name.clone(), role);
+    }
+
+    // Introspect tablespaces
+    let tablespaces = introspect_tablespaces(&*client).await?;
+    for tablespace in tablespaces {
+        schema.tablespaces.insert(tablespace.name.clone(), tablespace);
+    }
+
+    // Introspect foreign data wrappers
+    let foreign_data_wrappers = introspect_foreign_data_wrappers(&*client).await?;
+    for fdw in foreign_data_wrappers {
+        schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
+    }
+
+    // Introspect foreign tables
+    let foreign_tables = introspect_foreign_tables(&*client).await?;
+    for table in foreign_tables {
+        schema.foreign_tables.insert(table.name.clone(), table);
+    }
+
+    // Introspect foreign key constraints separately
+    let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
+    for constraint in foreign_key_constraints {
+        schema.foreign_key_constraints.insert(constraint.name.clone(), constraint);
+    }
+
     Ok(schema)
 }
 
@@ -157,7 +204,9 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
             t.table_schema,
             t.table_name,
             obj_description(pgc.oid, 'pg_class') as comment,
-            pgc.relowner as owner
+            pgc.relowner as owner,
+            pgc.reltablespace as tablespace_oid,
+            pgc.reloptions as storage_parameters
         FROM information_schema.tables t
         JOIN pg_class pgc ON pgc.relname = t.table_name
         JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = t.table_schema
@@ -179,6 +228,8 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
         let schema: Option<String> = row.get("table_schema");
         let name: String = row.get("table_name");
         let comment: Option<String> = row.get("comment");
+        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
+        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
 
         // Get columns
         let columns = introspect_columns(client, &schema, &name).await?;
@@ -189,6 +240,43 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
         // Get indexes
         let indexes = introspect_indexes(client, &schema, &name).await?;
 
+        // Get tablespace name if available
+        let tablespace = if let Some(oid) = tablespace_oid {
+            let ts_query = "SELECT spcname FROM pg_tablespace WHERE oid = $1";
+            if let Ok(ts_rows) = client.query(ts_query, &[&oid]).await {
+                ts_rows.first().map(|row| row.get::<_, String>("spcname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get inheritance information
+        let inherits_query = r#"
+            SELECT c.relname as parent_table
+            FROM pg_inherits i
+            JOIN pg_class c ON i.inhparent = c.oid
+            JOIN pg_class child ON i.inhrelid = child.oid
+            JOIN pg_namespace n ON child.relnamespace = n.oid
+            WHERE child.relname = $1 AND n.nspname = $2
+            ORDER BY c.relname
+        "#;
+        let inherits_rows = client.query(inherits_query, &[&name, &schema.as_deref().unwrap_or("public")]).await?;
+        let inherits: Vec<String> = inherits_rows
+            .iter()
+            .map(|row| row.get::<_, String>("parent_table"))
+            .collect();
+
+        // Get partitioning information (simplified)
+        let partition_by = None; // TODO: Implement partition detection
+
+        // Parse storage parameters
+        let storage_params = storage_parameters
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
+
         tables.push(Table {
             name,
             schema,
@@ -196,10 +284,10 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
             constraints,
             indexes,
             comment,
-            tablespace: None,                   // TODO: Get tablespace information
-            inherits: Vec::new(),               // TODO: Get inheritance information
-            partition_by: None,                 // TODO: Get partitioning information
-            storage_parameters: HashMap::new(), // TODO: Get storage parameters
+            tablespace,
+            inherits,
+            partition_by,
+            storage_parameters: storage_params,
         });
     }
 
@@ -376,7 +464,11 @@ async fn introspect_indexes<C: GenericClient>(
             ix.indisunique as is_unique,
             am.amname as index_method,
             pg_get_expr(ix.indpred, ix.indrelid) as where_clause,
-            pg_get_indexdef(ix.indexrelid) as index_definition
+            pg_get_indexdef(ix.indexrelid) as index_definition,
+            i.reltablespace as tablespace_oid,
+            i.reloptions as storage_parameters,
+            ix.indkey as index_keys,
+            ix.indoption as index_options
         FROM pg_class t
         JOIN pg_index ix ON ix.indrelid = t.oid
         JOIN pg_class i ON i.oid = ix.indexrelid
@@ -386,6 +478,7 @@ async fn introspect_indexes<C: GenericClient>(
         AND t.relnamespace = (
             SELECT oid FROM pg_namespace WHERE nspname = $1
         )
+        ORDER BY i.relname, array_position(ix.indkey, a.attnum)
     "#;
 
     let rows = client.query(query, &[schema, &table.to_string()]).await?;
@@ -399,6 +492,10 @@ async fn introspect_indexes<C: GenericClient>(
         let method: String = row.get("index_method");
         let where_clause: Option<String> = row.get("where_clause");
         let _definition: String = row.get("index_definition");
+        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
+        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
+        let index_keys: Vec<i16> = row.get("index_keys");
+        let index_options: Vec<i16> = row.get("index_options");
 
         // Convert method string to IndexMethod enum
         let index_method = match method.as_str() {
@@ -410,6 +507,46 @@ async fn introspect_indexes<C: GenericClient>(
             "brin" => IndexMethod::Brin,
             _ => IndexMethod::Btree, // Default fallback
         };
+
+        // Get tablespace name if available
+        let tablespace = if let Some(oid) = tablespace_oid {
+            let ts_query = "SELECT spcname FROM pg_tablespace WHERE oid = $1";
+            if let Ok(ts_rows) = client.query(ts_query, &[&oid]).await {
+                ts_rows.first().map(|row| row.get::<_, String>("spcname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Parse storage parameters
+        let storage_params = storage_parameters
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
+
+        // Determine if this is an expression index
+        let expression = if column_name.starts_with('(') && column_name.ends_with(')') {
+            Some(column_name.clone())
+        } else {
+            None
+        };
+
+        // Get sort order and nulls first from index options
+        let column_position = index_keys.iter().position(|&k| k > 0).unwrap_or(0);
+        let index_option = index_options.get(column_position).copied().unwrap_or(0);
+        
+        let order = if (index_option & 1) != 0 {
+            SortOrder::Descending
+        } else {
+            SortOrder::Ascending
+        };
+        
+        let nulls_first = (index_option & 2) != 0;
+
+        // Get operator class if available (simplified)
+        let opclass = None; // TODO: Extract from definition if needed
 
         if current_index
             .as_ref()
@@ -423,24 +560,24 @@ async fn introspect_indexes<C: GenericClient>(
                 name,
                 columns: vec![IndexColumn {
                     name: column_name,
-                    expression: None, // TODO: Get expression for functional indexes
-                    order: SortOrder::Ascending, // TODO: Get actual sort order
-                    nulls_first: false, // TODO: Get actual nulls order
-                    opclass: None,    // TODO: Get operator class
+                    expression,
+                    order,
+                    nulls_first,
+                    opclass,
                 }],
                 unique: is_unique,
                 method: index_method,
                 where_clause,
-                tablespace: None,                   // TODO: Get tablespace
-                storage_parameters: HashMap::new(), // TODO: Get storage parameters
+                tablespace,
+                storage_parameters: storage_params,
             });
         } else if let Some(idx) = &mut current_index {
             idx.columns.push(IndexColumn {
                 name: column_name,
-                expression: None, // TODO: Get expression for functional indexes
-                order: SortOrder::Ascending, // TODO: Get actual sort order
-                nulls_first: false, // TODO: Get actual nulls order
-                opclass: None,    // TODO: Get operator class
+                expression,
+                order,
+                nulls_first,
+                opclass,
             });
         }
     }
@@ -452,7 +589,6 @@ async fn introspect_indexes<C: GenericClient>(
     Ok(indexes)
 }
 
-// TODO: Implement remaining introspection functions
 async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
     let query = r#"
         SELECT 
@@ -460,7 +596,8 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             v.table_name,
             v.view_definition,
             v.check_option,
-            pgc.relowner as owner
+            pgc.relowner as owner,
+            pgc.reloptions as options
         FROM information_schema.views v
         JOIN pg_class pgc ON pgc.relname = v.table_name
         JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = v.table_schema
@@ -482,6 +619,7 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
         let name: String = row.get("table_name");
         let definition: String = row.get("view_definition");
         let check_option: Option<String> = row.get("check_option");
+        let options: Option<Vec<String>> = row.get("options");
 
         let check_option_enum = match check_option.as_deref() {
             Some("LOCAL") => CheckOption::Local,
@@ -489,14 +627,33 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             _ => CheckOption::None,
         };
 
+        // Check for security barrier option
+        let security_barrier = options
+            .as_deref()
+            .map(|opts| opts.iter().any(|opt| opt == "security_barrier=true"))
+            .unwrap_or(false);
+
+        // Get explicit column list if available
+        let columns_query = r#"
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2
+            ORDER BY ordinal_position
+        "#;
+        let column_rows = client.query(columns_query, &[&schema, &name]).await?;
+        let columns: Vec<String> = column_rows
+            .iter()
+            .map(|row| row.get::<_, String>("column_name"))
+            .collect();
+
         views.push(View {
             name,
             schema,
             definition,
             check_option: check_option_enum,
             comment: None,
-            security_barrier: false, // TODO: Get security barrier information
-            columns: Vec::new(),     // TODO: Get explicit column list
+            security_barrier,
+            columns,
         });
     }
 
@@ -508,9 +665,11 @@ async fn introspect_materialized_views<C: GenericClient>(
 ) -> Result<Vec<MaterializedView>> {
     let query = r#"
         SELECT 
-            schemaname,
-            matviewname,
-            definition,
+            mv.schemaname,
+            mv.matviewname,
+            mv.definition,
+            c.reloptions as storage_parameters,
+            c.reltablespace as tablespace_oid,
             -- Check if the materialized view has been populated with data
             -- This is a heuristic: if the view has been refreshed or has data, assume it was created WITH DATA
             (SELECT EXISTS (
@@ -521,7 +680,15 @@ async fn introspect_materialized_views<C: GenericClient>(
                 AND c.reltuples > 0
             )) as has_data
         FROM pg_matviews mv
-        WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        JOIN pg_class c ON c.relname = mv.matviewname
+        JOIN pg_namespace n ON c.relnamespace = n.oid AND n.nspname = mv.schemaname
+        WHERE mv.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND c.relowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -531,10 +698,33 @@ async fn introspect_materialized_views<C: GenericClient>(
         let schema: Option<String> = row.get("schemaname");
         let name: String = row.get("matviewname");
         let definition: String = row.get("definition");
+        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
+        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
         let has_data: Option<bool> = row.get("has_data");
 
         // Default to true (WITH DATA) if we can't determine, as that's the most common case
         let populate_with_data = has_data.unwrap_or(true);
+
+        // Get tablespace name if available
+        let tablespace = if let Some(oid) = tablespace_oid {
+            let ts_query = "SELECT spcname FROM pg_tablespace WHERE oid = $1";
+            if let Ok(ts_rows) = client.query(ts_query, &[&oid]).await {
+                ts_rows.first().map(|row| row.get::<_, String>("spcname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get indexes for this materialized view
+        let indexes = introspect_indexes(client, &schema, &name).await?;
+
+        // Parse storage parameters
+        let storage_params = storage_parameters
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
 
         views.push(MaterializedView {
             name,
@@ -542,9 +732,9 @@ async fn introspect_materialized_views<C: GenericClient>(
             definition,
             check_option: CheckOption::None, // Materialized views don't have check options
             comment: None,
-            tablespace: None,                   // TODO: Get tablespace information
-            storage_parameters: HashMap::new(), // TODO: Get storage parameters
-            indexes: Vec::new(),                // TODO: Get materialized view indexes
+            tablespace,
+            storage_parameters: storage_params,
+            indexes,
             populate_with_data, // Use actual data presence to determine WITH DATA vs WITH NO DATA
         });
     }
@@ -562,7 +752,14 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             pg_get_function_result(p.oid) as return_type,
             pg_get_function_arguments(p.oid) as arguments,
             p.proowner as owner,
-            p.prokind as kind
+            p.prokind as kind,
+            p.provolatile as volatility,
+            p.proleakproof as leakproof,
+            p.proisstrict as strict,
+            p.prosecdef as security_definer,
+            p.proparallel as parallel_safety,
+            p.procost as cost,
+            p.prorows as rows
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
@@ -609,6 +806,12 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
         let language: String = row.get("language");
         let return_type: String = row.get("return_type");
         let arguments: String = row.get("arguments");
+        let volatility_code: String = row.get("volatility");
+        let strict: bool = row.get("strict");
+        let security_definer: bool = row.get("security_definer");
+        let parallel_safety_code: String = row.get("parallel_safety");
+        let cost: Option<f64> = row.get("cost");
+        let rows: Option<i64> = row.get("rows");
 
         // Parse parameters from the arguments string
         let parameters = parse_function_parameters(&arguments);
@@ -634,6 +837,22 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             }
         };
 
+        // Convert volatility code to enum
+        let volatility = match volatility_code.as_str() {
+            "i" => Volatility::Immutable,
+            "s" => Volatility::Stable,
+            "v" => Volatility::Volatile,
+            _ => Volatility::Volatile,
+        };
+
+        // Convert parallel safety code to enum
+        let parallel_safety = match parallel_safety_code.as_str() {
+            "s" => ParallelSafety::Safe,
+            "r" => ParallelSafety::Restricted,
+            "u" => ParallelSafety::Unsafe,
+            _ => ParallelSafety::Unsafe,
+        };
+
         functions.push(Function {
             name,
             schema,
@@ -642,12 +861,12 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             language,
             definition,
             comment: None,
-            volatility: Volatility::Volatile, // TODO: Get volatility information
-            strict: false,                    // TODO: Get strict information
-            security_definer: false,          // TODO: Get security definer information
-            parallel_safety: ParallelSafety::Unsafe, // TODO: Get parallel safety information
-            cost: None,                       // TODO: Get cost information
-            rows: None,                       // TODO: Get rows information
+            volatility,
+            strict,
+            security_definer,
+            parallel_safety,
+            cost,
+            rows,
         });
     }
 
@@ -662,7 +881,8 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             p.prosrc as procedure_body,
             l.lanname as language,
             pg_get_function_arguments(p.oid) as arguments,
-            p.proowner as owner
+            p.proowner as owner,
+            p.prosecdef as security_definer
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
@@ -690,6 +910,7 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
         let definition: String = row.get("procedure_body");
         let language: String = row.get("language");
         let arguments: String = row.get("arguments");
+        let security_definer: bool = row.get("security_definer");
 
         // Parse parameters from the arguments string
         let parameters = parse_function_parameters(&arguments);
@@ -701,7 +922,7 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             language,
             definition,
             comment: None,
-            security_definer: false, // TODO: Get security definer information
+            security_definer,
         });
     }
 
@@ -1110,6 +1331,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         SELECT 
             p.polname as policy_name,
             c.relname as table_name,
+            n.nspname as schema_name,
             p.polpermissive as permissive,
             p.polroles as roles,
             p.polcmd as command,
@@ -1135,14 +1357,27 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
     for row in rows {
         let name: String = row.get("policy_name");
         let table: String = row.get("table_name");
+        let schema: Option<String> = row.get("schema_name");
         let permissive: bool = row.get("permissive");
         let roles: Vec<u32> = row.get("roles");
         let command: i8 = row.get("command");
         let using_expr: Option<String> = row.get("using_expression");
         let check_expr: Option<String> = row.get("check_expression");
 
-        // Convert role OIDs to role names (simplified)
-        let role_names = roles.iter().map(|&oid| oid.to_string()).collect();
+        // Convert role OIDs to role names
+        let role_names = if !roles.is_empty() {
+            let role_query = "SELECT rolname FROM pg_roles WHERE oid = ANY($1)";
+            if let Ok(role_rows) = client.query(role_query, &[&roles]).await {
+                role_rows
+                    .iter()
+                    .map(|row| row.get::<_, String>("rolname"))
+                    .collect()
+            } else {
+                roles.iter().map(|&oid| oid.to_string()).collect()
+            }
+        } else {
+            Vec::new()
+        };
 
         // Parse command to PolicyCommand enum
         // PostgreSQL stores: 1=SELECT, 2=INSERT, 3=UPDATE, 4=DELETE, 5=ALL
@@ -1158,7 +1393,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         policies.push(Policy {
             name,
             table,
-            schema: None, // TODO: Get schema information
+            schema,
             command: policy_command,
             permissive,
             roles: role_names,
@@ -1616,7 +1851,473 @@ async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>>
     Ok(enums)
 }
 
+// Missing introspection functions
+
+async fn introspect_named_schemas<C: GenericClient>(client: &C) -> Result<Vec<NamedSchema>> {
+    let query = r#"
+        SELECT 
+            n.nspname AS name,
+            r.rolname AS owner,
+            obj_description(n.oid, 'pg_namespace') AS comment
+        FROM pg_namespace n
+        LEFT JOIN pg_roles r ON n.nspowner = r.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND n.nspname NOT LIKE 'pg_%'
+        AND n.nspowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = n.oid AND d.deptype = 'e'
+        )
+        ORDER BY n.nspname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut schemas = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let owner: Option<String> = row.get("owner");
+        let comment: Option<String> = row.get("comment");
+
+        schemas.push(NamedSchema {
+            name,
+            owner,
+            comment,
+        });
+    }
+
+    Ok(schemas)
+}
+
+async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Publication>> {
+    let query = r#"
+        SELECT 
+            p.pubname AS name,
+            p.puballtables AS all_tables,
+            p.pubinsert AS insert,
+            p.pubupdate AS update,
+            p.pubdelete AS delete,
+            p.pubtruncate AS truncate
+        FROM pg_publication p
+        WHERE p.pubowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = p.oid AND d.deptype = 'e'
+        )
+        ORDER BY p.pubname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut publications = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let all_tables: bool = row.get("all_tables");
+        let insert: bool = row.get("insert");
+        let update: bool = row.get("update");
+        let delete: bool = row.get("delete");
+        let truncate: bool = row.get("truncate");
+
+        // Get tables for this publication
+        let tables_query = r#"
+            SELECT schemaname || '.' || tablename AS table_name
+            FROM pg_publication_tables
+            WHERE pubname = $1
+            ORDER BY schemaname, tablename
+        "#;
+        let table_rows = client.query(tables_query, &[&name]).await?;
+        let tables: Vec<String> = table_rows
+            .iter()
+            .map(|row| row.get::<_, String>("table_name"))
+            .collect();
+
+        publications.push(Publication {
+            name,
+            tables,
+            all_tables,
+            insert,
+            update,
+            delete,
+            truncate,
+        });
+    }
+
+    Ok(publications)
+}
+
+async fn introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<Subscription>> {
+    let query = r#"
+        SELECT 
+            s.subname AS name,
+            s.subconninfo AS connection,
+            s.subenabled AS enabled,
+            s.subslotname AS slot_name
+        FROM pg_subscription s
+        WHERE s.subowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = s.oid AND d.deptype = 'e'
+        )
+        ORDER BY s.subname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut subscriptions = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let connection: String = row.get("connection");
+        let enabled: bool = row.get("enabled");
+        let slot_name: Option<String> = row.get("slot_name");
+
+        // Get publications for this subscription
+        let publications_query = r#"
+            SELECT subpubname AS publication_name
+            FROM pg_subscription_rel
+            WHERE subname = $1
+            ORDER BY subpubname
+        "#;
+        let pub_rows = client.query(publications_query, &[&name]).await?;
+        let publications: Vec<String> = pub_rows
+            .iter()
+            .map(|row| row.get::<_, String>("publication_name"))
+            .collect();
+
+        subscriptions.push(Subscription {
+            name,
+            connection,
+            publication: publications,
+            enabled,
+            slot_name,
+        });
+    }
+
+    Ok(subscriptions)
+}
+
+async fn introspect_roles<C: GenericClient>(client: &C) -> Result<Vec<Role>> {
+    let query = r#"
+        SELECT 
+            r.rolname AS name,
+            r.rolsuper AS superuser,
+            r.rolcreatedb AS createdb,
+            r.rolcreaterole AS createrole,
+            r.rolinherit AS inherit,
+            r.rolcanlogin AS login,
+            r.rolreplication AS replication,
+            r.rolconnlimit AS connection_limit,
+            r.rolvaliduntil AS valid_until
+        FROM pg_roles r
+        WHERE r.oid > 1
+        AND r.rolname NOT IN ('postgres', 'pg_signal_backend')
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = r.oid AND d.deptype = 'e'
+        )
+        ORDER BY r.rolname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut roles = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let superuser: bool = row.get("superuser");
+        let createdb: bool = row.get("createdb");
+        let createrole: bool = row.get("createrole");
+        let inherit: bool = row.get("inherit");
+        let login: bool = row.get("login");
+        let replication: bool = row.get("replication");
+        let connection_limit: Option<i32> = row.get("connection_limit");
+        let valid_until: Option<String> = row.get("valid_until");
+
+        // Get member_of information
+        let member_query = r#"
+            SELECT m.rolname AS member_of
+            FROM pg_auth_members am
+            JOIN pg_roles m ON am.roleid = m.oid
+            JOIN pg_roles r ON am.member = r.oid
+            WHERE r.rolname = $1
+            ORDER BY m.rolname
+        "#;
+        let member_rows = client.query(member_query, &[&name]).await?;
+        let member_of: Vec<String> = member_rows
+            .iter()
+            .map(|row| row.get::<_, String>("member_of"))
+            .collect();
+
+        roles.push(Role {
+            name,
+            superuser,
+            createdb,
+            createrole,
+            inherit,
+            login,
+            replication,
+            connection_limit,
+            password: None, // Password information is not accessible
+            valid_until,
+            member_of,
+        });
+    }
+
+    Ok(roles)
+}
+
+async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tablespace>> {
+    let query = r#"
+        SELECT 
+            t.spcname AS name,
+            t.spclocation AS location,
+            r.rolname AS owner,
+            t.spcoptions AS options
+        FROM pg_tablespace t
+        LEFT JOIN pg_roles r ON t.spcowner = r.oid
+        WHERE t.spcname NOT IN ('pg_default', 'pg_global')
+        AND t.spcowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+        ORDER BY t.spcname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut tablespaces = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let location: String = row.get("location");
+        let owner: String = row.get("owner");
+        let options: Option<Vec<String>> = row.get("options");
+
+        let options_map = options
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
+
+        tablespaces.push(Tablespace {
+            name,
+            location,
+            owner,
+            options: options_map,
+        });
+    }
+
+    Ok(tablespaces)
+}
+
+async fn introspect_foreign_data_wrappers<C: GenericClient>(client: &C) -> Result<Vec<ForeignDataWrapper>> {
+    let query = r#"
+        SELECT 
+            f.fdwname AS name,
+            p1.proname AS handler,
+            p2.proname AS validator,
+            f.fdwoptions AS options
+        FROM pg_foreign_data_wrapper f
+        LEFT JOIN pg_proc p1 ON f.fdwhandler = p1.oid
+        LEFT JOIN pg_proc p2 ON f.fdwvalidator = p2.oid
+        WHERE f.fdwowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = f.oid AND d.deptype = 'e'
+        )
+        ORDER BY f.fdwname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut fdws = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let handler: Option<String> = row.get("handler");
+        let validator: Option<String> = row.get("validator");
+        let options: Option<Vec<String>> = row.get("options");
+
+        let options_map = options
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
+
+        fdws.push(ForeignDataWrapper {
+            name,
+            handler,
+            validator,
+            options: options_map,
+        });
+    }
+
+    Ok(fdws)
+}
+
+async fn introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<ForeignTable>> {
+    let query = r#"
+        SELECT 
+            c.relname AS table_name,
+            n.nspname AS schema_name,
+            s.srvname AS server_name,
+            c.reloptions AS options
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        JOIN pg_foreign_table ft ON c.oid = ft.ftrelid
+        JOIN pg_foreign_server s ON ft.ftserver = s.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND c.relkind = 'f'
+        AND c.relowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = c.oid AND d.deptype = 'e'
+        )
+        ORDER BY n.nspname, c.relname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut foreign_tables = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("table_name");
+        let schema: Option<String> = row.get("schema_name");
+        let server: String = row.get("server_name");
+        let options: Option<Vec<String>> = row.get("options");
+
+        // Get columns for this foreign table
+        let columns = introspect_columns(client, &schema, &name).await?;
+
+        let options_map = options
+            .as_deref()
+            .map(parse_server_options)
+            .unwrap_or_default();
+
+        foreign_tables.push(ForeignTable {
+            name,
+            schema,
+            columns,
+            server,
+            options: options_map,
+        });
+    }
+
+    Ok(foreign_tables)
+}
+
+async fn introspect_foreign_key_constraints<C: GenericClient>(client: &C) -> Result<Vec<ForeignKeyConstraint>> {
+    let query = r#"
+        SELECT 
+            c.conname AS constraint_name,
+            t.relname AS table_name,
+            n.nspname AS schema_name,
+            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names,
+            rt.relname AS references_table,
+            rn.nspname AS references_schema,
+            array_agg(ra.attname ORDER BY array_position(c.confkey, ra.attnum)) AS references_columns,
+            c.confdeltype AS on_delete,
+            c.confupdtype AS on_update,
+            c.condeferrable AS deferrable,
+            c.condeferred AS initially_deferred
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        JOIN pg_namespace n ON t.relnamespace = n.oid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        JOIN pg_class rt ON c.confrelid = rt.oid
+        JOIN pg_namespace rn ON rt.relnamespace = rn.oid
+        JOIN pg_attribute ra ON ra.attrelid = rt.oid AND ra.attnum = ANY(c.confkey)
+        WHERE c.contype = 'f'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.relowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+        GROUP BY c.oid, c.conname, t.relname, n.nspname, rt.relname, rn.nspname, 
+                 c.confdeltype, c.confupdtype, c.condeferrable, c.condeferred
+        ORDER BY n.nspname, t.relname, c.conname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut constraints = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("constraint_name");
+        let table: String = row.get("table_name");
+        let schema: Option<String> = row.get("schema_name");
+        let columns: Vec<String> = row.get("column_names");
+        let references_table: String = row.get("references_table");
+        let references_schema: Option<String> = row.get("references_schema");
+        let references_columns: Vec<String> = row.get("references_columns");
+        let on_delete_code: String = row.get("on_delete");
+        let on_update_code: String = row.get("on_update");
+        let deferrable: bool = row.get("deferrable");
+        let initially_deferred: bool = row.get("initially_deferred");
+
+        // Convert action codes to ReferentialAction enum
+        let on_delete = match on_delete_code.as_str() {
+            "a" => Some(ReferentialAction::NoAction),
+            "r" => Some(ReferentialAction::Restrict),
+            "c" => Some(ReferentialAction::Cascade),
+            "n" => Some(ReferentialAction::SetNull),
+            "d" => Some(ReferentialAction::SetDefault),
+            _ => None,
+        };
+
+        let on_update = match on_update_code.as_str() {
+            "a" => Some(ReferentialAction::NoAction),
+            "r" => Some(ReferentialAction::Restrict),
+            "c" => Some(ReferentialAction::Cascade),
+            "n" => Some(ReferentialAction::SetNull),
+            "d" => Some(ReferentialAction::SetDefault),
+            _ => None,
+        };
+
+        constraints.push(ForeignKeyConstraint {
+            name,
+            table,
+            schema,
+            columns,
+            references_table,
+            references_schema,
+            references_columns,
+            on_delete,
+            on_update,
+            deferrable,
+            initially_deferred,
+        });
+    }
+
+    Ok(constraints)
+}
+
 // Helper functions for parsing
+
+fn parse_trigger_definition(definition: &str) -> (TriggerLevel, Option<String>) {
+    let mut for_each = TriggerLevel::Row; // Default
+    let mut condition = None;
+
+    // Parse FOR EACH clause
+    if definition.contains("FOR EACH ROW") {
+        for_each = TriggerLevel::Row;
+    } else if definition.contains("FOR EACH STATEMENT") {
+        for_each = TriggerLevel::Statement;
+    }
+
+    // Parse WHEN condition
+    if let Some(when_pos) = definition.find("WHEN (") {
+        if let Some(end_pos) = definition[when_pos..].find(')') {
+            let condition_start = when_pos + 6; // "WHEN (" length
+            let condition_end = when_pos + end_pos;
+            condition = Some(definition[condition_start..condition_end].to_string());
+        }
+    }
+
+    (for_each, condition)
+}
 
 fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
     if arguments.is_empty() {
