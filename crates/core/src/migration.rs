@@ -511,7 +511,13 @@ fn generate_create_materialized_view(view: &MaterializedView) -> Result<String> 
         view.name, view.definition
     );
 
-    // Materialized views don't have check options
+    // Add WITH DATA or WITH NO DATA based on the populate_with_data field
+    if view.populate_with_data {
+        sql.push_str(" WITH DATA");
+    } else {
+        sql.push_str(" WITH NO DATA");
+    }
+
     sql.push(';');
     Ok(sql)
 }

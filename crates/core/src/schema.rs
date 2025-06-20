@@ -74,6 +74,7 @@ pub struct MaterializedView {
     pub tablespace: Option<String>, // Added: tablespace assignment
     pub storage_parameters: HashMap<String, String>, // Added: WITH parameters
     pub indexes: Vec<Index>,        // Added: materialized view indexes
+    pub populate_with_data: bool,   // Added: controls WITH DATA vs WITH NO DATA
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -160,6 +161,7 @@ pub struct Trigger {
     pub condition: Option<String>, // Added: WHEN condition
     pub for_each: TriggerLevel,    // Added: FOR EACH ROW/STATEMENT
     pub comment: Option<String>,
+    pub when: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

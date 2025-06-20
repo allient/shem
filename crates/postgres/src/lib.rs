@@ -10,7 +10,6 @@ use tokio_postgres::{Client, Config, NoTls};
 
 pub mod introspection;
 pub mod sql_generator;
-
 pub use introspection::introspect_schema;
 pub use sql_generator::PostgresSqlGenerator;
 

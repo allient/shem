@@ -342,6 +342,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 tablespace: None,
                 storage_parameters: std::collections::HashMap::new(),
                 indexes: Vec::new(),
+                populate_with_data: true, // Default to WITH DATA for parsed statements
             };
             schema.materialized_views.insert(view.name.clone(), view);
         }

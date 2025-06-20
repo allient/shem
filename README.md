@@ -365,6 +365,13 @@ For your Shem declarative PostgreSQL migration tool, focus on supporting it
 | 23 | **Aggregate** | A custom aggregation function (like `SUM` or `AVG`). | Very Low | **High** | Logic | 🔶 Missing |
 <!-- markdown-table-sort-enable -->
 
+## Inspiration
+Tool/Crate	Notes
+refinery	For migration management, not schema diffing or introspection.
+postgres-parser	Can parse PostgreSQL SQL into AST; useful for reverse-engineering SQL.
+Atlas (Go)	Best-in-class for schema diffing and migration but not in Rust.
+pg-schema-diff GO
+
 ## Sample data
 -- ========== EXTENSIONS ==========
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

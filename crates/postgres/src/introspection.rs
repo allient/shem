@@ -510,8 +510,17 @@ async fn introspect_materialized_views<C: GenericClient>(
         SELECT 
             schemaname,
             matviewname,
-            definition
-        FROM pg_matviews
+            definition,
+            -- Check if the materialized view has been populated with data
+            -- This is a heuristic: if the view has been refreshed or has data, assume it was created WITH DATA
+            (SELECT EXISTS (
+                SELECT 1 FROM pg_class c 
+                JOIN pg_namespace n ON c.relnamespace = n.oid 
+                WHERE c.relname = mv.matviewname 
+                AND n.nspname = mv.schemaname 
+                AND c.reltuples > 0
+            )) as has_data
+        FROM pg_matviews mv
         WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
     "#;
 
@@ -522,6 +531,10 @@ async fn introspect_materialized_views<C: GenericClient>(
         let schema: Option<String> = row.get("schemaname");
         let name: String = row.get("matviewname");
         let definition: String = row.get("definition");
+        let has_data: Option<bool> = row.get("has_data");
+
+        // Default to true (WITH DATA) if we can't determine, as that's the most common case
+        let populate_with_data = has_data.unwrap_or(true);
 
         views.push(MaterializedView {
             name,
@@ -532,6 +545,7 @@ async fn introspect_materialized_views<C: GenericClient>(
             tablespace: None,                   // TODO: Get tablespace information
             storage_parameters: HashMap::new(), // TODO: Get storage parameters
             indexes: Vec::new(),                // TODO: Get materialized view indexes
+            populate_with_data,                 // Use actual data presence to determine WITH DATA vs WITH NO DATA
         });
     }
 

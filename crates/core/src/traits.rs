@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::schema::{
-    Domain, EnumType, Extension, Function, MaterializedView, Policy, Procedure, Schema, Sequence,
-    Server, Table, Trigger, Type, View,
+    Collation, ConstraintTrigger, Domain, EnumType, EventTrigger, Extension, Function, Index,
+    MaterializedView, Policy, Procedure, Rule, Schema, Sequence, Server, Table, Trigger, Type, View,
 };
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -84,17 +84,32 @@ pub trait SqlGenerator: Send + Sync {
     /// Generate CREATE VIEW SQL
     fn create_view(&self, view: &View) -> Result<String>;
 
+    /// Generate DROP VIEW SQL
+    fn drop_view(&self, view: &View) -> Result<String>;
+
     /// Generate CREATE MATERIALIZED VIEW SQL
     fn create_materialized_view(&self, view: &MaterializedView) -> Result<String>;
+
+    /// Generate DROP MATERIALIZED VIEW SQL
+    fn drop_materialized_view(&self, view: &MaterializedView) -> Result<String>;
 
     /// Generate CREATE FUNCTION SQL
     fn create_function(&self, func: &Function) -> Result<String>;
 
+    /// Generate DROP FUNCTION SQL
+    fn drop_function(&self, func: &Function) -> Result<String>;
+
     /// Generate CREATE PROCEDURE SQL
     fn create_procedure(&self, proc: &Procedure) -> Result<String>;
 
+    /// Generate DROP PROCEDURE SQL
+    fn drop_procedure(&self, proc: &Procedure) -> Result<String>;
+
     /// Generate CREATE TYPE SQL
     fn generate_create_type(&self, type_def: &Type) -> Result<String>;
+
+    /// Generate DROP TYPE SQL
+    fn drop_type(&self, type_def: &Type) -> Result<String>;
 
     /// Generate CREATE ENUM SQL
     fn create_enum(&self, enum_type: &EnumType) -> Result<String>;
@@ -105,23 +120,83 @@ pub trait SqlGenerator: Send + Sync {
     /// Generate CREATE DOMAIN SQL
     fn create_domain(&self, domain: &Domain) -> Result<String>;
 
+    /// Generate DROP DOMAIN SQL
+    fn drop_domain(&self, domain: &Domain) -> Result<String>;
+
     /// Generate CREATE SEQUENCE SQL
     fn create_sequence(&self, seq: &Sequence) -> Result<String>;
 
     /// Generate ALTER SEQUENCE SQL
     fn alter_sequence(&self, old: &Sequence, new: &Sequence) -> Result<(Vec<String>, Vec<String>)>;
 
+    /// Generate DROP SEQUENCE SQL
+    fn drop_sequence(&self, seq: &Sequence) -> Result<String>;
+
     /// Generate CREATE EXTENSION SQL
     fn create_extension(&self, ext: &Extension) -> Result<String>;
+
+    /// Generate ALTER EXTENSION SQL
+    fn alter_extension(&self, ext: &Extension) -> Result<String>;
+
+    /// Generate DROP EXTENSION SQL
+    fn drop_extension(&self, ext: &Extension) -> Result<String>;
 
     /// Generate CREATE TRIGGER SQL
     fn create_trigger(&self, trigger: &Trigger) -> Result<String>;
 
+    /// Generate DROP TRIGGER SQL
+    fn drop_trigger(&self, trigger: &Trigger) -> Result<String>;
+
     /// Generate CREATE POLICY SQL
     fn create_policy(&self, policy: &Policy) -> Result<String>;
 
+    /// Generate DROP POLICY SQL
+    fn drop_policy(&self, policy: &Policy) -> Result<String>;
+
     /// Generate CREATE SERVER SQL
     fn create_server(&self, server: &Server) -> Result<String>;
+
+    /// Generate DROP SERVER SQL
+    fn drop_server(&self, server: &Server) -> Result<String>;
+
+    /// Generate CREATE INDEX SQL
+    fn create_index(&self, index: &Index) -> Result<String>;
+
+    /// Generate DROP INDEX SQL
+    fn drop_index(&self, index: &Index) -> Result<String>;
+
+    /// Generate CREATE COLLATION SQL
+    fn create_collation(&self, collation: &Collation) -> Result<String>;
+
+    /// Generate DROP COLLATION SQL
+    fn drop_collation(&self, collation: &Collation) -> Result<String>;
+
+    /// Generate CREATE RULE SQL
+    fn create_rule(&self, rule: &Rule) -> Result<String>;
+
+    /// Generate DROP RULE SQL
+    fn drop_rule(&self, rule: &Rule) -> Result<String>;
+
+    /// Generate CREATE EVENT TRIGGER SQL
+    fn create_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
+
+    /// Generate DROP EVENT TRIGGER SQL
+    fn drop_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
+
+    /// Generate CREATE CONSTRAINT TRIGGER SQL
+    fn create_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String>;
+
+    /// Generate DROP CONSTRAINT TRIGGER SQL
+    fn drop_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String>;
+
+    /// Generate COMMENT ON object SQL
+    fn comment_on(&self, object_type: &str, object_name: &str, comment: &str) -> Result<String>;
+
+    /// Generate GRANT privileges SQL
+    fn grant_privileges(&self, privileges: &[String], on_object: &str, to_roles: &[String]) -> Result<String>;
+
+    /// Generate REVOKE privileges SQL
+    fn revoke_privileges(&self, privileges: &[String], on_object: &str, from_roles: &[String]) -> Result<String>;
 }
 
 /// Database features
