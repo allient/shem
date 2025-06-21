@@ -1,9 +1,9 @@
 [package]
 name = "shem-parser"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "SQL parser for database schema management"
-authors = ["Jonathan Vargas <jonathanvargas1104@gmail.com>"]
+authors = ["Jonathan Vargas <jvargas@allient.io>"]
 license = "MIT"
 
 [dependencies]
@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 pg_query = { workspace = true }
+shem-core = { path = "../core" }
 
 [features]
 default = ["full"]

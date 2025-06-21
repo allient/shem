@@ -1920,6 +1920,7 @@ dependencies = [
  "pg_query",
  "serde",
  "serde_json",
+ "shem-core",
  "tokio",
 ]
 
