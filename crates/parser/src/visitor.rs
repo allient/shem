@@ -1,15 +1,15 @@
 use crate::ast::{self, *};
 use anyhow::{Context, Result};
 use pg_query::{
-    protobuf::{self, node},
     Node, ParseResult,
+    protobuf::{self, node},
+};
+use shared_types::{
+    CheckOption, CollationProvider, DataType, Expression, FunctionBehavior, FunctionParameter,
+    FunctionReturn, Literal, ParallelType, ParameterMode, PolicyCommand, RuleEvent, SecurityType,
+    TableConstraint, TriggerEvent, TriggerWhen,
 };
 use std::collections::HashMap;
-use shared_types::{
-    CheckOption, FunctionReturn, DataType, TableConstraint, Expression, Literal,
-    FunctionParameter, ParameterMode, FunctionBehavior, SecurityType, ParallelType,
-    TriggerWhen, TriggerEvent, PolicyCommand,
-};
 
 /// Parse statements from PostgreSQL parse result
 pub fn parse_statements(result: &ParseResult) -> Result<Vec<Statement>> {
@@ -31,6 +31,18 @@ pub fn parse_statements(result: &ParseResult) -> Result<Vec<Statement>> {
             node::Node::CreateForeignServerStmt(stmt) => parse_create_server(stmt)?,
             node::Node::AlterTableStmt(stmt) => parse_alter_table(stmt)?,
             node::Node::DropStmt(stmt) => parse_drop_object(stmt)?,
+            node::Node::CreateSchemaStmt(stmt) => parse_create_schema(stmt)?,
+            node::Node::CreatePublicationStmt(stmt) => parse_create_publication(stmt)?,
+            node::Node::CreateRangeStmt(stmt) => parse_create_range_type(stmt)?,
+            node::Node::CreateRoleStmt(stmt) => parse_create_role(stmt)?,
+            node::Node::RuleStmt(stmt) => parse_create_rule(stmt)?,
+            node::Node::CreateForeignTableStmt(stmt) => parse_create_foreign_table(stmt)?,
+            node::Node::CreateFdwStmt(stmt) => parse_create_foreign_data_wrapper(stmt)?,
+            node::Node::CreateSubscriptionStmt(stmt) => parse_create_subscription(stmt)?,
+            node::Node::CreateTableSpaceStmt(stmt) => parse_create_tablespace(stmt)?,
+            // node::Node::CreateMatViewStmt(stmt) => parse_create_materialized_view(stmt)?,
+            // node::Node::CreateProcedureStmt(stmt) => parse_create_procedure(stmt)?,
+            // node::Node::CreateCollationStmt(stmt) => parse_create_collation(stmt)?,
             _ => continue,
         };
         statements.push(statement);
@@ -492,12 +504,12 @@ fn parse_function_options(
     Option<String>,
 )> {
     let mut language = "sql".to_string();
-    let mut behavior = FunctionBehavior::Volatile;
-    let mut security = SecurityType::Invoker;
-    let mut parallel = ParallelType::Unsafe;
-    let mut cost: Option<u32> = None;
-    let mut rows: Option<u32> = None;
-    let mut support: Option<String> = None;
+    let behavior = FunctionBehavior::Volatile;
+    let security = SecurityType::Invoker;
+    let parallel = ParallelType::Unsafe;
+    let cost: Option<u32> = None;
+    let rows: Option<u32> = None;
+    let support: Option<String> = None;
 
     for opt in options {
         if let Some(node::Node::DefElem(def)) = &opt.node {
@@ -908,4 +920,99 @@ impl std::fmt::Display for AlterTableAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
+}
+
+// Stubs for missing parse_create_* functions
+fn parse_create_schema(_stmt: &protobuf::CreateSchemaStmt) -> Result<Statement> {
+    // TODO: Implement full parsing
+    Ok(Statement::CreateSchema(CreateSchema {
+        name: "stub_schema".to_string(),
+        owner: None,
+        comment: None,
+    }))
+}
+fn parse_create_publication(_stmt: &protobuf::CreatePublicationStmt) -> Result<Statement> {
+    Ok(Statement::CreatePublication(CreatePublication {
+        name: "stub_pub".to_string(),
+        tables: vec![],
+        all_tables: false,
+        insert: false,
+        update: false,
+        delete: false,
+        truncate: false,
+    }))
+}
+fn parse_create_range_type(_stmt: &protobuf::CreateRangeStmt) -> Result<Statement> {
+    Ok(Statement::CreateRangeType(CreateRangeType {
+        name: "stub_range".to_string(),
+        schema: None,
+        subtype: "".to_string(),
+        subtype_opclass: None,
+        collation: None,
+        canonical: None,
+        subtype_diff: None,
+        multirange_type_name: None,
+    }))
+}
+fn parse_create_role(_stmt: &protobuf::CreateRoleStmt) -> Result<Statement> {
+    Ok(Statement::CreateRole(CreateRole {
+        name: "stub_role".to_string(),
+        superuser: false,
+        createdb: false,
+        createrole: false,
+        inherit: false,
+        login: false,
+        replication: false,
+        connection_limit: None,
+        password: None,
+        valid_until: None,
+        member_of: vec![],
+    }))
+}
+fn parse_create_rule(_stmt: &protobuf::RuleStmt) -> Result<Statement> {
+    Ok(Statement::CreateRule(CreateRule {
+        name: "stub_rule".to_string(),
+        table: "".to_string(),
+        schema: None,
+        event: RuleEvent::Select,
+        instead: false,
+        condition: None,
+        actions: vec![],
+    }))
+}
+fn parse_create_foreign_table(_stmt: &protobuf::CreateForeignTableStmt) -> Result<Statement> {
+    Ok(Statement::CreateForeignTable(CreateForeignTable {
+        name: "stub_foreign_table".to_string(),
+        schema: None,
+        columns: vec![],
+        server: "".to_string(),
+        options: Default::default(),
+    }))
+}
+fn parse_create_foreign_data_wrapper(_stmt: &protobuf::CreateFdwStmt) -> Result<Statement> {
+    Ok(Statement::CreateForeignDataWrapper(
+        CreateForeignDataWrapper {
+            name: "stub_fdw".to_string(),
+            handler: None,
+            validator: None,
+            options: Default::default(),
+        },
+    ))
+}
+fn parse_create_subscription(_stmt: &protobuf::CreateSubscriptionStmt) -> Result<Statement> {
+    Ok(Statement::CreateSubscription(CreateSubscription {
+        name: "stub_sub".to_string(),
+        connection: "".to_string(),
+        publication: vec![],
+        enabled: false,
+        slot_name: None,
+    }))
+}
+fn parse_create_tablespace(_stmt: &protobuf::CreateTableSpaceStmt) -> Result<Statement> {
+    Ok(Statement::CreateTablespace(CreateTablespace {
+        name: "stub_tablespace".to_string(),
+        location: "".to_string(),
+        owner: "".to_string(),
+        options: Default::default(),
+    }))
 }
