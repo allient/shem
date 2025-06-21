@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tempfile::{TempDir, tempdir};
 use std::fs;
 use anyhow::Result;
-use shem_cli::config::Config;
+use ::cli::Config;
 use uuid::Uuid;
 use chrono::Utc;
 

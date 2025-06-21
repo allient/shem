@@ -6,6 +6,10 @@ description = "Declarative database schema management CLI"
 authors = ["Jonathan Vargas <jonathanvargas1104@gmail.com>"]
 license = "MIT"
 
+[lib]
+name = "cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shem"
 path = "src/main.rs"
