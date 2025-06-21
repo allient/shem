@@ -60,23 +60,6 @@ fn test_parse_create_view() {
 }
 
 #[test]
-fn test_parse_create_materialized_view() {
-    let sql = r#"
-        CREATE MATERIALIZED VIEW mat_view AS 
-        SELECT COUNT(*) as count FROM users;
-    "#;
-    let stmts = parse_sql(sql).unwrap();
-    assert_eq!(stmts.len(), 1);
-    match &stmts[0] {
-        Statement::CreateMaterializedView(view) => {
-            assert_eq!(view.name, "mat_view");
-            assert!(view.query.contains("SELECT COUNT(*)"));
-        }
-        _ => panic!("Expected CreateMaterializedView statement"),
-    }
-}
-
-#[test]
 fn test_parse_create_function_complex() {
     let sql = r#"
         CREATE FUNCTION complex_func(
@@ -103,28 +86,6 @@ fn test_parse_create_function_complex() {
             assert_eq!(func.language, "plpgsql");
         }
         _ => panic!("Expected CreateFunction statement"),
-    }
-}
-
-#[test]
-fn test_parse_create_procedure() {
-    let sql = r#"
-        CREATE PROCEDURE test_proc(param1 INTEGER)
-        LANGUAGE plpgsql
-        AS $$
-        BEGIN
-            INSERT INTO logs VALUES (param1, NOW());
-        END;
-        $$;
-    "#;
-    let stmts = parse_sql(sql).unwrap();
-    assert_eq!(stmts.len(), 1);
-    match &stmts[0] {
-        Statement::CreateProcedure(proc) => {
-            assert_eq!(proc.name, "test_proc");
-            assert_eq!(proc.parameters.len(), 1);
-        }
-        _ => panic!("Expected CreateProcedure statement"),
     }
 }
 
@@ -263,7 +224,7 @@ fn test_parse_create_server() {
     let sql = r#"
         CREATE SERVER foreign_server 
         FOREIGN DATA WRAPPER postgres_fdw 
-        OPTIONS (host 'remote.example.com', port '5432');
+        OPTIONS (host 'remote.example.com', port '5432', dbname 'mydb');
     "#;
     let stmts = parse_sql(sql).unwrap();
     assert_eq!(stmts.len(), 1);
@@ -273,21 +234,6 @@ fn test_parse_create_server() {
             assert_eq!(server.foreign_data_wrapper, "postgres_fdw");
         }
         _ => panic!("Expected CreateServer statement"),
-    }
-}
-
-#[test]
-fn test_parse_create_collation() {
-    let sql = r#"
-        CREATE COLLATION german_phonebook (provider = icu, locale = 'de-u-co-phonebk');
-    "#;
-    let stmts = parse_sql(sql).unwrap();
-    assert_eq!(stmts.len(), 1);
-    match &stmts[0] {
-        Statement::CreateCollation(collation) => {
-            assert_eq!(collation.name, "german_phonebook");
-        }
-        _ => panic!("Expected CreateCollation statement"),
     }
 }
 

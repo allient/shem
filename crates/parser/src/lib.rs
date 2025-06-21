@@ -27,6 +27,7 @@ pub fn parse_schema(sql: &str) -> Result<SchemaDefinition> {
 
     for stmt in statements {
         match stmt {
+            Statement::CreateSchema(create) => schema.named_schemas.push(create),
             Statement::CreateTable(create) => schema.tables.push(create),
             Statement::CreateView(create) => schema.views.push(create),
             Statement::CreateMaterializedView(create) => schema.materialized_views.push(create),
