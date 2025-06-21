@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/parser",
     "crates/postgres",
+    "crates/shared-types",
 ]
 
 # Optional workspace metadata

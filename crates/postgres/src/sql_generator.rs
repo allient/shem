@@ -13,9 +13,11 @@
  * and automation of database changes, allowing tools to programmatically manage PostgreSQL schemas.
  */
 use shem_core::{
-    CheckOption, Collation, ConstraintTrigger, Domain, EventTrigger, Extension, Function, Index,
-    IndexMethod, MaterializedView, ParameterMode, Policy, PolicyCommand, Procedure, Rule, Sequence, Server,
-    SqlGenerator, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View,
+    Collation, ConstraintTrigger, Domain, EventTrigger, Extension, Function, Index,
+    IndexMethod, MaterializedView, Policy, Procedure, Rule, Sequence, Server,
+    Table, Trigger, Type, TypeKind, View,
+    schema::{CheckOption, CollationProvider, EventTriggerEvent, ParameterMode, PolicyCommand, RuleEvent, SortOrder, TriggerEvent, TriggerLevel, TriggerTiming},
+    traits::SqlGenerator,
 };
 use shem_core::{EnumType, Result};
 
@@ -1199,7 +1201,7 @@ impl SqlGenerator for PostgresSqlGenerator {
                 if let Some(expr) = &col.expression {
                     col_def = format!("({})", expr);
                 }
-                if col.order == shem_core::SortOrder::Descending {
+                if col.order == SortOrder::Descending {
                     col_def.push_str(" DESC");
                 }
                 if col.nulls_first {
@@ -1268,9 +1270,9 @@ impl SqlGenerator for PostgresSqlGenerator {
         sql.push_str(&format!(
             " PROVIDER {}",
             match collation.provider {
-                shem_core::CollationProvider::Libc => "libc",
-                shem_core::CollationProvider::Icu => "icu",
-                shem_core::CollationProvider::Builtin => "builtin",
+                CollationProvider::Libc => "libc",
+                CollationProvider::Icu => "icu",
+                CollationProvider::Builtin => "builtin",
             }
         ));
 
@@ -1296,10 +1298,10 @@ impl SqlGenerator for PostgresSqlGenerator {
         let _table_name = Self::quote_identifier(&rule.table);
 
         let event_str = match rule.event {
-            shem_core::RuleEvent::Select => "SELECT",
-            shem_core::RuleEvent::Update => "UPDATE",
-            shem_core::RuleEvent::Insert => "INSERT",
-            shem_core::RuleEvent::Delete => "DELETE",
+            RuleEvent::Select => "SELECT",
+            RuleEvent::Update => "UPDATE",
+            RuleEvent::Insert => "INSERT",
+            RuleEvent::Delete => "DELETE",
         };
 
         let mut sql = format!("CREATE RULE {} AS ON {}", rule_name, event_str);
@@ -1343,10 +1345,10 @@ impl SqlGenerator for PostgresSqlGenerator {
         let trigger_name = Self::quote_identifier(&trigger.name);
 
         let event_str = match trigger.event {
-            shem_core::EventTriggerEvent::DdlCommandStart => "DDL_COMMAND_START",
-            shem_core::EventTriggerEvent::DdlCommandEnd => "DDL_COMMAND_END",
-            shem_core::EventTriggerEvent::TableRewrite => "TABLE_REWRITE",
-            shem_core::EventTriggerEvent::SqlDrop => "SQL_DROP",
+            EventTriggerEvent::DdlCommandStart => "DDL_COMMAND_START",
+            EventTriggerEvent::DdlCommandEnd => "DDL_COMMAND_END",
+            EventTriggerEvent::TableRewrite => "TABLE_REWRITE",
+            EventTriggerEvent::SqlDrop => "SQL_DROP",
         };
 
         let mut sql = format!("CREATE EVENT TRIGGER {} ON {}", trigger_name, event_str);

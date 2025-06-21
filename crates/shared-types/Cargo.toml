@@ -1,0 +1,10 @@
+[package]
+name = "shem-shared-types"
+version = "0.1.0"
+edition = "2024"
+description = "Shared types for database schema management"
+authors = ["Jonathan Vargas <jvargas@allient.io>"]
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] } 

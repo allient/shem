@@ -12,7 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 pg_query = { workspace = true }
-shem-core = { path = "../core" }
+shem-shared-types = { path = "../shared-types" }
 
 [features]
 default = ["full"]

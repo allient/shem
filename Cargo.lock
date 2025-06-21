@@ -1902,13 +1902,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "indexmap",
+ "postgres-types",
  "serde",
  "serde_json",
- "thiserror 2.0.12",
+ "shem-shared-types",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
- "tracing",
  "uuid",
 ]
 
@@ -1920,7 +1920,7 @@ dependencies = [
  "pg_query",
  "serde",
  "serde_json",
- "shem-core",
+ "shem-shared-types",
  "tokio",
 ]
 
@@ -1940,6 +1940,13 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "shem-shared-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

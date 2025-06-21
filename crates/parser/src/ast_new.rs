@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use shem_shared_types::*;
+use shem_core::shared_types::*;
 
 /// Schema definition containing all database objects
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,37 +100,6 @@ pub enum Statement {
 }
 
 // Parser-specific types that extend or modify shared types
-
-/// Column definition (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColumnDefinition {
-    pub name: String,
-    pub data_type: DataType,
-    pub default: Option<Expression>,
-    pub not_null: bool,
-    pub generated: Option<GeneratedColumn>,
-    pub identity: Option<IdentityColumn>,
-    pub comment: Option<String>,
-}
-
-/// Generated column (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeneratedColumn {
-    pub expression: Expression,
-    pub stored: bool,
-}
-
-/// Identity column (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IdentityColumn {
-    pub always: bool,
-    pub start: Option<i64>,
-    pub increment: Option<i64>,
-    pub min_value: Option<i64>,
-    pub max_value: Option<i64>,
-    pub cache: Option<i64>,
-    pub cycle: bool,
-}
 
 /// Table definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,14 +203,6 @@ pub struct CreateType {
     pub element: Option<String>,
     pub delimiter: Option<char>,
     pub collatable: Option<bool>,
-}
-
-/// Type attribute (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TypeAttribute {
-    pub name: String,
-    pub data_type: DataType,
-    pub collation: Option<String>,
 }
 
 /// Domain type definition
@@ -467,38 +428,6 @@ pub struct CreateForeignKeyConstraint {
 }
 
 // Parser-specific types for ALTER and DROP statements
-
-/// Partition definition (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartitionDefinition {
-    pub strategy: PartitionStrategy,
-    pub columns: Vec<String>,
-    pub partitions: Vec<Partition>,
-}
-
-/// Partition strategy (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PartitionStrategy {
-    Range,
-    List,
-    Hash,
-}
-
-/// Partition (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Partition {
-    pub name: String,
-    pub bounds: PartitionBounds,
-    pub tablespace: Option<String>,
-}
-
-/// Partition bounds (parser-specific)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PartitionBounds {
-    Range(Vec<Expression>),
-    List(Vec<Expression>),
-    Hash(Expression),
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlterTable {
