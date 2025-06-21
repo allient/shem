@@ -1,5 +1,5 @@
 [package]
-name = "shem-parser"
+name = "parser"
 version = "0.1.0"
 edition = "2024"
 description = "SQL parser for database schema management"
@@ -12,7 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 pg_query = { workspace = true }
-shem-shared-types = { path = "../shared-types" }
+shared-types = { path = "../shared-types" }
 
 [features]
 default = ["full"]

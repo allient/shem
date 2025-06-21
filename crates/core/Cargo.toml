@@ -17,4 +17,4 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 thiserror = "1.0"
-shem-shared-types = { path = "../shared-types" }
+shared-types = { path = "../shared-types" }

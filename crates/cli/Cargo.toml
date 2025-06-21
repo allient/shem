@@ -1,5 +1,5 @@
 [package]
-name = "shem-cli"
+name = "cli"
 version = "0.1.0"
 edition = "2024"
 description = "Declarative database schema management CLI"
@@ -13,8 +13,9 @@ path = "src/main.rs"
 [dependencies]
 # Workspace crates
 shem-core = { path = "../core" }
-shem-postgres = { path = "../postgres" }
-shem-parser = { path = "../parser" }
+postgres = { path = "../postgres" }
+parser = { path = "../parser" }
+shared-types = { path = "../shared-types" }
 
 # External dependencies
 clap = { workspace = true }

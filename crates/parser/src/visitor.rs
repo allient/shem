@@ -5,7 +5,7 @@ use pg_query::{
     Node, ParseResult,
 };
 use std::collections::HashMap;
-use shem_shared_types::{
+use shared_types::{
     CheckOption, FunctionReturn, DataType, TableConstraint, Expression, Literal,
     FunctionParameter, ParameterMode, FunctionBehavior, SecurityType, ParallelType,
     TriggerWhen, TriggerEvent, PolicyCommand,

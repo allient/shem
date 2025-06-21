@@ -16,16 +16,19 @@ use shem_core::{
         Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
         Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View, Volatility,
     },
-    traits::SchemaSerializer,
+    traits::{ConnectionMetadata, Feature, SchemaSerializer, SqlGenerator, Transaction},
 };
-use shem_parser::{
+use parser::{
     ast::{
-        CheckOption as ParserCheckOption, FunctionReturn, ParameterMode as ParserParameterMode,
-        Statement, TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
+        Statement,
     },
     parse_sql,
 };
-use shem_postgres::PostgresDriver;
+use shared_types::{
+    CheckOption as ParserCheckOption, FunctionReturn, ParameterMode as ParserParameterMode,
+    TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
+};
+use postgres::PostgresDriver;
 
 /// Represents all schema objects that can be created
 #[derive(Debug, Clone)]

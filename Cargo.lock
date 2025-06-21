@@ -339,6 +339,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "clap",
+ "glob",
+ "indexmap",
+ "insta",
+ "parser",
+ "petgraph 0.8.2",
+ "postgres",
+ "predicates",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shared-types",
+ "shem-core",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.12",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1236,6 +1270,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "parser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pg_query",
+ "serde",
+ "serde_json",
+ "shared-types",
+ "tokio",
+]
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1352,6 +1398,24 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "serde",
+ "serde_json",
+ "shem-core",
+ "sqlx",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "postgres-protocol"
@@ -1863,36 +1927,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "shem-cli"
+name = "shared-types"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "assert_cmd",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "clap",
- "glob",
- "indexmap",
- "insta",
- "petgraph 0.8.2",
- "predicates",
- "regex",
  "serde",
- "serde_json",
- "serde_yaml",
- "shem-core",
- "shem-parser",
- "shem-postgres",
- "sqlx",
- "tempfile",
- "thiserror 2.0.12",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -1905,48 +1943,11 @@ dependencies = [
  "postgres-types",
  "serde",
  "serde_json",
- "shem-shared-types",
+ "shared-types",
  "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
  "uuid",
-]
-
-[[package]]
-name = "shem-parser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "pg_query",
- "serde",
- "serde_json",
- "shem-shared-types",
- "tokio",
-]
-
-[[package]]
-name = "shem-postgres"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "serde",
- "serde_json",
- "shem-core",
- "sqlx",
- "tokio",
- "tokio-postgres",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "shem-shared-types"
-version = "0.1.0"
-dependencies = [
- "serde",
 ]
 
 [[package]]

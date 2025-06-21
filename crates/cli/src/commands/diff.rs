@@ -4,14 +4,16 @@ use shem_core::{
     DatabaseDriver, Schema,
     migration::{generate_migration, write_migration},
 };
-use shem_parser::{
+use parser::{
     ast::{
-        CheckOption, ParameterMode, PolicyCommand, Statement as ParserStatement, TableConstraint,
-        TriggerWhen,
+        Statement as ParserStatement,
     },
     parse_file,
 };
-use shem_postgres::PostgresDriver;
+use shared_types::{
+    CheckOption, DataType, FunctionReturn, ParameterMode, PolicyCommand, TableConstraint, TriggerWhen,
+};
+use postgres::PostgresDriver;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -159,17 +161,17 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             // Add columns
             for col in &create.columns {
                 let type_name = match &col.data_type {
-                    shem_parser::ast::DataType::Text => "TEXT".to_string(),
-                    shem_parser::ast::DataType::Integer => "INTEGER".to_string(),
-                    shem_parser::ast::DataType::BigInt => "BIGINT".to_string(),
-                    shem_parser::ast::DataType::SmallInt => "SMALLINT".to_string(),
-                    shem_parser::ast::DataType::Serial => "SERIAL".to_string(),
-                    shem_parser::ast::DataType::BigSerial => "BIGSERIAL".to_string(),
-                    shem_parser::ast::DataType::SmallSerial => "SMALLSERIAL".to_string(),
-                    shem_parser::ast::DataType::Boolean => "BOOLEAN".to_string(),
-                    shem_parser::ast::DataType::Real => "REAL".to_string(),
-                    shem_parser::ast::DataType::DoublePrecision => "DOUBLE PRECISION".to_string(),
-                    shem_parser::ast::DataType::Decimal(precision, scale) => {
+                    DataType::Text => "TEXT".to_string(),
+                    DataType::Integer => "INTEGER".to_string(),
+                    DataType::BigInt => "BIGINT".to_string(),
+                    DataType::SmallInt => "SMALLINT".to_string(),
+                    DataType::Serial => "SERIAL".to_string(),
+                    DataType::BigSerial => "BIGSERIAL".to_string(),
+                    DataType::SmallSerial => "SMALLSERIAL".to_string(),
+                    DataType::Boolean => "BOOLEAN".to_string(),
+                    DataType::Real => "REAL".to_string(),
+                    DataType::DoublePrecision => "DOUBLE PRECISION".to_string(),
+                    DataType::Decimal(precision, scale) => {
                         if let (Some(p), Some(s)) = (precision, scale) {
                             format!("DECIMAL({}, {})", p, s)
                         } else if let Some(p) = precision {
@@ -178,7 +180,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                             "DECIMAL".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Numeric(precision, scale) => {
+                    DataType::Numeric(precision, scale) => {
                         if let (Some(p), Some(s)) = (precision, scale) {
                             format!("NUMERIC({}, {})", p, s)
                         } else if let Some(p) = precision {
@@ -187,54 +189,54 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                             "NUMERIC".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Date => "DATE".to_string(),
-                    shem_parser::ast::DataType::Time(precision) => {
+                    DataType::Date => "DATE".to_string(),
+                    DataType::Time(precision) => {
                         if let Some(p) = precision {
                             format!("TIME({})", p)
                         } else {
                             "TIME".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Timestamp(precision) => {
+                    DataType::Timestamp(precision) => {
                         if let Some(p) = precision {
                             format!("TIMESTAMP({})", p)
                         } else {
                             "TIMESTAMP".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::TimestampTz(precision) => {
+                    DataType::TimestampTz(precision) => {
                         if let Some(p) = precision {
                             format!("TIMESTAMPTZ({})", p)
                         } else {
                             "TIMESTAMPTZ".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Interval(precision) => {
+                    DataType::Interval(precision) => {
                         if let Some(p) = precision {
                             format!("INTERVAL({:?})", p)
                         } else {
                             "INTERVAL".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Uuid => "UUID".to_string(),
-                    shem_parser::ast::DataType::Json => "JSON".to_string(),
-                    shem_parser::ast::DataType::JsonB => "JSONB".to_string(),
-                    shem_parser::ast::DataType::ByteA => "BYTEA".to_string(),
-                    shem_parser::ast::DataType::Character(length) => {
+                    DataType::Uuid => "UUID".to_string(),
+                    DataType::Json => "JSON".to_string(),
+                    DataType::JsonB => "JSONB".to_string(),
+                    DataType::ByteA => "BYTEA".to_string(),
+                    DataType::Character(length) => {
                         if let Some(l) = length {
                             format!("CHAR({})", l)
                         } else {
                             "CHAR".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::CharacterVarying(length) => {
+                    DataType::CharacterVarying(length) => {
                         if let Some(l) = length {
                             format!("VARCHAR({})", l)
                         } else {
                             "VARCHAR".to_string()
                         }
                     }
-                    shem_parser::ast::DataType::Custom(name) => name.clone(),
+                    DataType::Custom(name) => name.clone(),
                     _ => format!("{:?}", col.data_type), // Fallback for other types
                 };
 
@@ -252,7 +254,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         cache: None,
                         cycle: false,
                     }),
-                    generated: col.generated.as_ref().map(|g| shem_core::GeneratedColumn {
+                    generated: col.generated.as_ref().map(|g| shem_core::schema::GeneratedColumn {
                         expression: format!("{:?}", g.expression),
                         stored: g.stored,
                     }),
@@ -322,10 +324,10 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                     .check_option
                     .clone()
                     .map(|opt| match opt {
-                        CheckOption::Local => shem_core::CheckOption::Local,
-                        CheckOption::Cascaded => shem_core::CheckOption::Cascaded,
+                        CheckOption::Local => shem_core::schema::CheckOption::Local,
+                        CheckOption::Cascaded => shem_core::schema::CheckOption::Cascaded,
                     })
-                    .unwrap_or(shem_core::CheckOption::None),
+                    .unwrap_or(shem_core::schema::CheckOption::None),
                 comment: None,
                 security_barrier: false,
                 columns: Vec::new(),
@@ -337,7 +339,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 name: create.name.clone(),
                 schema: create.schema.clone(),
                 definition: create.query.clone(),
-                check_option: shem_core::CheckOption::None, // Materialized views don't have check options
+                check_option: shem_core::schema::CheckOption::None, // Materialized views don't have check options
                 comment: None,
                 tablespace: None,
                 storage_parameters: std::collections::HashMap::new(),
@@ -356,29 +358,29 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         .mode
                         .clone()
                         .map(|mode| match mode {
-                            ParameterMode::In => shem_core::ParameterMode::In,
-                            ParameterMode::Out => shem_core::ParameterMode::Out,
-                            ParameterMode::InOut => shem_core::ParameterMode::InOut,
-                            ParameterMode::Variadic => shem_core::ParameterMode::Variadic,
+                            ParameterMode::In => shem_core::schema::ParameterMode::In,
+                            ParameterMode::Out => shem_core::schema::ParameterMode::Out,
+                            ParameterMode::InOut => shem_core::schema::ParameterMode::InOut,
+                            ParameterMode::Variadic => shem_core::schema::ParameterMode::Variadic,
                         })
-                        .unwrap_or(shem_core::ParameterMode::In),
+                        .unwrap_or(shem_core::schema::ParameterMode::In),
                     default: param.default.as_ref().map(|d| format!("{:?}", d)),
                 };
                 parameters.push(parameter);
             }
 
             let returns = match &create.returns {
-                shem_parser::ast::FunctionReturn::Type(t) => shem_core::ReturnType {
+                FunctionReturn::Type(t) => shem_core::ReturnType {
                     kind: shem_core::ReturnKind::Scalar,
                     type_name: format!("{:?}", t),
                     is_set: false,
                 },
-                shem_parser::ast::FunctionReturn::Table(cols) => shem_core::ReturnType {
+                FunctionReturn::Table(cols) => shem_core::ReturnType {
                     kind: shem_core::ReturnKind::Table,
                     type_name: format!("{:?}", cols),
                     is_set: false,
                 },
-                shem_parser::ast::FunctionReturn::SetOf(t) => shem_core::ReturnType {
+                FunctionReturn::SetOf(t) => shem_core::ReturnType {
                     kind: shem_core::ReturnKind::SetOf,
                     type_name: format!("{:?}", t),
                     is_set: true,
@@ -412,12 +414,12 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         .mode
                         .clone()
                         .map(|mode| match mode {
-                            ParameterMode::In => shem_core::ParameterMode::In,
-                            ParameterMode::Out => shem_core::ParameterMode::Out,
-                            ParameterMode::InOut => shem_core::ParameterMode::InOut,
-                            ParameterMode::Variadic => shem_core::ParameterMode::Variadic,
+                            ParameterMode::In => shem_core::schema::ParameterMode::In,
+                            ParameterMode::Out => shem_core::schema::ParameterMode::Out,
+                            ParameterMode::InOut => shem_core::schema::ParameterMode::InOut,
+                            ParameterMode::Variadic => shem_core::schema::ParameterMode::Variadic,
                         })
-                        .unwrap_or(shem_core::ParameterMode::In),
+                        .unwrap_or(shem_core::schema::ParameterMode::In),
                     default: param.default.as_ref().map(|d| format!("{:?}", d)),
                 };
                 parameters.push(parameter);
@@ -495,7 +497,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                     TriggerWhen::After => shem_core::TriggerTiming::After,
                     TriggerWhen::InsteadOf => shem_core::TriggerTiming::InsteadOf,
                 },
-                events: vec![shem_core::TriggerEvent::Insert], // Default
+                events: vec![shem_core::schema::TriggerEvent::Insert], // Default
                 function: create.function.clone(),
                 arguments: create.arguments.clone(),
                 condition: None,
@@ -511,11 +513,11 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 table: create.table.clone(),
                 schema: None,
                 command: match create.command {
-                    PolicyCommand::All => shem_core::PolicyCommand::All,
-                    PolicyCommand::Select => shem_core::PolicyCommand::Select,
-                    PolicyCommand::Insert => shem_core::PolicyCommand::Insert,
-                    PolicyCommand::Update => shem_core::PolicyCommand::Update,
-                    PolicyCommand::Delete => shem_core::PolicyCommand::Delete,
+                    PolicyCommand::All => shem_core::schema::PolicyCommand::All,
+                    PolicyCommand::Select => shem_core::schema::PolicyCommand::Select,
+                    PolicyCommand::Insert => shem_core::schema::PolicyCommand::Insert,
+                    PolicyCommand::Update => shem_core::schema::PolicyCommand::Update,
+                    PolicyCommand::Delete => shem_core::schema::PolicyCommand::Delete,
                 },
                 permissive: create.permissive,
                 roles: create.roles.clone(),
@@ -538,9 +540,9 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
             if let Some(table) = schema.tables.get_mut(&alter.name) {
                 for action in &alter.actions {
                     match action {
-                        shem_parser::ast::AlterTableAction::AddConstraint(constraint) => {
+                        parser::ast::AlterTableAction::AddConstraint(constraint) => {
                             match constraint {
-                                shem_parser::ast::TableConstraint::PrimaryKey { columns, name } => {
+                                TableConstraint::PrimaryKey { columns, name } => {
                                     if !columns.is_empty() {
                                         let c = shem_core::Constraint {
                                             name: name.clone().unwrap_or_default(),
@@ -555,7 +557,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                         table.constraints.push(c);
                                     }
                                 }
-                                shem_parser::ast::TableConstraint::Unique { columns, name } => {
+                                TableConstraint::Unique { columns, name } => {
                                     if !columns.is_empty() {
                                         let c = shem_core::Constraint {
                                             name: name.clone().unwrap_or_default(),

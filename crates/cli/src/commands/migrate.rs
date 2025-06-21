@@ -6,9 +6,9 @@ use shem_core::{
     DatabaseDriver,
     DatabaseConnection,
     migration::Migration,
-    Transaction,
+    traits::Transaction,
 };
-use shem_postgres::PostgresDriver;
+use postgres::PostgresDriver;
 use std::fs;
 use std::path::Path;
 use serde_json;

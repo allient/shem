@@ -1,7 +1,7 @@
 use crate::config::Config;
 use anyhow::Result;
-use shem_parser::ast::Statement;
-use shem_parser::parse_file;
+use parser::ast::Statement;
+use parser::parse_file;
 use std::path::Path;
 use tracing::{error, info};
 
