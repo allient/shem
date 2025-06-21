@@ -178,6 +178,7 @@ The crate includes comprehensive tests covering:
 Run tests with:
 ```bash
 cargo test
+cargo test -p parser -- --nocapture
 ```
 
 ## Error Handling

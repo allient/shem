@@ -2294,31 +2294,6 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(client: &C) -> Res
     Ok(constraints)
 }
 
-// Helper functions for parsing
-
-fn parse_trigger_definition(definition: &str) -> (TriggerLevel, Option<String>) {
-    let mut for_each = TriggerLevel::Row; // Default
-    let mut condition = None;
-
-    // Parse FOR EACH clause
-    if definition.contains("FOR EACH ROW") {
-        for_each = TriggerLevel::Row;
-    } else if definition.contains("FOR EACH STATEMENT") {
-        for_each = TriggerLevel::Statement;
-    }
-
-    // Parse WHEN condition
-    if let Some(when_pos) = definition.find("WHEN (") {
-        if let Some(end_pos) = definition[when_pos..].find(')') {
-            let condition_start = when_pos + 6; // "WHEN (" length
-            let condition_end = when_pos + end_pos;
-            condition = Some(definition[condition_start..condition_end].to_string());
-        }
-    }
-
-    (for_each, condition)
-}
-
 fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
     if arguments.is_empty() {
         return Vec::new();

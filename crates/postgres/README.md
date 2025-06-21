@@ -110,9 +110,9 @@ The crate includes comprehensive tests that verify:
 
 Run tests with:
 ```bash
-cargo test -p shem-postgres -- --list
+cargo test -p postgres -- --list
 cargo test
-cargo test -p shem-postgres --test sql_generator -- --nocapture
+cargo test -p postgres --test sql_generator -- --nocapture
 cargo test test_generate_create_table -- --nocapture
 ```
 

@@ -1,5 +1,6 @@
-use shem_core::{Column, Type, TypeKind, SqlGenerator, Table, Constraint};
-use shem_postgres::PostgresSqlGenerator;
+use shem_core::schema::{Column, Type, TypeKind, Table, Constraint, CheckOption, ParameterMode, PolicyCommand, TriggerEvent, SortOrder, CollationProvider, RuleEvent, EventTriggerEvent};
+use shem_core::traits::SqlGenerator;
+use postgres::PostgresSqlGenerator;
 
 #[test]
 fn test_generate_create_enum_type() {
@@ -310,12 +311,12 @@ fn test_generate_create_domain_type_error() {
 
 #[test]
 fn test_drop_view() {
-    use shem_core::View;
+    use shem_core::schema::View;
     let view = View {
         name: "my_view".to_string(),
         schema: Some("public".to_string()),
         definition: "SELECT 1".to_string(),
-        check_option: shem_core::CheckOption::None,
+        check_option: CheckOption::None,
         comment: None,
         security_barrier: false,
         columns: vec![],
@@ -327,12 +328,12 @@ fn test_drop_view() {
 
 #[test]
 fn test_drop_materialized_view() {
-    use shem_core::MaterializedView;
+    use shem_core::schema::MaterializedView;
     let view = MaterializedView {
         name: "mat_view".to_string(),
         schema: None,
         definition: "SELECT 1".to_string(),
-        check_option: shem_core::CheckOption::None,
+        check_option: CheckOption::None,
         comment: None,
         tablespace: None,
         storage_parameters: Default::default(),
@@ -346,24 +347,24 @@ fn test_drop_materialized_view() {
 
 #[test]
 fn test_drop_function() {
-    use shem_core::{Function, Parameter, ReturnType, ReturnKind};
+    use shem_core::schema::{Function, Parameter, ReturnType, ReturnKind, Volatility, ParallelSafety};
     let func = Function {
         name: "my_func".to_string(),
         schema: Some("public".to_string()),
         parameters: vec![Parameter {
             name: "a".to_string(),
             type_name: "int".to_string(),
-            mode: shem_core::ParameterMode::In,
+            mode: ParameterMode::In,
             default: None,
         }],
         returns: ReturnType { kind: ReturnKind::Scalar, type_name: "int".to_string(), is_set: false },
         language: "sql".to_string(),
         definition: "SELECT 1".to_string(),
         comment: None,
-        volatility: shem_core::Volatility::Immutable,
+        volatility: Volatility::Immutable,
         strict: false,
         security_definer: false,
-        parallel_safety: shem_core::ParallelSafety::Safe,
+        parallel_safety: ParallelSafety::Safe,
         cost: None,
         rows: None,
     };
@@ -374,7 +375,7 @@ fn test_drop_function() {
 
 #[test]
 fn test_drop_procedure() {
-    use shem_core::{Procedure, Parameter};
+    use shem_core::schema::Procedure;
     let proc = Procedure {
         name: "my_proc".to_string(),
         schema: None,
@@ -391,11 +392,11 @@ fn test_drop_procedure() {
 
 #[test]
 fn test_drop_type() {
-    use shem_core::Type;
+    use shem_core::schema::Type;
     let typ = Type {
         name: "my_type".to_string(),
         schema: None,
-        kind: shem_core::TypeKind::Base,
+        kind: TypeKind::Base,
         comment: None,
         definition: None,
     };
@@ -406,7 +407,7 @@ fn test_drop_type() {
 
 #[test]
 fn test_drop_domain() {
-    use shem_core::Domain;
+    use shem_core::schema::Domain;
     let dom = Domain {
         name: "my_domain".to_string(),
         schema: None,
@@ -423,7 +424,7 @@ fn test_drop_domain() {
 
 #[test]
 fn test_drop_sequence() {
-    use shem_core::Sequence;
+    use shem_core::schema::Sequence;
     let seq = Sequence {
         name: "my_seq".to_string(),
         schema: None,
@@ -444,7 +445,7 @@ fn test_drop_sequence() {
 
 #[test]
 fn test_alter_extension() {
-    use shem_core::Extension;
+    use shem_core::schema::Extension;
     let ext = Extension {
         name: "uuid-ossp".to_string(),
         schema: None,
@@ -459,7 +460,7 @@ fn test_alter_extension() {
 
 #[test]
 fn test_drop_extension() {
-    use shem_core::Extension;
+    use shem_core::schema::Extension;
     let ext = Extension {
         name: "uuid-ossp".to_string(),
         schema: None,
@@ -474,7 +475,7 @@ fn test_drop_extension() {
 
 #[test]
 fn test_drop_trigger() {
-    use shem_core::{Trigger, TriggerTiming, TriggerEvent, TriggerLevel};
+    use shem_core::schema::{Trigger, TriggerTiming, TriggerEvent, TriggerLevel};
     let trig = Trigger {
         name: "my_trigger".to_string(),
         table: "my_table".to_string(),
@@ -495,12 +496,12 @@ fn test_drop_trigger() {
 
 #[test]
 fn test_drop_policy() {
-    use shem_core::Policy;
+    use shem_core::schema::Policy;
     let pol = Policy {
         name: "my_policy".to_string(),
         table: "my_table".to_string(),
         schema: None,
-        command: shem_core::PolicyCommand::All,
+        command: PolicyCommand::All,
         permissive: true,
         roles: vec![],
         using: None,
@@ -513,7 +514,7 @@ fn test_drop_policy() {
 
 #[test]
 fn test_drop_server() {
-    use shem_core::Server;
+    use shem_core::schema::Server;
     let srv = Server {
         name: "my_server".to_string(),
         foreign_data_wrapper: "fdw".to_string(),
@@ -527,7 +528,7 @@ fn test_drop_server() {
 
 #[test]
 fn test_create_index_and_drop_index() {
-    use shem_core::{Index, IndexColumn, IndexMethod, SortOrder};
+    use shem_core::schema::{Index, IndexColumn, IndexMethod};
     let idx = Index {
         name: "my_idx".to_string(),
         columns: vec![IndexColumn {
@@ -552,7 +553,7 @@ fn test_create_index_and_drop_index() {
 
 #[test]
 fn test_create_collation_and_drop_collation() {
-    use shem_core::{Collation, CollationProvider};
+    use shem_core::schema::Collation;
     let coll = Collation {
         name: "my_collation".to_string(),
         schema: None,
@@ -571,7 +572,7 @@ fn test_create_collation_and_drop_collation() {
 
 #[test]
 fn test_create_rule_and_drop_rule() {
-    use shem_core::{Rule, RuleEvent};
+    use shem_core::schema::Rule;
     let rule = Rule {
         name: "my_rule".to_string(),
         table: "my_table".to_string(),
@@ -590,7 +591,7 @@ fn test_create_rule_and_drop_rule() {
 
 #[test]
 fn test_create_event_trigger_and_drop_event_trigger() {
-    use shem_core::{EventTrigger, EventTriggerEvent};
+    use shem_core::schema::EventTrigger;
     let trig = EventTrigger {
         name: "my_evt_trig".to_string(),
         event: EventTriggerEvent::DdlCommandStart,
@@ -608,7 +609,7 @@ fn test_create_event_trigger_and_drop_event_trigger() {
 
 #[test]
 fn test_create_constraint_trigger_and_drop_constraint_trigger() {
-    use shem_core::{ConstraintTrigger, TriggerTiming, TriggerEvent};
+    use shem_core::schema::{ConstraintTrigger, TriggerTiming};
     let trig = ConstraintTrigger {
         name: "my_constr_trig".to_string(),
         table: "my_table".to_string(),
@@ -730,7 +731,7 @@ fn test_create_materialized_view_with_data() {
         name: "my_view".to_string(),
         schema: None,
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: shem_core::CheckOption::None,
+        check_option: CheckOption::None,
         comment: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
@@ -749,7 +750,7 @@ fn test_create_materialized_view_with_no_data() {
         name: "my_view".to_string(),
         schema: None,
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: shem_core::CheckOption::None,
+        check_option: CheckOption::None,
         comment: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
@@ -768,7 +769,7 @@ fn test_create_materialized_view_with_reserved_keyword() {
         name: "order".to_string(), // Reserved keyword
         schema: None,
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: shem_core::CheckOption::None,
+        check_option: CheckOption::None,
         comment: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
@@ -782,7 +783,7 @@ fn test_create_materialized_view_with_reserved_keyword() {
 
 #[test]
 fn test_generate_alter_table() {
-    use shem_core::{Table, Column, Constraint, ConstraintKind, Identity, GeneratedColumn};
+    use shem_core::schema::{Table, Column, Constraint, ConstraintKind, Identity, GeneratedColumn};
     
     // Old table with some columns and constraints
     let old_table = Table {

@@ -28,7 +28,7 @@ async-trait = "0.1"
 
 # Database dependencies
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid"] }
-postgres = "0.19"
+postgres-types = "0.2.9"
 pg_query = "6.0.0"
 tokio-postgres = { version = "0.7.13", features = [
     "with-uuid-1",

@@ -159,6 +159,9 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
         FunctionReturn::Type(DataType::Text) // Default to Text instead of Void
     };
 
+    // Debug: Print function options
+    println!("[DEBUG] Function options: {:#?}", stmt.options);
+
     // Parse function options
     let (language, behavior, security, parallel, cost, rows, support) =
         parse_function_options(&stmt.options)?;
@@ -478,7 +481,7 @@ fn parse_function_return(_return_type: &protobuf::Node) -> Result<FunctionReturn
 }
 
 fn parse_function_options(
-    _options: &[protobuf::Node],
+    options: &[protobuf::Node],
 ) -> Result<(
     String,
     FunctionBehavior,
@@ -488,16 +491,31 @@ fn parse_function_options(
     Option<u32>,
     Option<String>,
 )> {
-    // TODO: Implement options parsing
-    Ok((
-        "sql".to_string(),
-        FunctionBehavior::Volatile,
-        SecurityType::Invoker,
-        ParallelType::Unsafe,
-        None,
-        None,
-        None,
-    ))
+    let mut language = "sql".to_string();
+    let mut behavior = FunctionBehavior::Volatile;
+    let mut security = SecurityType::Invoker;
+    let mut parallel = ParallelType::Unsafe;
+    let mut cost: Option<u32> = None;
+    let mut rows: Option<u32> = None;
+    let mut support: Option<String> = None;
+
+    for opt in options {
+        if let Some(node::Node::DefElem(def)) = &opt.node {
+            match def.defname.as_str() {
+                "language" => {
+                    if let Some(arg) = &def.arg {
+                        if let Some(node::Node::String(str_val)) = &arg.node {
+                            language = str_val.sval.clone();
+                        }
+                    }
+                }
+                // TODO: Parse other options (behavior, security, parallel, cost, rows, support)
+                _ => {}
+            }
+        }
+    }
+
+    Ok((language, behavior, security, parallel, cost, rows, support))
 }
 
 // Additional parsing functions for other statement types
@@ -652,14 +670,17 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
     let schema = None; // TODO: Parse schema
     let permissive = stmt.permissive;
 
-    // Parse the command name
-    let command = match stmt.cmd_name.as_str() {
+    // Debug: Print policy command string
+    println!("[DEBUG] Policy command string: {}", stmt.cmd_name);
+
+    // Parse the command name - make case-insensitive
+    let command = match stmt.cmd_name.to_lowercase().as_str() {
         "" => PolicyCommand::Select, // Default to SELECT if not specified
-        "ALL" => PolicyCommand::All,
-        "SELECT" => PolicyCommand::Select,
-        "INSERT" => PolicyCommand::Insert,
-        "UPDATE" => PolicyCommand::Update,
-        "DELETE" => PolicyCommand::Delete,
+        "all" => PolicyCommand::All,
+        "select" => PolicyCommand::Select,
+        "insert" => PolicyCommand::Insert,
+        "update" => PolicyCommand::Update,
+        "delete" => PolicyCommand::Delete,
         _ => PolicyCommand::All, // Default fallback
     };
 
