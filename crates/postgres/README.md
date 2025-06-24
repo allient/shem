@@ -13,10 +13,10 @@ This crate serves as the PostgreSQL implementation of Shem's database driver int
 - Generate PostgreSQL-specific SQL statements
 - Handle PostgreSQL-specific features and data types
 
-Direction: Database → Structured Data
-Input: Live PostgreSQL database connection
-Output: Schema objects from database queries
-Used by: introspect command and database operations
+**Direction**: Database → Structured Data  
+**Input**: Live PostgreSQL database connection  
+**Output**: Schema objects from database queries  
+**Used by**: introspect command and database operations
 
 ## Key Components
 
@@ -52,6 +52,110 @@ Implements the `DatabaseDriver` trait from `shem-core`:
 - Error handling and result types
 - PostgreSQL-specific configuration
 
+## PostgreSQL Object Support Status
+
+### ✅ Fully Implemented Objects
+
+| Object Type | Introspection | SQL Generation | Description |
+|-------------|---------------|----------------|-------------|
+| **Tables** | ✅ Complete | ✅ Complete | Base tables with columns, constraints, indexes |
+| **Views** | ✅ Complete | ✅ Complete | Virtual tables based on SQL queries |
+| **Materialized Views** | ✅ Complete | ✅ Complete | Materialized query results with refresh options |
+| **Functions** | ✅ Complete | ✅ Complete | User-defined functions with parameters and return types |
+| **Procedures** | ✅ Complete | ✅ Complete | Stored procedures (PostgreSQL 11+) |
+| **Enums** | ✅ Complete | ✅ Complete | Custom enumerated types |
+| **Composite Types** | ✅ Complete | ✅ Complete | User-defined composite types |
+| **Range Types** | ✅ Complete | ✅ Complete | Custom range types (int4range, etc.) |
+| **Domains** | ✅ Complete | ✅ Complete | Custom data types with constraints |
+| **Sequences** | ✅ Complete | ✅ Complete | Auto-incrementing number generators |
+| **Extensions** | ✅ Complete | ✅ Complete | PostgreSQL extensions and their objects |
+| **Triggers** | ✅ Complete | ✅ Complete | Row and statement-level triggers |
+| **Constraint Triggers** | ✅ Complete | ✅ Complete | Triggers for constraint enforcement |
+| **Event Triggers** | ✅ Complete | ✅ Complete | Database-level event triggers |
+| **Policies** | ✅ Complete | ✅ Complete | Row-level security policies |
+| **Indexes** | ✅ Complete | ✅ Complete | All index types (B-tree, Hash, GiST, etc.) |
+| **Collations** | ✅ Complete | ✅ Complete | Text sorting and comparison rules |
+| **Rules** | ✅ Complete | ✅ Complete | Query rewrite rules |
+| **Servers** | ✅ Complete | ✅ Complete | Foreign data wrapper servers |
+| **Foreign Tables** | ✅ Complete | ✅ Complete | Tables in external data sources |
+| **Foreign Data Wrappers** | ✅ Complete | ✅ Complete | External data source connectors |
+| **Publications** | ✅ Complete | ✅ Complete | Logical replication publications |
+| **Subscriptions** | ✅ Complete | ✅ Complete | Logical replication subscriptions |
+| **Roles** | ✅ Complete | ✅ Complete | Database users and roles |
+| **Tablespaces** | ✅ Complete | ✅ Complete | Physical storage locations |
+| **Named Schemas** | ✅ Complete | ✅ Complete | Schema namespaces |
+| **Foreign Key Constraints** | ✅ Complete | ✅ Complete | Referential integrity constraints |
+
+### 🔶 Partially Implemented Objects
+
+| Object Type | Introspection | SQL Generation | Description | Missing Features |
+|-------------|---------------|----------------|-------------|------------------|
+| **Comments** | ✅ Complete | ✅ Complete | Object documentation | Limited to basic COMMENT ON statements |
+| **Grants/Privileges** | ❌ Missing | ✅ Basic | Permission management | No introspection of existing grants |
+
+### ❌ Not Yet Implemented Objects
+
+| Object Type | Priority | Description | Use Cases |
+|-------------|----------|-------------|-----------|
+| **Casts** | Medium | Type conversion rules | Custom type conversions |
+| **Operators** | Medium | Custom operators (e.g., `#>`, `+=`) | Custom data type operations |
+| **Operator Classes** | Medium | Index behavior definitions | Custom index types |
+| **Aggregates** | Low | Custom aggregation functions | Statistical and analytical functions |
+| **Languages** | Low | Procedural languages | PL/pgSQL, PL/Python, etc. |
+| **Conversions** | Low | Character set conversions | Internationalization |
+| **Text Search Configurations** | Low | Full-text search settings | Advanced text search |
+| **Text Search Dictionaries** | Low | Text search dictionaries | Full-text search customization |
+| **Text Search Parsers** | Low | Text search parsers | Full-text search parsing |
+| **Text Search Templates** | Low | Text search templates | Full-text search templates |
+| **Foreign Data Wrapper Handlers** | Low | FDW handler functions | Custom FDW implementations |
+| **Foreign Data Wrapper Validators** | Low | FDW validator functions | FDW configuration validation |
+| **Transformations** | Low | Type transformations | Custom type transformations |
+| **Access Methods** | Low | Custom access methods | Custom index types |
+| **Statistics Objects** | Low | Extended statistics | Query optimization |
+| **Replication Origins** | Low | Logical replication origins | Replication tracking |
+
+## PostgreSQL Features Supported
+
+### Data Types
+- **Native Types**: All PostgreSQL built-in types (integer, text, boolean, etc.)
+- **Array Types**: Multi-dimensional arrays with custom element types
+- **JSON Types**: JSON, JSONB with operators and functions
+- **Geometric Types**: Point, line, polygon, circle, etc.
+- **Network Types**: Inet, cidr, macaddr, macaddr8
+- **UUID**: Universally unique identifiers
+- **Range Types**: Built-in and custom range types
+- **Composite Types**: User-defined structured types
+- **Domain Types**: Constrained base types
+
+### Constraints
+- **Primary Keys**: Single and composite primary keys
+- **Foreign Keys**: Referential integrity with cascade options
+- **Unique Constraints**: Single and composite unique constraints
+- **Check Constraints**: Custom validation rules
+- **Exclusion Constraints**: Complex constraint types
+- **NOT NULL**: Column-level nullability constraints
+
+### Indexes
+- **B-tree**: Default balanced tree indexes
+- **Hash**: Hash-based indexes for equality
+- **GiST**: Generalized Search Tree indexes
+- **SP-GiST**: Space-partitioned GiST indexes
+- **GIN**: Generalized Inverted indexes
+- **BRIN**: Block Range INdexes
+- **Partial Indexes**: Indexes with WHERE conditions
+- **Expression Indexes**: Indexes on computed expressions
+- **Operator Classes**: Custom index behavior
+
+### Advanced Features
+- **Partitioning**: Range, list, and hash partitioning
+- **Inheritance**: Table inheritance hierarchies
+- **Row-Level Security**: Fine-grained access control
+- **Generated Columns**: Computed column values
+- **Identity Columns**: Auto-incrementing columns
+- **Foreign Data**: External data source integration
+- **Logical Replication**: Publication and subscription support
+- **Event Triggers**: Database-level event handling
+
 ## Usage
 
 This crate is primarily used internally by the Shem CLI tool. It's not typically used directly by end users, but rather through the main Shem commands:
@@ -62,6 +166,12 @@ shem introspect postgresql://user:pass@localhost/dbname
 
 # Generate migrations by comparing schema files with database
 shem diff schema.sql --database postgresql://user:pass@localhost/dbname
+
+# Validate schema files
+shem validate schema.sql
+
+# Generate SQL from schema files
+shem generate schema.sql
 ```
 
 ## Architecture
@@ -85,19 +195,7 @@ shem diff schema.sql --database postgresql://user:pass@localhost/dbname
 - `shem-core`: Core schema types and traits
 - `anyhow`: Error handling
 - `serde`: Serialization support
-
-## PostgreSQL Features Supported
-
-- **Data Types**: All PostgreSQL native types including arrays, JSON, UUID, etc.
-- **Constraints**: Primary keys, foreign keys, unique, check, exclusion
-- **Indexes**: B-tree, hash, GiST, SP-GiST, GIN, BRIN with custom options
-- **Partitioning**: Range, list, and hash partitioning
-- **Inheritance**: Table inheritance
-- **Row-Level Security**: Policies and security barriers
-- **Extensions**: Custom extensions and their objects
-- **Foreign Data**: Foreign tables, servers, and data wrappers
-- **Replication**: Publications and subscriptions
-- **Advanced Features**: Event triggers, constraint triggers, rules
+- `async-trait`: Async trait support
 
 ## Testing
 
@@ -110,23 +208,63 @@ The crate includes comprehensive tests that verify:
 
 Run tests with:
 ```bash
-cargo test -p postgres -- --list
-cargo test
+# Run all tests
+cargo test -p postgres
+
+# Run specific test suites
 cargo test -p postgres --test sql_generator -- --nocapture
 cargo test test_generate_create_table -- --nocapture
+
+# List all available tests
+cargo test -p postgres -- --list
 ```
 
 ## Contributing
 
 When adding new PostgreSQL features:
 
-1. Add the introspection query in `introspection.rs`
-2. Add corresponding SQL generation in `sql_generator.rs`
-3. Update tests to cover the new functionality
-4. Ensure proper error handling and edge cases
+1. **Add introspection**: Implement the `introspect_*` function in `introspection.rs`
+2. **Add SQL generation**: Implement the corresponding `create_*` and `drop_*` methods in `sql_generator.rs`
+3. **Update schema types**: Add new types to `shem-core` if needed
+4. **Add tests**: Create comprehensive tests for the new functionality
+5. **Update documentation**: Add the new object type to this README
+
+### Development Guidelines
+
+- Follow PostgreSQL naming conventions
+- Handle edge cases and error conditions
+- Ensure proper dependency ordering
+- Add comprehensive test coverage
+- Document any PostgreSQL-specific behavior
 
 ## Related Crates
 
 - `shem-core`: Core schema types and database driver traits
 - `shem-parser`: SQL parsing for schema files
-- `shem-cli`: Command-line interface that uses this crate 
+- `shem-cli`: Command-line interface that uses this crate
+- `shem-shared-types`: Shared type definitions
+
+## PostgreSQL Version Compatibility
+
+This crate is designed to work with PostgreSQL 10.0 and later, with full support for:
+
+- **PostgreSQL 10+**: Basic functionality
+- **PostgreSQL 11+**: Procedures, generated columns
+- **PostgreSQL 12+**: Generated columns improvements
+- **PostgreSQL 13+**: Logical replication improvements
+- **PostgreSQL 14+**: Range type improvements
+- **PostgreSQL 15+**: Latest features and optimizations
+
+## Performance Considerations
+
+- **Introspection**: Optimized queries to minimize database load
+- **SQL Generation**: Efficient string building and formatting
+- **Memory Usage**: Streaming processing for large schemas
+- **Connection Pooling**: Reuses database connections when possible
+
+## Security Features
+
+- **Connection Security**: Supports SSL/TLS connections
+- **Privilege Management**: Handles GRANT/REVOKE statements
+- **Row-Level Security**: Full support for RLS policies
+- **Schema Isolation**: Proper schema namespace handling 

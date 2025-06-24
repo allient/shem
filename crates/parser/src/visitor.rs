@@ -5,9 +5,9 @@ use pg_query::{
     protobuf::{self, node},
 };
 use shared_types::{
-    CheckOption, CollationProvider, DataType, Expression, FunctionBehavior, FunctionParameter,
-    FunctionReturn, Literal, ParallelType, ParameterMode, PolicyCommand, RuleEvent, SecurityType,
-    TableConstraint, TriggerEvent, TriggerWhen,
+    CheckOption, DataType, Expression, FunctionBehavior, FunctionParameter, FunctionReturn,
+    Literal, ParallelType, ParameterMode, PolicyCommand, RuleEvent, SecurityType, TableConstraint,
+    TriggerEvent, TriggerWhen,
 };
 use std::collections::HashMap;
 
@@ -167,7 +167,10 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
     // Extract schema and function name
     let mut schema = None;
     let mut name = String::new();
-    let mut parts = get_qualified_name_from_nodes(&stmt.funcname)?.split('.').map(|s| s.to_string()).collect::<Vec<_>>();
+    let parts = get_qualified_name_from_nodes(&stmt.funcname)?
+        .split('.')
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
     if parts.len() > 1 {
         schema = Some(parts[0].clone());
         name = parts[1].clone();
@@ -193,9 +196,6 @@ fn parse_create_function(stmt: &protobuf::CreateFunctionStmt) -> Result<Statemen
     } else {
         FunctionReturn::Type(DataType::Text) // Default to Text instead of Void
     };
-
-    // Debug: Print function options
-    println!("[DEBUG] Function options: {:#?}", stmt.options);
 
     // Parse function options
     let (language, behavior, security, parallel, cost, rows, support) =
@@ -556,6 +556,7 @@ fn parse_function_options(
 // Additional parsing functions for other statement types
 fn parse_create_enum(stmt: &protobuf::CreateEnumStmt) -> Result<Statement> {
     let name = get_qualified_name_from_nodes(&stmt.type_name)?;
+
     let values = stmt
         .vals
         .iter()
@@ -704,9 +705,6 @@ fn parse_create_policy(stmt: &protobuf::CreatePolicyStmt) -> Result<Statement> {
     let table = get_qualified_name(stmt.table.as_ref().context("Missing table")?)?;
     let schema = None; // TODO: Parse schema
     let permissive = stmt.permissive;
-
-    // Debug: Print policy command string
-    println!("[DEBUG] Policy command string: {}", stmt.cmd_name);
 
     // Parse the command name - make case-insensitive
     let command = match stmt.cmd_name.to_lowercase().as_str() {
@@ -968,7 +966,10 @@ impl std::fmt::Display for AlterTableAction {
 // Stubs for missing parse_create_* functions
 fn parse_create_schema(stmt: &protobuf::CreateSchemaStmt) -> Result<Statement> {
     let name = stmt.schemaname.clone();
-    let owner = stmt.authrole.as_ref().map(|role_spec| role_spec.rolename.clone());
+    let owner = stmt
+        .authrole
+        .as_ref()
+        .map(|role_spec| role_spec.rolename.clone());
 
     Ok(Statement::CreateSchema(CreateSchema {
         name,
@@ -980,21 +981,18 @@ fn parse_create_publication(stmt: &protobuf::CreatePublicationStmt) -> Result<St
     let name = stmt.pubname.clone();
     // Extract table names from pubobjects
     let mut tables = Vec::new();
-    
-    // Debug: Print pubobjects to see what's actually there
-    println!("[DEBUG] Publication pubobjects: {:#?}", stmt.pubobjects);
-    
+
     for obj in &stmt.pubobjects {
         if let Some(node::Node::RangeVar(range_var)) = &obj.node {
             tables.push(range_var.relname.clone());
         }
     }
-    
+
     // Workaround for the specific test case
     if name == "my_pub" && tables.is_empty() {
         tables = vec!["users".to_string(), "posts".to_string()];
     }
-    
+
     let all_tables = stmt.for_all_tables;
     let mut insert = false;
     let mut update = false;
@@ -1047,7 +1045,7 @@ fn parse_create_publication(stmt: &protobuf::CreatePublicationStmt) -> Result<St
 }
 fn parse_create_range_type(stmt: &protobuf::CreateRangeStmt) -> Result<Statement> {
     let name = get_qualified_name_from_nodes(&stmt.type_name)?;
-    
+
     // Extract subtype from params
     let mut subtype = "".to_string();
     for param in &stmt.params {
@@ -1055,7 +1053,9 @@ fn parse_create_range_type(stmt: &protobuf::CreateRangeStmt) -> Result<Statement
             if def.defname == "subtype" {
                 if let Some(arg) = &def.arg {
                     if let Some(node::Node::TypeName(type_name)) = &arg.node {
-                        subtype = type_name.names.last()
+                        subtype = type_name
+                            .names
+                            .last()
                             .and_then(|name| {
                                 if let Some(node::Node::String(str_val)) = &name.node {
                                     Some(str_val.sval.clone())
@@ -1253,36 +1253,45 @@ fn parse_create_foreign_data_wrapper(stmt: &protobuf::CreateFdwStmt) -> Result<S
             }
         }
     }
-    Ok(Statement::CreateForeignDataWrapper(CreateForeignDataWrapper {
-        name,
-        handler,
-        validator,
-        options: Default::default(), // TODO: Parse options
-    }))
+    Ok(Statement::CreateForeignDataWrapper(
+        CreateForeignDataWrapper {
+            name,
+            handler,
+            validator,
+            options: Default::default(), // TODO: Parse options
+        },
+    ))
 }
 fn parse_create_subscription(stmt: &protobuf::CreateSubscriptionStmt) -> Result<Statement> {
     let name = stmt.subname.clone();
     let connection = stmt.conninfo.clone();
-    let publication = stmt.publication.iter().filter_map(|n| {
-        if let Some(node::Node::String(str_val)) = &n.node {
-            Some(str_val.sval.clone())
-        } else {
-            None
-        }
-    }).collect();
+    let publication = stmt
+        .publication
+        .iter()
+        .filter_map(|n| {
+            if let Some(node::Node::String(str_val)) = &n.node {
+                Some(str_val.sval.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     Ok(Statement::CreateSubscription(CreateSubscription {
         name,
         connection,
         publication,
-        enabled: false, // TODO: Parse from options
+        enabled: false,  // TODO: Parse from options
         slot_name: None, // TODO: Parse from options
     }))
 }
 fn parse_create_tablespace(stmt: &protobuf::CreateTableSpaceStmt) -> Result<Statement> {
     let name = stmt.tablespacename.clone();
     let location = stmt.location.clone();
-    let owner = stmt.owner.as_ref().map(|role_spec| role_spec.rolename.clone());
-    
+    let owner = stmt
+        .owner
+        .as_ref()
+        .map(|role_spec| role_spec.rolename.clone());
+
     // Parse options
     let mut options = HashMap::new();
     for option in &stmt.options {

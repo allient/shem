@@ -1,12 +1,15 @@
+use crate::config::Config;
 use anyhow::{Result as AnyhowResult, anyhow};
 use async_trait::async_trait;
+use parser::{ast::Statement, parse_sql};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
+use postgres::PostgresDriver;
 use regex;
-use std::path::PathBuf;
-use tracing::info;
-
-use crate::config::Config;
+use shared_types::{
+    CheckOption as ParserCheckOption, FunctionReturn, ParameterMode as ParserParameterMode,
+    TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
+};
 use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
@@ -14,30 +17,21 @@ use shem_core::{
         ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
         GeneratedColumn, Identity, MaterializedView, ParallelSafety, Parameter, ParameterMode,
         Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
-        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View, Volatility,
+        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View, Volatility, RangeType
     },
-    traits::{ConnectionMetadata, Feature, SchemaSerializer, SqlGenerator, Transaction},
+    traits::SchemaSerializer,
 };
-use parser::{
-    ast::{
-        Statement,
-    },
-    parse_sql,
-};
-use shared_types::{
-    CheckOption as ParserCheckOption, FunctionReturn, ParameterMode as ParserParameterMode,
-    TableConstraint, TriggerEvent as ParserTriggerEvent, TriggerWhen,
-};
-use postgres::PostgresDriver;
+use std::path::PathBuf;
+use tracing::info;
 
 /// Represents all schema objects that can be created
 #[derive(Debug, Clone)]
 enum SchemaObject<'a> {
     Extension(&'a Extension),
     Collation(&'a Collation),
-    Enum(&'a Type),
+    Enum(&'a EnumType),
     CompositeType(&'a Type),
-    RangeType(&'a Type),
+    RangeType(&'a RangeType),
     Domain(&'a Domain),
     Sequence(&'a Sequence),
     Table(&'a Table),

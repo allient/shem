@@ -7,20 +7,20 @@ mod visitor;
 pub use ast::*;
 pub use visitor::*;
 
-/// Parse SQL file into AST
+/// Parse SQL file into an array of statements (AST - Abstract Syntax Tree)
 pub fn parse_file(path: &Path) -> Result<Vec<Statement>> {
     let content = std::fs::read_to_string(path)?;
     parse_sql(&content)
 }
 
-/// Parse SQL string into AST
+/// Parse SQL string into an array of statements (AST - Abstract Syntax Tree)
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let result = pg_query::parse(sql)?;
     let statements = visitor::parse_statements(&result)?;
     Ok(statements)
 }
 
-/// Parse SQL into schema definition
+/// Parse SQL into schema definition (Schema Definition Language)
 pub fn parse_schema(sql: &str) -> Result<SchemaDefinition> {
     let statements = parse_sql(sql)?;
     let mut schema = SchemaDefinition::new();
