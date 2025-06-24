@@ -15,8 +15,8 @@
 use shem_core::{
     Collation, ConstraintTrigger, Domain, EventTrigger, Extension, Function, Index,
     IndexMethod, MaterializedView, Policy, Procedure, Rule, Sequence, Server,
-    Table, Trigger, Type, TypeKind, View,
-    schema::{CheckOption, CollationProvider, EventTriggerEvent, ParameterMode, PolicyCommand, RuleEvent, SortOrder, TriggerEvent, TriggerLevel, TriggerTiming},
+    Table, Trigger, View,
+    schema::{CheckOption, CollationProvider, EventTriggerEvent, ParameterMode, PolicyCommand, RuleEvent, SortOrder, TriggerEvent, TriggerLevel, TriggerTiming, BaseType, ArrayType, MultirangeType},
     traits::SqlGenerator,
 };
 use shem_core::{EnumType, Result};
@@ -135,6 +135,11 @@ impl PostgresSqlGenerator {
         } else {
             identifier.to_string()
         }
+    }
+
+    fn is_reserved_keyword(name: &str) -> bool {
+        // Add more reserved keywords as needed
+        matches!(name.to_ascii_lowercase().as_str(), "order")
     }
 }
 
@@ -484,6 +489,18 @@ impl SqlGenerator for PostgresSqlGenerator {
         Ok((up_statements, down_statements))
     }
 
+    fn generate_create_enum(&self, enum_type: &EnumType) -> Result<String> {
+        let enum_name = Self::quote_identifier(&enum_type.name);
+        let values = enum_type
+            .values
+            .iter()
+            .map(|v| format!("'{}'", v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("CREATE TYPE {} AS ENUM ({});", enum_name, values);
+        Ok(sql)
+    }
+
     fn generate_drop_table(&self, table: &Table) -> Result<String> {
         let table_name = Self::quote_identifier(&table.name);
         Ok(format!("DROP TABLE IF EXISTS {} CASCADE;", table_name))
@@ -571,91 +588,6 @@ impl SqlGenerator for PostgresSqlGenerator {
             "CREATE OR REPLACE PROCEDURE {}.{}({}) LANGUAGE {} AS $procedure$ {} $procedure$;",
             schema, procedure_name, params, language, body
         ))
-    }
-
-    fn generate_create_type(&self, type_def: &Type) -> Result<String> {
-        let type_name = Self::quote_identifier(&type_def.name);
-        let mut sql = format!("CREATE TYPE {}", type_name);
-
-        if let Some(schema) = &type_def.schema {
-            sql = format!("CREATE TYPE {}.{}", schema, type_name);
-        }
-
-        match &type_def.kind {
-            TypeKind::Enum { values } => {
-                sql.push_str(" AS ENUM (");
-                let values_str = values
-                    .iter()
-                    .map(|v| format!("'{}'", v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                sql.push_str(&values_str);
-                sql.push_str(")");
-            }
-            TypeKind::Composite { attributes } => {
-                sql.push_str(" AS (");
-                let attrs = attributes
-                    .iter()
-                    .map(|attr| {
-                        format!("{} {}", Self::quote_identifier(&attr.name), attr.type_name)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                sql.push_str(&attrs);
-                sql.push_str(")");
-            }
-            TypeKind::Domain => {
-                // Domains are handled separately by create_domain method
-                // This should not be called for domains
-                return Err(shem_core::Error::Schema(
-                    "Domain types should be created using create_domain method".into(),
-                ));
-            }
-            TypeKind::Range => {
-                sql.push_str(" AS RANGE (SUBTYPE = ");
-                if let Some(def) = &type_def.definition {
-                    sql.push_str(def);
-                } else {
-                    sql.push_str("integer"); // Default subtype
-                }
-                sql.push_str(")");
-            }
-            TypeKind::Base => {
-                // For base types, use the definition directly or default to integer
-                sql.push_str(" AS (");
-                if let Some(def) = &type_def.definition {
-                    sql.push_str(def);
-                } else {
-                    sql.push_str("integer"); // Default base type
-                }
-                sql.push_str(")");
-            }
-            TypeKind::Array => {
-                // Array types are typically created automatically by PostgreSQL
-                // when you create a base type, but we can create them explicitly
-                sql.push_str(" AS (");
-                if let Some(def) = &type_def.definition {
-                    sql.push_str(def);
-                } else {
-                    sql.push_str("integer[]"); // Default array type
-                }
-                sql.push_str(")");
-            }
-            TypeKind::Multirange => {
-                // Multirange types are created automatically by PostgreSQL
-                // when you create a range type, but we can create them explicitly
-                sql.push_str(" AS (");
-                if let Some(def) = &type_def.definition {
-                    sql.push_str(def);
-                } else {
-                    sql.push_str("int4multirange"); // Default multirange type
-                }
-                sql.push_str(")");
-            }
-        }
-
-        sql.push(';');
-        Ok(sql)
     }
 
     fn create_enum(&self, enum_type: &EnumType) -> Result<String> {
@@ -784,19 +716,17 @@ impl SqlGenerator for PostgresSqlGenerator {
         sql.push_str(&format!(" START {}", seq.start));
         sql.push_str(&format!(" INCREMENT {}", seq.increment));
 
-        match seq.min_value {
-            Some(min) => sql.push_str(&format!(" MINVALUE {}", min)),
-            None => sql.push_str(" NO MINVALUE"),
+        // Only include MINVALUE/MAXVALUE if they are explicitly set
+        if let Some(min) = seq.min_value {
+            sql.push_str(&format!(" MINVALUE {}", min));
         }
-        match seq.max_value {
-            Some(max) => sql.push_str(&format!(" MAXVALUE {}", max)),
-            None => sql.push_str(" NO MAXVALUE"),
+        if let Some(max) = seq.max_value {
+            sql.push_str(&format!(" MAXVALUE {}", max));
         }
+        
         sql.push_str(&format!(" CACHE {}", seq.cache));
         if seq.cycle {
             sql.push_str(" CYCLE");
-        } else {
-            sql.push_str(" NO CYCLE");
         }
 
         // OWNED BY
@@ -850,11 +780,11 @@ impl SqlGenerator for PostgresSqlGenerator {
         if old.min_value != new.min_value {
             let up_min = match new.min_value {
                 Some(min) => format!("SET MINVALUE {}", min),
-                None => "NO MINVALUE".to_string(),
+                None => "SET NO MINVALUE".to_string(),
             };
             let down_min = match old.min_value {
                 Some(min) => format!("SET MINVALUE {}", min),
-                None => "NO MINVALUE".to_string(),
+                None => "SET NO MINVALUE".to_string(),
             };
             up_statements.push(format!("ALTER SEQUENCE {} {};", new.name, up_min));
             down_statements.push(format!("ALTER SEQUENCE {} {};", old.name, down_min));
@@ -864,11 +794,11 @@ impl SqlGenerator for PostgresSqlGenerator {
         if old.max_value != new.max_value {
             let up_max = match new.max_value {
                 Some(max) => format!("SET MAXVALUE {}", max),
-                None => "NO MAXVALUE".to_string(),
+                None => "SET NO MAXVALUE".to_string(),
             };
             let down_max = match old.max_value {
                 Some(max) => format!("SET MAXVALUE {}", max),
-                None => "NO MAXVALUE".to_string(),
+                None => "SET NO MAXVALUE".to_string(),
             };
             up_statements.push(format!("ALTER SEQUENCE {} {};", new.name, up_max));
             down_statements.push(format!("ALTER SEQUENCE {} {};", old.name, down_max));
@@ -892,14 +822,36 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_extension(&self, ext: &Extension) -> Result<String> {
-        Ok(format!(
-            "CREATE EXTENSION IF NOT EXISTS \"{}\" VERSION '{}';",
-            ext.name, ext.version
-        ))
+        let name = if ext.name.contains('-') || Self::is_reserved_keyword(&ext.name) {
+            format!("\"{}\"", ext.name)
+        } else {
+            ext.name.clone()
+        };
+
+        let mut sql = format!("CREATE EXTENSION IF NOT EXISTS {}", name);
+
+        if !ext.version.trim().is_empty() {
+            sql.push_str(&format!(" VERSION '{}'", ext.version));
+        }
+
+        if let Some(schema) = &ext.schema {
+            sql.push_str(&format!(" SCHEMA {}", schema));
+        }
+
+        if ext.cascade {
+            sql.push_str(" CASCADE");
+        }
+
+        sql.push(';');
+        Ok(sql)
     }
 
     fn create_trigger(&self, trigger: &Trigger) -> Result<String> {
-        let trigger_name = Self::quote_identifier(&trigger.name);
+        let trigger_name = if Self::is_reserved_keyword(&trigger.name) {
+            format!("\"{}\"", trigger.name)
+        } else {
+            Self::quote_identifier(&trigger.name)
+        };
         let table_name = Self::quote_identifier(&trigger.table);
 
         let events: Vec<&str> = trigger
@@ -930,7 +882,7 @@ impl SqlGenerator for PostgresSqlGenerator {
         let args = if !trigger.arguments.is_empty() {
             format!("({})", trigger.arguments.join(", "))
         } else {
-            String::new()
+            "()".to_string()
         };
 
         let when = if let Some(condition) = &trigger.condition {
@@ -1087,15 +1039,6 @@ impl SqlGenerator for PostgresSqlGenerator {
         ))
     }
 
-    fn drop_type(&self, type_def: &Type) -> Result<String> {
-        let name = if let Some(schema) = &type_def.schema {
-            format!("{}.{}", schema, Self::quote_identifier(&type_def.name))
-        } else {
-            Self::quote_identifier(&type_def.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", name))
-    }
-
     fn drop_domain(&self, domain: &Domain) -> Result<String> {
         let name = if let Some(schema) = &domain.schema {
             format!("{}.{}", schema, Self::quote_identifier(&domain.name))
@@ -1126,37 +1069,47 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_extension(&self, ext: &Extension) -> Result<String> {
-        let cascade = if ext.cascade { " CASCADE" } else { "" };
-        Ok(format!(
-            "DROP EXTENSION IF EXISTS \"{}\"{};",
-            ext.name, cascade
-        ))
+        let name = if ext.name.contains('-') || Self::is_reserved_keyword(&ext.name) {
+            format!("\"{}\"", ext.name)
+        } else {
+            ext.name.clone()
+        };
+        Ok(format!("DROP EXTENSION IF EXISTS {} CASCADE;", name))
     }
 
     fn drop_trigger(&self, trigger: &Trigger) -> Result<String> {
+        let trigger_name = if let Some(schema) = &trigger.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&trigger.name))
+        } else {
+            Self::quote_identifier(&trigger.name)
+        };
+        
         let table_name = if let Some(schema) = &trigger.schema {
             format!("{}.{}", schema, Self::quote_identifier(&trigger.table))
         } else {
             Self::quote_identifier(&trigger.table)
         };
+        
         Ok(format!(
             "DROP TRIGGER IF EXISTS {} ON {} CASCADE;",
-            Self::quote_identifier(&trigger.name),
-            table_name
+            trigger_name, table_name
         ))
     }
 
     fn drop_policy(&self, policy: &Policy) -> Result<String> {
+        let policy_name = if let Some(schema) = &policy.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&policy.name))
+        } else {
+            Self::quote_identifier(&policy.name)
+        };
+        
         let table_name = if let Some(schema) = &policy.schema {
             format!("{}.{}", schema, Self::quote_identifier(&policy.table))
         } else {
             Self::quote_identifier(&policy.table)
         };
-        Ok(format!(
-            "DROP POLICY IF EXISTS {} ON {};",
-            Self::quote_identifier(&policy.name),
-            table_name
-        ))
+        
+        Ok(format!("DROP POLICY IF EXISTS {} ON {} CASCADE;", policy_name, table_name))
     }
 
     fn drop_server(&self, server: &Server) -> Result<String> {
@@ -1294,32 +1247,46 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_rule(&self, rule: &Rule) -> Result<String> {
-        let rule_name = Self::quote_identifier(&rule.name);
-        let _table_name = Self::quote_identifier(&rule.table);
-
-        let event_str = match rule.event {
-            RuleEvent::Select => "SELECT",
-            RuleEvent::Update => "UPDATE",
-            RuleEvent::Insert => "INSERT",
-            RuleEvent::Delete => "DELETE",
+        let rule_name = if Self::is_reserved_keyword(&rule.name) {
+            format!("\"{}\"", rule.name)
+        } else {
+            Self::quote_identifier(&rule.name)
+        };
+        
+        let table_name = if let Some(schema) = &rule.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&rule.table))
+        } else {
+            Self::quote_identifier(&rule.table)
         };
 
-        let mut sql = format!("CREATE RULE {} AS ON {}", rule_name, event_str);
+        let event_str = match rule.event {
+            RuleEvent::Select => "TO SELECT",
+            RuleEvent::Update => "TO UPDATE",
+            RuleEvent::Insert => "TO INSERT",
+            RuleEvent::Delete => "TO DELETE",
+        };
 
-        if rule.instead {
-            sql.push_str(" INSTEAD");
-        }
+        let mut sql = format!("CREATE RULE {} AS ON {} {}", rule_name, table_name, event_str);
 
         if let Some(condition) = &rule.condition {
-            sql.push_str(&format!(" WHERE {}", condition));
+            sql.push_str(&format!(" WHERE ({})", condition));
         }
 
-        sql.push_str(" DO ");
+        if rule.instead {
+            sql.push_str(" DO INSTEAD");
+        } else {
+            sql.push_str(" DO ALSO");
+        }
 
         if rule.actions.len() == 1 {
-            sql.push_str(&rule.actions[0]);
+            let action = &rule.actions[0];
+            if action == "DO NOTHING" {
+                sql.push_str(" NOTHING");
+            } else {
+                sql.push_str(&format!(" {}", action));
+            }
         } else {
-            sql.push_str("(");
+            sql.push_str(" (");
             sql.push_str(&rule.actions.join("; "));
             sql.push_str(")");
         }
@@ -1329,15 +1296,21 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_rule(&self, rule: &Rule) -> Result<String> {
+        let rule_name = if let Some(schema) = &rule.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&rule.name))
+        } else {
+            Self::quote_identifier(&rule.name)
+        };
+        
         let table_name = if let Some(schema) = &rule.schema {
             format!("{}.{}", schema, Self::quote_identifier(&rule.table))
         } else {
             Self::quote_identifier(&rule.table)
         };
+        
         Ok(format!(
             "DROP RULE IF EXISTS {} ON {} CASCADE;",
-            Self::quote_identifier(&rule.name),
-            table_name
+            rule_name, table_name
         ))
     }
 
@@ -1383,7 +1356,11 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String> {
-        let trigger_name = Self::quote_identifier(&trigger.name);
+        let trigger_name = if Self::is_reserved_keyword(&trigger.name) {
+            format!("\"{}\"", trigger.name)
+        } else {
+            Self::quote_identifier(&trigger.name)
+        };
         let table_name = if let Some(schema) = &trigger.schema {
             format!("{}.{}", schema, Self::quote_identifier(&trigger.table))
         } else {
@@ -1406,13 +1383,17 @@ impl SqlGenerator for PostgresSqlGenerator {
         let args = if !trigger.arguments.is_empty() {
             format!("({})", trigger.arguments.join(", "))
         } else {
-            String::new()
+            "()".to_string()
         };
 
         let mut sql = format!(
-            "CREATE CONSTRAINT TRIGGER {} AFTER {} ON {}",
-            trigger_name, events_str, table_name
+            "CREATE CONSTRAINT TRIGGER {}",
+            trigger_name
         );
+        if !trigger.constraint_name.is_empty() {
+            sql.push_str(&format!(" CONSTRAINT {}", trigger.constraint_name));
+        }
+        sql.push_str(&format!(" AFTER {} ON {}", events_str, table_name));
 
         if trigger.deferrable {
             sql.push_str(" DEFERRABLE");
@@ -1430,15 +1411,21 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String> {
+        let trigger_name = if let Some(schema) = &trigger.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&trigger.name))
+        } else {
+            Self::quote_identifier(&trigger.name)
+        };
+        
         let table_name = if let Some(schema) = &trigger.schema {
             format!("{}.{}", schema, Self::quote_identifier(&trigger.table))
         } else {
             Self::quote_identifier(&trigger.table)
         };
+        
         Ok(format!(
             "DROP TRIGGER IF EXISTS {} ON {} CASCADE;",
-            Self::quote_identifier(&trigger.name),
-            table_name
+            trigger_name, table_name
         ))
     }
 
@@ -1471,5 +1458,125 @@ impl SqlGenerator for PostgresSqlGenerator {
         let privs = privileges.join(", ");
         let roles = from_roles.join(", ");
         Ok(format!("REVOKE {} ON {} FROM {};", privs, on_object, roles))
+    }
+
+    fn create_base_type(&self, base_type: &BaseType) -> Result<String> {
+        let type_name = if let Some(schema) = &base_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&base_type.name))
+        } else {
+            Self::quote_identifier(&base_type.name)
+        };
+
+        let mut sql = format!("CREATE TYPE {} AS (", type_name);
+
+        // Base types in PostgreSQL are typically created with specific attributes
+        // This is a simplified implementation - real base type creation is complex
+        let mut attrs = Vec::new();
+        
+        if let Some(len) = base_type.internal_length {
+            attrs.push(format!("INTERNALLENGTH = {}", len));
+        }
+        
+        if base_type.is_passed_by_value {
+            attrs.push("PASSEDBYVALUE".to_string());
+        }
+        
+        if !base_type.alignment.is_empty() {
+            attrs.push(format!("ALIGNMENT = {}", base_type.alignment));
+        }
+        
+        if !base_type.storage.is_empty() {
+            attrs.push(format!("STORAGE = {}", base_type.storage));
+        }
+        
+        if let Some(category) = &base_type.category {
+            attrs.push(format!("CATEGORY = '{}'", category));
+        }
+        
+        if base_type.preferred {
+            attrs.push("PREFERRED".to_string());
+        }
+        
+        if let Some(default) = &base_type.default {
+            attrs.push(format!("DEFAULT = {}", default));
+        }
+        
+        if let Some(element) = &base_type.element {
+            attrs.push(format!("ELEMENT = {}", element));
+        }
+        
+        if let Some(delimiter) = &base_type.delimiter {
+            attrs.push(format!("DELIMITER = '{}'", delimiter));
+        }
+        
+        if base_type.collatable {
+            attrs.push("COLLATABLE".to_string());
+        }
+
+        sql.push_str(&attrs.join(", "));
+        sql.push_str(");");
+
+        Ok(sql)
+    }
+
+    fn drop_base_type(&self, base_type: &BaseType) -> Result<String> {
+        let type_name = if let Some(schema) = &base_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&base_type.name))
+        } else {
+            Self::quote_identifier(&base_type.name)
+        };
+        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
+    }
+
+    fn create_array_type(&self, array_type: &ArrayType) -> Result<String> {
+        let type_name = if let Some(schema) = &array_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&array_type.name))
+        } else {
+            Self::quote_identifier(&array_type.name)
+        };
+
+        let element_type = if let Some(element_schema) = &array_type.element_schema {
+            format!("{}.{}", element_schema, Self::quote_identifier(&array_type.element_type))
+        } else {
+            Self::quote_identifier(&array_type.element_type)
+        };
+
+        let sql = format!("CREATE TYPE {} AS ARRAY OF {};", type_name, element_type);
+        Ok(sql)
+    }
+
+    fn drop_array_type(&self, array_type: &ArrayType) -> Result<String> {
+        let type_name = if let Some(schema) = &array_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&array_type.name))
+        } else {
+            Self::quote_identifier(&array_type.name)
+        };
+        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
+    }
+
+    fn create_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String> {
+        let type_name = if let Some(schema) = &multirange_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&multirange_type.name))
+        } else {
+            Self::quote_identifier(&multirange_type.name)
+        };
+
+        let range_type = if let Some(range_schema) = &multirange_type.range_schema {
+            format!("{}.{}", range_schema, Self::quote_identifier(&multirange_type.range_type))
+        } else {
+            Self::quote_identifier(&multirange_type.range_type)
+        };
+
+        let sql = format!("CREATE TYPE {} AS MULTIRANGE OF {};", type_name, range_type);
+        Ok(sql)
+    }
+
+    fn drop_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String> {
+        let type_name = if let Some(schema) = &multirange_type.schema {
+            format!("{}.{}", schema, Self::quote_identifier(&multirange_type.name))
+        } else {
+            Self::quote_identifier(&multirange_type.name)
+        };
+        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
     }
 }

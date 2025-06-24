@@ -29,7 +29,10 @@ pub struct Schema {
     pub foreign_tables: HashMap<String, ForeignTable>,
     pub foreign_data_wrappers: HashMap<String, ForeignDataWrapper>,
     pub foreign_key_constraints: HashMap<String, ForeignKeyConstraint>,
-    pub types: HashMap<String, Type>,
+    pub composite_types: HashMap<String, CompositeType>,
+    pub base_types: HashMap<String, BaseType>,
+    pub array_types: HashMap<String, ArrayType>,
+    pub multirange_types: HashMap<String, MultirangeType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,15 +106,6 @@ pub struct Procedure {
     pub definition: String,
     pub comment: Option<String>,
     pub security_definer: bool, // Added: security context
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Type {
-    pub name: String,
-    pub schema: Option<String>,
-    pub kind: TypeKind,
-    pub comment: Option<String>,
-    pub definition: Option<String>, // Added: for composite types, enum values, etc.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -368,17 +362,6 @@ pub struct PartitionBy {
 
 // Enhanced enums
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum TypeKind {
-    Composite { attributes: Vec<Column> },
-    Enum { values: Vec<String> },
-    Domain,
-    Range,
-    Base,
-    Array,
-    Multirange,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConstraintKind {
     PrimaryKey,
     ForeignKey {
@@ -572,6 +555,51 @@ pub struct EnumType {
     pub comment: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompositeType {
+    pub name: String,
+    pub schema: Option<String>,
+    pub values: Vec<String>,
+    pub comment: Option<String>,
+    pub attributes: Vec<Column>,
+    pub definition: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BaseType {
+    pub name: String,
+    pub schema: Option<String>,
+    pub internal_length: Option<i32>,
+    pub is_passed_by_value: bool,
+    pub alignment: String,
+    pub storage: String,
+    pub category: Option<String>,
+    pub preferred: bool,
+    pub default: Option<String>,
+    pub element: Option<String>,
+    pub delimiter: Option<String>,
+    pub collatable: bool,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ArrayType {
+    pub name: String,
+    pub schema: Option<String>,
+    pub element_type: String,
+    pub element_schema: Option<String>,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MultirangeType {
+    pub name: String,
+    pub schema: Option<String>,
+    pub range_type: String,
+    pub range_schema: Option<String>,
+    pub comment: Option<String>,
+}
+
 impl Schema {
     pub fn new() -> Self {
         Self {
@@ -601,7 +629,10 @@ impl Schema {
             foreign_tables: HashMap::new(),
             foreign_data_wrappers: HashMap::new(),
             foreign_key_constraints: HashMap::new(),
-            types: HashMap::new(),
+            composite_types: HashMap::new(),
+            base_types: HashMap::new(),
+            array_types: HashMap::new(),
+            multirange_types: HashMap::new(),
         }
     }
 

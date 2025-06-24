@@ -45,11 +45,10 @@ where
         schema.procedures.insert(proc.name.clone(), proc);
     }
 
-    // Introspect types (composite types, not enums)
+    // Introspect composite types
     let composite_types = introspect_composite_types(&*client).await?;
-    for type_def in composite_types {
-        // Store composite types in the types collection
-        schema.types.insert(type_def.name.clone(), type_def);
+    for composite_type in composite_types {
+        schema.composite_types.insert(composite_type.name.clone(), composite_type);
     }
 
     // Introspect range types separately for detailed information
@@ -58,17 +57,7 @@ where
         // Store range types in the types collection with a special prefix
         schema
             .range_types
-            .insert(range_type.name.clone(), range_type.clone());
-
-        // Also store in types collection for serialization
-        let type_def = Type {
-            name: range_type.name.clone(),
-            schema: range_type.schema.clone(),
-            kind: TypeKind::Range,
-            comment: None,
-            definition: Some(range_type.subtype.clone()),
-        };
-        schema.types.insert(range_type.name.clone(), type_def);
+            .insert(range_type.name.clone(), range_type);
     }
 
     // Introspect enums
@@ -76,19 +65,7 @@ where
     for enum_type in enums {
         schema
             .enums
-            .insert(enum_type.name.clone(), enum_type.clone());
-
-        // Also store in types collection for serialization
-        let type_def = Type {
-            name: enum_type.name.clone(),
-            schema: enum_type.schema.clone(),
-            kind: TypeKind::Enum {
-                values: enum_type.values.clone(),
-            },
-            comment: enum_type.comment.clone(),
-            definition: None,
-        };
-        schema.types.insert(enum_type.name.clone(), type_def);
+            .insert(enum_type.name.clone(), enum_type);
     }
 
     // Introspect domains
@@ -193,6 +170,24 @@ where
     let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
     for constraint in foreign_key_constraints {
         schema.foreign_key_constraints.insert(constraint.name.clone(), constraint);
+    }
+
+    // Introspect base types
+    let base_types = introspect_base_types(&*client).await?;
+    for base_type in base_types {
+        schema.base_types.insert(base_type.name.clone(), base_type);
+    }
+
+    // Introspect array types
+    let array_types = introspect_array_types(&*client).await?;
+    for array_type in array_types {
+        schema.array_types.insert(array_type.name.clone(), array_type);
+    }
+
+    // Introspect multirange types
+    let multirange_types = introspect_multirange_types(&*client).await?;
+    for multirange_type in multirange_types {
+        schema.multirange_types.insert(multirange_type.name.clone(), multirange_type);
     }
 
     Ok(schema)
@@ -929,7 +924,7 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
     Ok(procedures)
 }
 
-async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<Type>>
+async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<CompositeType>>
 where
     C: GenericClient + Sync,
 {
@@ -1021,11 +1016,12 @@ where
 
     let mut types = Vec::new();
     for ((schema, name), (attrs, comment, _owner)) in grouped {
-        types.push(Type {
+        types.push(CompositeType {
             name,
             schema: Some(schema),
-            kind: TypeKind::Composite { attributes: attrs },
+            values: vec![], // Composite types don't have enum values
             comment,
+            attributes: attrs,
             definition: None, // Could be computed if needed
         });
     }
@@ -2426,4 +2422,184 @@ fn parse_server_options(options: &[String]) -> std::collections::HashMap<String,
     }
 
     options_map
+}
+
+async fn introspect_base_types<C: GenericClient>(client: &C) -> Result<Vec<BaseType>>
+where
+    C: GenericClient + Sync,
+{
+    let query = r#"
+        SELECT 
+            t.typname AS name,
+            n.nspname AS schema,
+            t.typlen AS internal_length,
+            t.typbyval AS is_passed_by_value,
+            t.typalign AS alignment,
+            t.typstorage AS storage,
+            t.typcategory AS category,
+            t.typispreferred AS preferred,
+            t.typdefault AS default_value,
+            t.typrelid AS element_oid,
+            t.typdelim AS delimiter,
+            t.typcollatable AS collatable,
+            obj_description(t.oid, 'pg_type') AS comment
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typtype = 'b'  -- base types only
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.typowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+        ORDER BY n.nspname, t.typname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut base_types = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let schema: Option<String> = row.get("schema");
+        let internal_length: Option<i32> = row.get("internal_length");
+        let is_passed_by_value: bool = row.get("is_passed_by_value");
+        let alignment: String = row.get("alignment");
+        let storage: String = row.get("storage");
+        let category: Option<String> = row.get("category");
+        let preferred: bool = row.get("preferred");
+        let default_value: Option<String> = row.get("default_value");
+        let element_oid: Option<u32> = row.get("element_oid");
+        let delimiter: Option<String> = row.get("delimiter");
+        let collatable: bool = row.get("collatable");
+        let comment: Option<String> = row.get("comment");
+
+        // Get element type name if available
+        let element = if let Some(oid) = element_oid {
+            let element_query = "SELECT typname FROM pg_type WHERE oid = $1";
+            if let Ok(element_rows) = client.query(element_query, &[&oid]).await {
+                element_rows.first().map(|row| row.get("typname"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        base_types.push(BaseType {
+            name,
+            schema,
+            internal_length,
+            is_passed_by_value,
+            alignment,
+            storage,
+            category,
+            preferred,
+            default: default_value,
+            element,
+            delimiter,
+            collatable,
+            comment,
+        });
+    }
+
+    Ok(base_types)
+}
+
+async fn introspect_array_types<C: GenericClient>(client: &C) -> Result<Vec<ArrayType>>
+where
+    C: GenericClient + Sync,
+{
+    let query = r#"
+        SELECT 
+            t.typname AS name,
+            n.nspname AS schema,
+            et.typname AS element_type,
+            en.nspname AS element_schema,
+            obj_description(t.oid, 'pg_type') AS comment
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        JOIN pg_type et ON t.typelem = et.oid
+        JOIN pg_namespace en ON et.typnamespace = en.oid
+        WHERE t.typtype = 'b'  -- base types
+        AND t.typelem IS NOT NULL  -- array types have element types
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.typowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+        ORDER BY n.nspname, t.typname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut array_types = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let schema: Option<String> = row.get("schema");
+        let element_type: String = row.get("element_type");
+        let element_schema: Option<String> = row.get("element_schema");
+        let comment: Option<String> = row.get("comment");
+
+        array_types.push(ArrayType {
+            name,
+            schema,
+            element_type,
+            element_schema,
+            comment,
+        });
+    }
+
+    Ok(array_types)
+}
+
+async fn introspect_multirange_types<C: GenericClient>(client: &C) -> Result<Vec<MultirangeType>>
+where
+    C: GenericClient + Sync,
+{
+    let query = r#"
+        SELECT 
+            t.typname AS name,
+            n.nspname AS schema,
+            rt.typname AS range_type,
+            rn.nspname AS range_schema,
+            obj_description(t.oid, 'pg_type') AS comment
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        JOIN pg_type rt ON t.typarray = rt.oid
+        JOIN pg_namespace rn ON rt.typnamespace = rn.oid
+        WHERE t.typtype = 'b'  -- base types
+        AND t.typname LIKE '%_multirange'  -- multirange types
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND t.typowner > 1
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            JOIN pg_extension e ON d.refobjid = e.oid
+            WHERE d.objid = t.oid AND d.deptype = 'e'
+        )
+        ORDER BY n.nspname, t.typname
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut multirange_types = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("name");
+        let schema: Option<String> = row.get("schema");
+        let range_type: String = row.get("range_type");
+        let range_schema: Option<String> = row.get("range_schema");
+        let comment: Option<String> = row.get("comment");
+
+        multirange_types.push(MultirangeType {
+            name,
+            schema,
+            range_type,
+            range_schema,
+            comment,
+        });
+    }
+
+    Ok(multirange_types)
 }

@@ -1,7 +1,8 @@
 use crate::error::Result;
 use crate::schema::{
     Collation, ConstraintTrigger, Domain, EnumType, EventTrigger, Extension, Function, Index,
-    MaterializedView, Policy, Procedure, Rule, Schema, Sequence, Server, Table, Trigger, Type, View,
+    MaterializedView, Policy, Procedure, Rule, Schema, Sequence, Server, Table, Trigger, View,
+    BaseType, ArrayType, MultirangeType,
 };
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -106,10 +107,25 @@ pub trait SqlGenerator: Send + Sync {
     fn drop_procedure(&self, proc: &Procedure) -> Result<String>;
 
     /// Generate CREATE TYPE SQL
-    fn generate_create_type(&self, type_def: &Type) -> Result<String>;
+    fn generate_create_enum(&self, enum_type: &EnumType) -> Result<String>;
 
-    /// Generate DROP TYPE SQL
-    fn drop_type(&self, type_def: &Type) -> Result<String>;
+    /// Generate CREATE BASE TYPE SQL
+    fn create_base_type(&self, base_type: &BaseType) -> Result<String>;
+
+    /// Generate DROP BASE TYPE SQL
+    fn drop_base_type(&self, base_type: &BaseType) -> Result<String>;
+
+    /// Generate CREATE ARRAY TYPE SQL
+    fn create_array_type(&self, array_type: &ArrayType) -> Result<String>;
+
+    /// Generate DROP ARRAY TYPE SQL
+    fn drop_array_type(&self, array_type: &ArrayType) -> Result<String>;
+
+    /// Generate CREATE MULTIRANGE TYPE SQL
+    fn create_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String>;
+
+    /// Generate DROP MULTIRANGE TYPE SQL
+    fn drop_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String>;
 
     /// Generate CREATE ENUM SQL
     fn create_enum(&self, enum_type: &EnumType) -> Result<String>;
@@ -311,7 +327,10 @@ pub trait AsyncSqlGenerator: Send + Sync {
         new: &Table,
     ) -> Result<(Vec<String>, Vec<String>)>;
     async fn generate_drop_table_async(&self, table: &Table) -> Result<String>;
-    async fn generate_create_type_async(&self, type_def: &crate::Type) -> Result<String>;
+    async fn generate_create_enum_async(&self, enum_type: &EnumType) -> Result<String>;
+    async fn generate_create_base_type_async(&self, base_type: &BaseType) -> Result<String>;
+    async fn generate_create_array_type_async(&self, array_type: &ArrayType) -> Result<String>;
+    async fn generate_create_multirange_type_async(&self, multirange_type: &MultirangeType) -> Result<String>;
 }
 
 #[async_trait]

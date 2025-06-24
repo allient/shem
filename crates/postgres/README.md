@@ -201,23 +201,60 @@ shem generate schema.sql
 
 The crate includes comprehensive tests that verify:
 
-- Correct introspection of all PostgreSQL object types
-- Proper SQL generation for all schema objects
-- Handling of PostgreSQL-specific features
-- Error cases and edge conditions
+- **Complete SQL Generation Coverage**: All PostgreSQL object types have corresponding unit tests in `tests/sql_generator.rs`
+- **Correct SQL Generation**: Proper PostgreSQL-specific syntax and features for all schema objects
+- **Edge Cases**: Handling of PostgreSQL-specific features, reserved keywords, and complex scenarios
+- **Error Cases**: Proper error handling and validation
 
-Run tests with:
+### Test Coverage Status
+
+**✅ Fully Tested SQL Generation Methods (50 tests):**
+- Tables, Views, Materialized Views
+- Functions, Procedures, Enums, Domains, Sequences
+- Triggers, Constraint Triggers, Event Triggers
+- Policies, Servers, Indexes, Collations, Rules
+- Extensions, Comments, Grants/Privileges
+- Base Types, Array Types, Multirange Types
+- All DROP operations for the above objects
+- ALTER operations for sequences and enums
+
+**Note:**  
+Direct unit tests for introspection functions (`introspect_*`) are not included in this test suite, as these require a live database connection. Introspection is tested via integration and CLI tests, which connect to a test database and verify the extracted schema matches expectations.
+
+### Running Tests
+
 ```bash
-# Run all tests
-cargo test -p postgres
+# Run all tests with output
+cargo test -p postgres -- --nocapture
 
 # Run specific test suites
 cargo test -p postgres --test sql_generator -- --nocapture
-cargo test test_generate_create_table -- --nocapture
 
 # List all available tests
 cargo test -p postgres -- --list
+
+# Run tests with verbose output
+cargo test -p postgres -- --nocapture --test-threads=1
 ```
+
+### Test Structure
+
+The test suite in `tests/sql_generator.rs` includes:
+
+1. **Basic Creation Tests**: Verify correct SQL generation for all object types
+2. **Drop Operation Tests**: Ensure proper DROP statements with CASCADE options
+3. **Alter Operation Tests**: Test schema modification operations
+4. **Edge Case Tests**: Reserved keywords, complex constraints, special syntax
+5. **Integration Tests**: Combined create/drop operations
+
+### Contributing to Tests
+
+When adding new PostgreSQL features:
+
+1. **Add SQL Generation Test**: Create a test that verifies the generated SQL matches expected PostgreSQL syntax
+2. **Add Drop Test**: Include a corresponding drop operation test
+3. **Test Edge Cases**: Include tests for schema qualification, reserved keywords, and complex scenarios
+4. **Update This Section**: Add the new test to the coverage list above
 
 ## Contributing
 

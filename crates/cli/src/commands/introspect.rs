@@ -17,7 +17,7 @@ use shem_core::{
         ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
         GeneratedColumn, Identity, MaterializedView, ParallelSafety, Parameter, ParameterMode,
         Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
-        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeKind, View, Volatility, RangeType
+        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility, RangeType, CompositeType
     },
     traits::SchemaSerializer,
 };
@@ -30,7 +30,7 @@ enum SchemaObject<'a> {
     Extension(&'a Extension),
     Collation(&'a Collation),
     Enum(&'a EnumType),
-    CompositeType(&'a Type),
+    CompositeType(&'a CompositeType),
     RangeType(&'a RangeType),
     Domain(&'a Domain),
     Sequence(&'a Sequence),
@@ -176,15 +176,15 @@ impl SchemaSerializer for SqlSerializer {
                     sql.push_str(";\n\n");
                 }
                 SchemaObject::Enum(enum_type) => {
-                    sql.push_str(&generate_create_enum_from_type(enum_type)?);
+                    sql.push_str(&generate_create_enum(enum_type)?);
                     sql.push_str(";\n\n");
                 }
                 SchemaObject::CompositeType(type_def) => {
-                    sql.push_str(&generate_create_type(type_def)?);
+                    sql.push_str(&generate_create_composite_type(type_def)?);
                     sql.push_str(";\n\n");
                 }
-                SchemaObject::RangeType(type_def) => {
-                    sql.push_str(&generate_create_range_type(type_def)?);
+                SchemaObject::RangeType(range_type) => {
+                    sql.push_str(&generate_create_range_type(range_type)?);
                     sql.push_str(";\n\n");
                 }
                 SchemaObject::Domain(domain) => {
@@ -595,11 +595,9 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
         ordered_objects.push(SchemaObject::Extension(ext));
     }
 
-    // 2. Enums (TypeKind::Enum)
-    for (_, type_def) in &schema.types {
-        if let TypeKind::Enum { .. } = type_def.kind {
-            ordered_objects.push(SchemaObject::Enum(type_def));
-        }
+    // 2. Enums
+    for (_, enum_type) in &schema.enums {
+        ordered_objects.push(SchemaObject::Enum(enum_type));
     }
 
     // 3. Domains
@@ -607,18 +605,14 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
         ordered_objects.push(SchemaObject::Domain(domain));
     }
 
-    // 4. Composite types (TypeKind::Composite) - moved before tables
-    for (_, type_def) in &schema.types {
-        if let TypeKind::Composite { .. } = type_def.kind {
-            ordered_objects.push(SchemaObject::CompositeType(type_def));
-        }
+    // 4. Composite types - moved before tables
+    for (_, composite_type) in &schema.composite_types {
+        ordered_objects.push(SchemaObject::CompositeType(composite_type));
     }
 
-    // 5. Range types (TypeKind::Range)
-    for (_, type_def) in &schema.types {
-        if let TypeKind::Range = type_def.kind {
-            ordered_objects.push(SchemaObject::RangeType(type_def));
-        }
+    // 5. Range types
+    for (_, range_type) in &schema.range_types {
+        ordered_objects.push(SchemaObject::RangeType(range_type));
     }
 
     // 6. Collations
@@ -751,16 +745,16 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
         }
     }
 
-    // Check types
-    for (name, _type_def) in &schema.types {
-        let key = format!("type:{}", name);
+    // Check enums
+    for (name, _enum_type) in &schema.enums {
+        let key = format!("enum:{}", name);
         if let Some(existing) = object_names.get(&key) {
             errors.push(format!(
-                "Duplicate type name: {} (already used by {})",
+                "Duplicate enum name: {} (already used by {})",
                 name, existing
             ));
         } else {
-            object_names.insert(key, format!("type:{}", name));
+            object_names.insert(key, format!("enum:{}", name));
         }
     }
 
@@ -957,6 +951,32 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
         }
     }
 
+    // Check composite types
+    for (name, _composite_type) in &schema.composite_types {
+        let key = format!("composite_type:{}", name);
+        if let Some(existing) = object_names.get(&key) {
+            errors.push(format!(
+                "Duplicate composite type name: {} (already used by {})",
+                name, existing
+            ));
+        } else {
+            object_names.insert(key, format!("composite_type:{}", name));
+        }
+    }
+
+    // Check range types
+    for (name, _range_type) in &schema.range_types {
+        let key = format!("range_type:{}", name);
+        if let Some(existing) = object_names.get(&key) {
+            errors.push(format!(
+                "Duplicate range type name: {} (already used by {})",
+                name, existing
+            ));
+        } else {
+            object_names.insert(key, format!("range_type:{}", name));
+        }
+    }
+
     if !errors.is_empty() {
         return Err(Error::Schema(format!(
             "Schema validation failed:\n{}",
@@ -1076,22 +1096,18 @@ fn get_object_dependencies(obj: &SchemaObject, schema: &Schema) -> Vec<String> {
                 dependencies.push(owned_by.clone());
             }
         }
-        SchemaObject::CompositeType(type_def) => {
+        SchemaObject::CompositeType(composite_type) => {
             // Composite types depend on types used in their attributes
-            if let TypeKind::Composite { attributes } = &type_def.kind {
-                for attr in attributes {
-                    if let Some(type_dep) = extract_type_dependency(&attr.type_name) {
-                        dependencies.push(type_dep);
-                    }
+            for attr in &composite_type.attributes {
+                if let Some(type_dep) = extract_type_dependency(&attr.type_name) {
+                    dependencies.push(type_dep);
                 }
             }
         }
         SchemaObject::RangeType(type_def) => {
             // Range types depend on their subtype
-            if let Some(def) = &type_def.definition {
-                if let Some(type_dep) = extract_type_dependency(def) {
-                    dependencies.push(type_dep);
-                }
+            if let Some(type_dep) = extract_type_dependency(&type_def.subtype) {
+                dependencies.push(type_dep);
             }
         }
         _ => {
@@ -1351,7 +1367,7 @@ fn generate_create_extension(ext: &Extension) -> Result<String> {
     Ok(sql)
 }
 
-fn generate_create_enum_from_type(type_def: &Type) -> Result<String> {
+fn generate_create_enum(type_def: &EnumType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", type_def.name);
 
     if let Some(schema) = &type_def.schema {
@@ -1360,51 +1376,33 @@ fn generate_create_enum_from_type(type_def: &Type) -> Result<String> {
 
     sql.push_str(" AS ENUM (");
 
-    if let TypeKind::Enum { values } = &type_def.kind {
-        let values_str = values
-            .iter()
-            .map(|v| format!("'{}'", v))
-            .collect::<Vec<_>>()
-            .join(", ");
-        sql.push_str(&values_str);
-    } else {
-        return Err(Error::Schema("Expected enum type".into()));
-    }
+    let values_str = type_def.values
+        .iter()
+        .map(|v| format!("'{}'", v))
+        .collect::<Vec<_>>()
+        .join(", ");
+    sql.push_str(&values_str);
 
     sql.push_str(")");
 
     Ok(sql)
 }
 
-fn generate_create_type(type_def: &Type) -> Result<String> {
+fn generate_create_type(type_def: &CompositeType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", type_def.name);
 
     if let Some(schema) = &type_def.schema {
         sql = format!("CREATE TYPE {}.{}", schema, type_def.name);
     }
 
-    match &type_def.kind {
-        TypeKind::Composite { attributes } => {
-            sql.push_str(" AS (");
-            let attrs = attributes
-                .iter()
-                .map(|attr| format!("{} {}", attr.name, attr.type_name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&attrs);
-            sql.push_str(")");
-        }
-        TypeKind::Range => {
-            sql.push_str(" AS RANGE (SUBTYPE = ");
-            if let Some(def) = &type_def.definition {
-                sql.push_str(def);
-            }
-            sql.push_str(")");
-        }
-        _ => {
-            sql.push_str(" -- Unsupported type kind");
-        }
-    }
+    sql.push_str(" AS (");
+    let attrs = type_def.attributes
+        .iter()
+        .map(|attr| format!("{} {}", attr.name, attr.type_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    sql.push_str(&attrs);
+    sql.push_str(")");
 
     Ok(sql)
 }
@@ -1938,25 +1936,35 @@ fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<Str
     Ok(sql)
 }
 
-fn generate_create_range_type(type_def: &Type) -> Result<String> {
-    // For range types, we need to get the detailed information from the RangeType struct
-    // Since we're storing range types with a "range_" prefix, we need to handle this specially
-    let name = if type_def.name.starts_with("range_") {
-        type_def
-            .name
-            .strip_prefix("range_")
-            .unwrap_or(&type_def.name)
-    } else {
-        &type_def.name
-    };
+fn generate_create_range_type(range_type: &RangeType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", range_type.name);
 
-    // Use the definition field which contains the subtype
-    let subtype = type_def.definition.as_deref().unwrap_or("unknown_subtype");
+    if let Some(schema) = &range_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, range_type.name);
+    }
 
-    Ok(format!(
-        "CREATE TYPE {} AS RANGE (SUBTYPE = {})",
-        name, subtype
-    ))
+    sql.push_str(" AS RANGE (SUBTYPE = ");
+    sql.push_str(&range_type.subtype);
+
+    if let Some(opclass) = &range_type.subtype_opclass {
+        sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", opclass));
+    }
+
+    if let Some(collation) = &range_type.collation {
+        sql.push_str(&format!(", COLLATION = {}", collation));
+    }
+
+    if let Some(canonical) = &range_type.canonical {
+        sql.push_str(&format!(", CANONICAL = {}", canonical));
+    }
+
+    if let Some(subtype_diff) = &range_type.subtype_diff {
+        sql.push_str(&format!(", SUBTYPE_DIFF = {}", subtype_diff));
+    }
+
+    sql.push_str(")");
+
+    Ok(sql)
 }
 
 fn generate_comments(schema: &Schema) -> Result<String> {
@@ -2054,4 +2062,23 @@ fn trigger_event_to_str(event: &TriggerEvent) -> &'static str {
         TriggerEvent::Delete => "DELETE",
         TriggerEvent::Truncate => "TRUNCATE",
     }
+}
+
+fn generate_create_composite_type(composite_type: &CompositeType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", composite_type.name);
+
+    if let Some(schema) = &composite_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, composite_type.name);
+    }
+
+    sql.push_str(" AS (");
+    let attrs = composite_type.attributes
+        .iter()
+        .map(|attr| format!("{} {}", attr.name, attr.type_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    sql.push_str(&attrs);
+    sql.push_str(")");
+
+    Ok(sql)
 }
