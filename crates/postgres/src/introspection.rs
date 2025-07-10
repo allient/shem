@@ -9,137 +9,32 @@ where
 {
     let mut schema = Schema::new();
 
-    // Introspect named schemas
-    let named_schemas = introspect_named_schemas(&*client).await?;
-    for named_schema in named_schemas {
-        schema.named_schemas.insert(named_schema.name.clone(), named_schema);
-    }
-
-    // Introspect tables
-    let tables = introspect_tables(&*client).await?;
-    for table in tables {
-        schema.tables.insert(table.name.clone(), table);
-    }
-
-    // Introspect views
-    let views = introspect_views(&*client).await?;
-    for view in views {
-        schema.views.insert(view.name.clone(), view);
-    }
-
-    // Introspect materialized views
-    let materialized_views = introspect_materialized_views(&*client).await?;
-    for view in materialized_views {
-        schema.materialized_views.insert(view.name.clone(), view);
-    }
-
-    // Introspect functions
-    let functions = introspect_functions(&*client).await?;
-    for func in functions {
-        schema.functions.insert(func.name.clone(), func);
-    }
-
-    // Introspect procedures
-    let procedures = introspect_procedures(&*client).await?;
-    for proc in procedures {
-        schema.procedures.insert(proc.name.clone(), proc);
-    }
-
-    // Introspect composite types
-    let composite_types = introspect_composite_types(&*client).await?;
-    for composite_type in composite_types {
-        schema.composite_types.insert(composite_type.name.clone(), composite_type);
-    }
-
-    // Introspect range types separately for detailed information
-    let range_types = introspect_range_types(&*client).await?;
-    for range_type in range_types {
-        // Store range types in the types collection with a special prefix
-        schema
-            .range_types
-            .insert(range_type.name.clone(), range_type);
-    }
-
-    // Introspect enums
-    let enums = introspect_enums(&*client).await?;
-    for enum_type in enums {
-        schema
-            .enums
-            .insert(enum_type.name.clone(), enum_type);
-    }
-
-    // Introspect domains
-    let domains = introspect_domains(&*client).await?;
-    for domain in domains {
-        schema.domains.insert(domain.name.clone(), domain);
-    }
-
-    // Introspect sequences
-    let sequences = introspect_sequences(&*client).await?;
-    for seq in sequences {
-        schema.sequences.insert(seq.name.clone(), seq);
-    }
-
     // Introspect extensions
     let extensions = introspect_extensions(&*client).await?;
     for ext in extensions {
         schema.extensions.insert(ext.name.clone(), ext);
     }
 
-    // Introspect triggers
-    let triggers = introspect_triggers(&*client).await?;
-    for trigger in triggers {
-        schema.triggers.insert(trigger.name.clone(), trigger);
-    }
-
-    // Introspect constraint triggers separately
-    let constraint_triggers = introspect_constraint_triggers(&*client).await?;
-    for trigger in constraint_triggers {
+    // Introspect named schemas
+    let named_schemas = introspect_named_schemas(&*client).await?;
+    for named_schema in named_schemas {
         schema
-            .constraint_triggers
-            .insert(trigger.name.clone(), trigger);
+            .named_schemas
+            .insert(named_schema.name.clone(), named_schema);
     }
 
-    // Introspect event triggers
-    let event_triggers = introspect_event_triggers(&*client).await?;
-    for trigger in event_triggers {
-        schema.event_triggers.insert(trigger.name.clone(), trigger);
+    // Introspect enums
+    let enums = introspect_enums(&*client).await?;
+    for enum_type in enums {
+        schema.enums.insert(enum_type.name.clone(), enum_type);
     }
 
-    // Introspect policies
-    let policies = introspect_policies(&*client).await?;
-    for policy in policies {
-        schema.policies.insert(policy.name.clone(), policy);
-    }
-
-    // Introspect servers
-    let servers = introspect_servers(&*client).await?;
-    for server in servers {
-        schema.servers.insert(server.name.clone(), server);
-    }
-
-    // Introspect collations
-    let collations = introspect_collations(&*client).await?;
-    for collation in collations {
-        schema.collations.insert(collation.name.clone(), collation);
-    }
-
-    // Introspect rules
-    let rules = introspect_rules(&*client).await?;
-    for rule in rules {
-        schema.rules.insert(rule.name.clone(), rule);
-    }
-
-    // Introspect publications
-    let publications = introspect_publications(&*client).await?;
-    for publication in publications {
-        schema.publications.insert(publication.name.clone(), publication);
-    }
-
-    // Introspect subscriptions
-    let subscriptions = introspect_subscriptions(&*client).await?;
-    for subscription in subscriptions {
-        schema.subscriptions.insert(subscription.name.clone(), subscription);
+    // Introspect tablespaces
+    let tablespaces = introspect_tablespaces(&*client).await?;
+    for tablespace in tablespaces {
+        schema
+            .tablespaces
+            .insert(tablespace.name.clone(), tablespace);
     }
 
     // Introspect roles
@@ -148,47 +43,166 @@ where
         schema.roles.insert(role.name.clone(), role);
     }
 
-    // Introspect tablespaces
-    let tablespaces = introspect_tablespaces(&*client).await?;
-    for tablespace in tablespaces {
-        schema.tablespaces.insert(tablespace.name.clone(), tablespace);
-    }
+    // // Introspect composite types
+    // let composite_types = introspect_composite_types(&*client).await?;
+    // for composite_type in composite_types {
+    //     schema
+    //         .composite_types
+    //         .insert(composite_type.name.clone(), composite_type);
+    // }
 
-    // Introspect foreign data wrappers
-    let foreign_data_wrappers = introspect_foreign_data_wrappers(&*client).await?;
-    for fdw in foreign_data_wrappers {
-        schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
-    }
+    // // Introspect range types separately for detailed information
+    // let range_types = introspect_range_types(&*client).await?;
+    // for range_type in range_types {
+    //     // Store range types in the types collection with a special prefix
+    //     schema
+    //         .range_types
+    //         .insert(range_type.name.clone(), range_type);
+    // }
 
-    // Introspect foreign tables
-    let foreign_tables = introspect_foreign_tables(&*client).await?;
-    for table in foreign_tables {
-        schema.foreign_tables.insert(table.name.clone(), table);
-    }
+    // // Introspect base types
+    // let base_types = introspect_base_types(&*client).await?;
+    // for base_type in base_types {
+    //     schema.base_types.insert(base_type.name.clone(), base_type);
+    // }
 
-    // Introspect foreign key constraints separately
-    let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
-    for constraint in foreign_key_constraints {
-        schema.foreign_key_constraints.insert(constraint.name.clone(), constraint);
-    }
+    // // Introspect array types
+    // let array_types = introspect_array_types(&*client).await?;
+    // for array_type in array_types {
+    //     schema
+    //         .array_types
+    //         .insert(array_type.name.clone(), array_type);
+    // }
 
-    // Introspect base types
-    let base_types = introspect_base_types(&*client).await?;
-    for base_type in base_types {
-        schema.base_types.insert(base_type.name.clone(), base_type);
-    }
+    // // Introspect multirange types
+    // let multirange_types = introspect_multirange_types(&*client).await?;
+    // for multirange_type in multirange_types {
+    //     schema
+    //         .multirange_types
+    //         .insert(multirange_type.name.clone(), multirange_type);
+    // }
 
-    // Introspect array types
-    let array_types = introspect_array_types(&*client).await?;
-    for array_type in array_types {
-        schema.array_types.insert(array_type.name.clone(), array_type);
-    }
+    // // Introspect tables
+    // let tables = introspect_tables(&*client).await?;
+    // for table in tables {
+    //     schema.tables.insert(table.name.clone(), table);
+    // }
 
-    // Introspect multirange types
-    let multirange_types = introspect_multirange_types(&*client).await?;
-    for multirange_type in multirange_types {
-        schema.multirange_types.insert(multirange_type.name.clone(), multirange_type);
-    }
+    // // Introspect views
+    // let views = introspect_views(&*client).await?;
+    // for view in views {
+    //     schema.views.insert(view.name.clone(), view);
+    // }
+
+    // // Introspect materialized views
+    // let materialized_views = introspect_materialized_views(&*client).await?;
+    // for view in materialized_views {
+    //     schema.materialized_views.insert(view.name.clone(), view);
+    // }
+
+    // // Introspect functions
+    // let functions = introspect_functions(&*client).await?;
+    // for func in functions {
+    //     schema.functions.insert(func.name.clone(), func);
+    // }
+
+    // // Introspect procedures
+    // let procedures = introspect_procedures(&*client).await?;
+    // for proc in procedures {
+    //     schema.procedures.insert(proc.name.clone(), proc);
+    // }
+
+    // // Introspect domains
+    // let domains = introspect_domains(&*client).await?;
+    // for domain in domains {
+    //     schema.domains.insert(domain.name.clone(), domain);
+    // }
+
+    // // Introspect sequences
+    // let sequences = introspect_sequences(&*client).await?;
+    // for seq in sequences {
+    //     schema.sequences.insert(seq.name.clone(), seq);
+    // }
+
+    // // Introspect triggers
+    // let triggers = introspect_triggers(&*client).await?;
+    // for trigger in triggers {
+    //     schema.triggers.insert(trigger.name.clone(), trigger);
+    // }
+
+    // // Introspect constraint triggers separately
+    // let constraint_triggers = introspect_constraint_triggers(&*client).await?;
+    // for trigger in constraint_triggers {
+    //     schema
+    //         .constraint_triggers
+    //         .insert(trigger.name.clone(), trigger);
+    // }
+
+    // // Introspect event triggers
+    // let event_triggers = introspect_event_triggers(&*client).await?;
+    // for trigger in event_triggers {
+    //     schema.event_triggers.insert(trigger.name.clone(), trigger);
+    // }
+
+    // // Introspect policies
+    // let policies = introspect_policies(&*client).await?;
+    // for policy in policies {
+    //     schema.policies.insert(policy.name.clone(), policy);
+    // }
+
+    // // Introspect servers
+    // let servers = introspect_servers(&*client).await?;
+    // for server in servers {
+    //     schema.servers.insert(server.name.clone(), server);
+    // }
+
+    // // Introspect collations
+    // let collations = introspect_collations(&*client).await?;
+    // for collation in collations {
+    //     schema.collations.insert(collation.name.clone(), collation);
+    // }
+
+    // // Introspect rules
+    // let rules = introspect_rules(&*client).await?;
+    // for rule in rules {
+    //     schema.rules.insert(rule.name.clone(), rule);
+    // }
+
+    // // Introspect publications
+    // let publications = introspect_publications(&*client).await?;
+    // for publication in publications {
+    //     schema
+    //         .publications
+    //         .insert(publication.name.clone(), publication);
+    // }
+
+    // // Introspect subscriptions
+    // let subscriptions = introspect_subscriptions(&*client).await?;
+    // for subscription in subscriptions {
+    //     schema
+    //         .subscriptions
+    //         .insert(subscription.name.clone(), subscription);
+    // }
+
+    // // Introspect foreign data wrappers
+    // let foreign_data_wrappers = introspect_foreign_data_wrappers(&*client).await?;
+    // for fdw in foreign_data_wrappers {
+    //     schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
+    // }
+
+    // // Introspect foreign tables
+    // let foreign_tables = introspect_foreign_tables(&*client).await?;
+    // for table in foreign_tables {
+    //     schema.foreign_tables.insert(table.name.clone(), table);
+    // }
+
+    // // Introspect foreign key constraints separately
+    // let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
+    // for constraint in foreign_key_constraints {
+    //     schema
+    //         .foreign_key_constraints
+    //         .insert(constraint.name.clone(), constraint);
+    // }
 
     Ok(schema)
 }
@@ -257,7 +271,12 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
             WHERE child.relname = $1 AND n.nspname = $2
             ORDER BY c.relname
         "#;
-        let inherits_rows = client.query(inherits_query, &[&name, &schema.as_deref().unwrap_or("public")]).await?;
+        let inherits_rows = client
+            .query(
+                inherits_query,
+                &[&name, &schema.as_deref().unwrap_or("public")],
+            )
+            .await?;
         let inherits: Vec<String> = inherits_rows
             .iter()
             .map(|row| row.get::<_, String>("parent_table"))
@@ -531,13 +550,13 @@ async fn introspect_indexes<C: GenericClient>(
         // Get sort order and nulls first from index options
         let column_position = index_keys.iter().position(|&k| k > 0).unwrap_or(0);
         let index_option = index_options.get(column_position).copied().unwrap_or(0);
-        
+
         let order = if (index_option & 1) != 0 {
             SortOrder::Descending
         } else {
             SortOrder::Ascending
         };
-        
+
         let nulls_first = (index_option & 2) != 0;
 
         // Get operator class if available (simplified)
@@ -1221,6 +1240,7 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
 async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Extension>> {
     let query = r#"
         SELECT 
+            e.oid,
             e.extname AS extension_name,
             e.extversion AS extension_version,
             n.nspname AS schema_name,
@@ -1232,7 +1252,10 @@ async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Exten
             ) AS is_user_extension
         FROM pg_extension e
         JOIN pg_namespace n ON e.extnamespace = n.oid
-        WHERE e.extname NOT IN ('plpgsql', 'pg_catalog')
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+            AND n.nspname !~ '^pg_toast'
+            AND n.nspname !~ '^pg_temp'
+            AND e.extname NOT IN ('plpgsql');
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -1242,13 +1265,14 @@ async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Exten
         let name: String = row.get("extension_name");
         let version: String = row.get("extension_version");
         let schema: Option<String> = row.get("schema_name");
+        let comment: Option<String> = row.get("comment");
 
         extensions.push(Extension {
             name,
             version,
             schema,
-            cascade: false, // Still no direct way to fetch this info
-            comment: None,  // Optional: you can later query obj_description for it
+            cascade: false, // TODO: Detect CASCADE from extension dependencies
+            comment,
         });
     }
 
@@ -1809,23 +1833,26 @@ where
 
 async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>> {
     let query = r#"
-        SELECT 
-            t.typname as name,
-            n.nspname as schema,
-            array_agg(e.enumlabel ORDER BY e.enumsortorder) as values
-        FROM pg_type t
-        JOIN pg_enum e ON t.oid = e.enumtypid
-        JOIN pg_namespace n ON n.oid = t.typnamespace
+        SELECT
+            t.typname                                            AS name,
+            n.nspname                                            AS schema,
+            array_agg(e.enumlabel ORDER BY e.enumsortorder)      AS values,
+            obj_description(t.oid, 'pg_type')                    AS comment          -- NEW
+        FROM pg_type       t
+        JOIN pg_enum       e ON e.enumtypid   = t.oid
+        JOIN pg_namespace  n ON n.oid         = t.typnamespace
         WHERE t.typtype = 'e'
         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        -- exclude enums that belong to installed extensions
         AND NOT EXISTS (
-            SELECT 1
-            FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
+                SELECT 1
+                FROM pg_depend    d
+                JOIN pg_extension x ON x.oid = d.refobjid
+                WHERE d.objid = t.oid
+                AND d.deptype = 'e'
         )
-        GROUP BY t.typname, n.nspname
-        ORDER BY n.nspname, t.typname
+        GROUP BY t.typname, n.nspname, t.oid             -- t.oid needed for comment
+        ORDER  BY n.nspname, t.typname;
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -1835,12 +1862,13 @@ async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>>
         let name: String = row.get("name");
         let schema: Option<String> = row.get("schema");
         let values: Vec<String> = row.get("values");
+        let comment: Option<String> = row.get("comment");
 
         enums.push(EnumType {
             name,
             schema,
             values,
-            comment: None, // Optional: use pg_description if needed
+            comment,
         });
     }
 
@@ -2005,10 +2033,28 @@ async fn introspect_roles<C: GenericClient>(client: &C) -> Result<Vec<Role>> {
             r.rolcanlogin AS login,
             r.rolreplication AS replication,
             r.rolconnlimit AS connection_limit,
-            r.rolvaliduntil AS valid_until
+            r.rolvaliduntil::text AS valid_until
         FROM pg_roles r
-        WHERE r.oid > 1
-        AND r.rolname NOT IN ('postgres', 'pg_signal_backend')
+        WHERE r.oid > 10  -- Default roles have OIDs <= 10
+        AND NOT r.rolname LIKE 'pg\\_%'  -- Exclude all pg_* roles (note escaped underscore)
+        AND r.rolname NOT IN (
+            -- Explicitly exclude common default roles that might slip through
+            'postgres',
+            'pg_read_all_data',
+            'pg_write_all_data',
+            'pg_use_reserved_connections',
+            'pg_read_server_files',
+            'pg_write_server_files',
+            'pg_read_all_settings',
+            'pg_database_owner',
+            'pg_execute_server_program',
+            'pg_read_all_stats',
+            'pg_monitor',
+            'pg_checkpoint',
+            'pg_create_subscription',
+            'pg_stat_scan_tables',
+            'pg_signal_backend'
+        )
         AND NOT EXISTS (
             SELECT 1 FROM pg_depend d
             JOIN pg_extension e ON d.refobjid = e.oid
@@ -2068,9 +2114,10 @@ async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tabl
     let query = r#"
         SELECT 
             t.spcname AS name,
-            t.spclocation AS location,
+            pg_tablespace_location(t.oid) AS location,
             r.rolname AS owner,
-            t.spcoptions AS options
+            t.spcoptions AS options,
+            obj_description(t.oid, 'pg_tablespace') AS comment
         FROM pg_tablespace t
         LEFT JOIN pg_roles r ON t.spcowner = r.oid
         WHERE t.spcname NOT IN ('pg_default', 'pg_global')
@@ -2091,7 +2138,7 @@ async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tabl
         let location: String = row.get("location");
         let owner: String = row.get("owner");
         let options: Option<Vec<String>> = row.get("options");
-
+        let comment: Option<String> = row.get("comment");
         let options_map = options
             .as_deref()
             .map(parse_server_options)
@@ -2102,13 +2149,16 @@ async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tabl
             location,
             owner,
             options: options_map,
+            comment,
         });
     }
 
     Ok(tablespaces)
 }
 
-async fn introspect_foreign_data_wrappers<C: GenericClient>(client: &C) -> Result<Vec<ForeignDataWrapper>> {
+async fn introspect_foreign_data_wrappers<C: GenericClient>(
+    client: &C,
+) -> Result<Vec<ForeignDataWrapper>> {
     let query = r#"
         SELECT 
             f.fdwname AS name,
@@ -2203,7 +2253,9 @@ async fn introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<F
     Ok(foreign_tables)
 }
 
-async fn introspect_foreign_key_constraints<C: GenericClient>(client: &C) -> Result<Vec<ForeignKeyConstraint>> {
+async fn introspect_foreign_key_constraints<C: GenericClient>(
+    client: &C,
+) -> Result<Vec<ForeignKeyConstraint>> {
     let query = r#"
         SELECT 
             c.conname AS constraint_name,
@@ -2213,8 +2265,8 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(client: &C) -> Res
             rt.relname AS references_table,
             rn.nspname AS references_schema,
             array_agg(ra.attname ORDER BY array_position(c.confkey, ra.attnum)) AS references_columns,
-            c.confdeltype AS on_delete,
-            c.confupdtype AS on_update,
+            c.confdeltype::text AS on_delete,
+            c.confupdtype::text AS on_update,
             c.condeferrable AS deferrable,
             c.condeferred AS initially_deferred
         FROM pg_constraint c
@@ -2434,14 +2486,14 @@ where
             n.nspname AS schema,
             t.typlen AS internal_length,
             t.typbyval AS is_passed_by_value,
-            t.typalign AS alignment,
-            t.typstorage AS storage,
-            t.typcategory AS category,
+            t.typalign::text AS alignment,
+            t.typstorage::text AS storage,
+            t.typcategory::text AS category,
             t.typispreferred AS preferred,
             t.typdefault AS default_value,
             t.typrelid AS element_oid,
-            t.typdelim AS delimiter,
-            t.typcollatable AS collatable,
+            t.typdelim::text AS delimiter,
+            false AS collatable,
             obj_description(t.oid, 'pg_type') AS comment
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
@@ -2462,7 +2514,7 @@ where
     for row in rows {
         let name: String = row.get("name");
         let schema: Option<String> = row.get("schema");
-        let internal_length: Option<i32> = row.get("internal_length");
+        let internal_length: i16 = row.get("internal_length");
         let is_passed_by_value: bool = row.get("is_passed_by_value");
         let alignment: String = row.get("alignment");
         let storage: String = row.get("storage");
@@ -2470,7 +2522,7 @@ where
         let preferred: bool = row.get("preferred");
         let default_value: Option<String> = row.get("default_value");
         let element_oid: Option<u32> = row.get("element_oid");
-        let delimiter: Option<String> = row.get("delimiter");
+        let delimiter: String = row.get("delimiter");
         let collatable: bool = row.get("collatable");
         let comment: Option<String> = row.get("comment");
 
@@ -2489,7 +2541,7 @@ where
         base_types.push(BaseType {
             name,
             schema,
-            internal_length,
+            internal_length: Some(internal_length as i32),
             is_passed_by_value,
             alignment,
             storage,
@@ -2497,7 +2549,7 @@ where
             preferred,
             default: default_value,
             element,
-            delimiter,
+            delimiter: Some(delimiter),
             collatable,
             comment,
         });

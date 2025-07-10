@@ -278,6 +278,7 @@ pub struct Tablespace {
     pub location: String,
     pub owner: String,
     pub options: HashMap<String, String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

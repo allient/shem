@@ -76,6 +76,9 @@ pub enum Command {
         /// Output directory
         #[arg(short, long, default_value = "schema")]
         output: PathBuf,
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Show schema information
     Inspect {
@@ -157,10 +160,12 @@ async fn main() -> Result<()> {
         Command::Introspect {
             database_url,
             output,
+            verbose,
         } => introspect::execute(
             database_url.or_else(|| config.database_url.clone()),
             output,
             &config,
+            verbose,
         )
         .await,
         Command::Inspect { schema } => inspect::execute(schema.to_str().unwrap(), &config).await,

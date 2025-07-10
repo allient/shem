@@ -58,40 +58,40 @@ Implements the `DatabaseDriver` trait from `shem-core`:
 
 | Object Type | Introspection | SQL Generation | Description |
 |-------------|---------------|----------------|-------------|
-| **Tables** | ✅ Complete | ✅ Complete | Base tables with columns, constraints, indexes |
-| **Views** | ✅ Complete | ✅ Complete | Virtual tables based on SQL queries |
-| **Materialized Views** | ✅ Complete | ✅ Complete | Materialized query results with refresh options |
-| **Functions** | ✅ Complete | ✅ Complete | User-defined functions with parameters and return types |
-| **Procedures** | ✅ Complete | ✅ Complete | Stored procedures (PostgreSQL 11+) |
-| **Enums** | ✅ Complete | ✅ Complete | Custom enumerated types |
-| **Composite Types** | ✅ Complete | ✅ Complete | User-defined composite types |
-| **Range Types** | ✅ Complete | ✅ Complete | Custom range types (int4range, etc.) |
-| **Domains** | ✅ Complete | ✅ Complete | Custom data types with constraints |
-| **Sequences** | ✅ Complete | ✅ Complete | Auto-incrementing number generators |
-| **Extensions** | ✅ Complete | ✅ Complete | PostgreSQL extensions and their objects |
-| **Triggers** | ✅ Complete | ✅ Complete | Row and statement-level triggers |
-| **Constraint Triggers** | ✅ Complete | ✅ Complete | Triggers for constraint enforcement |
-| **Event Triggers** | ✅ Complete | ✅ Complete | Database-level event triggers |
-| **Policies** | ✅ Complete | ✅ Complete | Row-level security policies |
-| **Indexes** | ✅ Complete | ✅ Complete | All index types (B-tree, Hash, GiST, etc.) |
-| **Collations** | ✅ Complete | ✅ Complete | Text sorting and comparison rules |
-| **Rules** | ✅ Complete | ✅ Complete | Query rewrite rules |
-| **Servers** | ✅ Complete | ✅ Complete | Foreign data wrapper servers |
-| **Foreign Tables** | ✅ Complete | ✅ Complete | Tables in external data sources |
-| **Foreign Data Wrappers** | ✅ Complete | ✅ Complete | External data source connectors |
-| **Publications** | ✅ Complete | ✅ Complete | Logical replication publications |
-| **Subscriptions** | ✅ Complete | ✅ Complete | Logical replication subscriptions |
-| **Roles** | ✅ Complete | ✅ Complete | Database users and roles |
-| **Tablespaces** | ✅ Complete | ✅ Complete | Physical storage locations |
-| **Named Schemas** | ✅ Complete | ✅ Complete | Schema namespaces |
-| **Foreign Key Constraints** | ✅ Complete | ✅ Complete | Referential integrity constraints |
+| **Tables** | ❌ Missing | ❌ Missing | Base tables with columns, constraints, indexes |
+| **Views** | ❌ Missing | ❌ Missing | Virtual tables based on SQL queries |
+| **Materialized Views** | ❌ Missing | ❌ Missing | Materialized query results with refresh options |
+| **Functions** | ❌ Missing | ❌ Missing | User-defined functions with parameters and return types |
+| **Procedures** | ❌ Missing | ❌ Missing | Stored procedures (PostgreSQL 11+) |
+| **Enums** | ❌ Missing | ❌ Missing | Custom enumerated types |
+| **Composite Types** | ❌ Missing | ❌ Missing | User-defined composite types |
+| **Range Types** | ❌ Missing | ❌ Missing | Custom range types (int4range, etc.) |
+| **Domains** | ❌ Missing | ❌ Missing | Custom data types with constraints |
+| **Sequences** | ❌ Missing | ❌ Missing | Auto-incrementing number generators |
+| **Extensions** | ❌ Missing | ❌ Missing | PostgreSQL extensions and their objects |
+| **Triggers** | ❌ Missing | ❌ Missing | Row and statement-level triggers |
+| **Constraint Triggers** | ❌ Missing | ❌ Missing | Triggers for constraint enforcement |
+| **Event Triggers** | ❌ Missing | ❌ Missing | Database-level event triggers |
+| **Policies** | ❌ Missing | ❌ Missing | Row-level security policies |
+| **Indexes** | ❌ Missing | ❌ Missing | All index types (B-tree, Hash, GiST, etc.) |
+| **Rules** | ❌ Missing | ❌ Missing | Query rewrite rules |
+| **Servers** | ❌ Missing | ❌ Missing | Foreign data wrapper servers |
+| **Foreign Tables** | ❌ Missing | ❌ Missing | Tables in external data sources |
+| **Foreign Data Wrappers** | ❌ Missing | ❌ Missing | External data source connectors |
+| **Publications** | ❌ Missing | ❌ Missing | Logical replication publications |
+| **Subscriptions** | ❌ Missing | ❌ Missing | Logical replication subscriptions |
+| **Roles** | ❌ Missing | ❌ Missing | Database users and roles |
+| **Tablespaces** | ❌ Missing | ❌ Missing | Physical storage locations |
+| **Named Schemas** | ❌ Missing | ❌ Missing | Schema namespaces |
+| **Foreign Key Constraints** | ❌ Missing | ❌ Missing | Referential integrity constraints |
 
 ### 🔶 Partially Implemented Objects
 
 | Object Type | Introspection | SQL Generation | Description | Missing Features |
 |-------------|---------------|----------------|-------------|------------------|
-| **Comments** | ✅ Complete | ✅ Complete | Object documentation | Limited to basic COMMENT ON statements |
+| **Comments** | ❌ Missing | ❌ Missing | Object documentation | Limited to basic COMMENT ON statements |
 | **Grants/Privileges** | ❌ Missing | ✅ Basic | Permission management | No introspection of existing grants |
+| **Collations** | ❌ Missing | ❌ Missing | Text sorting and comparison rules |
 
 ### ❌ Not Yet Implemented Objects
 
@@ -235,6 +235,9 @@ cargo test -p postgres -- --list
 
 # Run tests with verbose output
 cargo test -p postgres -- --nocapture --test-threads=1
+
+RUST_LOG=debug cargo test -p postgres --test generator test_introspect_basic_extension -- --nocapture
+
 ```
 
 ### Test Structure

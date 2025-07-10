@@ -9,7 +9,14 @@ pub mod traits;
 pub use error::{Error, Result};
 pub use migration::Migration;
 // Re-export specific schema types that don't conflict with shared_types
-pub use schema::{Schema, NamedSchema, Table, View, MaterializedView, Function, Procedure, Domain, Sequence, Extension, Trigger, Policy, Server, EventTrigger, Collation, Rule, ConstraintTrigger, RangeType, Publication, Subscription, Role, Tablespace, ForeignTable, ForeignDataWrapper, ForeignKeyConstraint, EnumType, Column, Constraint, Index, Parameter, ReturnType, DomainConstraint, PartitionBy, ConstraintKind, IndexColumn, Identity, TriggerTiming, TriggerLevel, ReturnKind, Volatility, ParallelSafety, IndexMethod, ColumnStorage, PartitionMethod};
+pub use schema::{
+    Collation, Column, ColumnStorage, Constraint, ConstraintKind, ConstraintTrigger, Domain,
+    DomainConstraint, EnumType, EventTrigger, Extension, ForeignDataWrapper, ForeignKeyConstraint,
+    ForeignTable, Function, Identity, Index, IndexColumn, IndexMethod, MaterializedView,
+    NamedSchema, ParallelSafety, Parameter, PartitionBy, PartitionMethod, Policy, Procedure,
+    Publication, RangeType, ReturnKind, ReturnType, Role, Rule, Schema, Sequence, Server,
+    Subscription, Table, Tablespace, Trigger, TriggerLevel, TriggerTiming, View, Volatility,
+};
 pub use traits::{DatabaseConnection, DatabaseDriver, SchemaSerializer};
 
 // Migration-specific types that are not part of the schema

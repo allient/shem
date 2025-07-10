@@ -15,7 +15,7 @@ use shem_core::{
     schema::{
         CheckOption, Collation, CollationProvider, Column, Constraint, ConstraintKind,
         ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
-        GeneratedColumn, Identity, MaterializedView, ParallelSafety, Parameter, ParameterMode,
+        GeneratedColumn, Identity, MaterializedView, NamedSchema, ParallelSafety, Parameter, ParameterMode,
         Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
         Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility, RangeType, CompositeType
     },
@@ -104,6 +104,7 @@ pub async fn execute(
     database_url: Option<String>,
     output: PathBuf,
     config: &Config,
+    verbose: bool,
 ) -> AnyhowResult<()> {
     // Connect to database
     let driver = get_driver(config)?;
@@ -136,7 +137,15 @@ pub async fn execute(
     std::fs::write(&schema_file, content)
         .map_err(|e| anyhow!("Failed to write schema file: {}", e))?;
 
-    info!("Schema written to {}", schema_file.display());
+    if verbose {
+        info!("Schema written to {}", schema_file.display());
+        info!("Introspected {} tables, {} views, {} functions", 
+            schema.tables.len(), 
+            schema.views.len(), 
+            schema.functions.len());
+    } else {
+        info!("Schema written to {}", schema_file.display());
+    }
 
     Ok(())
 }
@@ -160,6 +169,12 @@ impl SchemaSerializer for SqlSerializer {
 
         // Validate schema objects first
         validate_schema_objects(schema)?;
+
+        // Generate schema creation statements first
+        for (_, named_schema) in &schema.named_schemas {
+            sql.push_str(&generate_create_schema(named_schema)?);
+            sql.push_str(";\n\n");
+        }
 
         // Resolve all object dependencies and get creation order
         let creation_order = resolve_schema_dependencies(schema)?;
@@ -1364,6 +1379,20 @@ fn generate_create_extension(ext: &Extension) -> Result<String> {
         sql.push_str(&format!(" VERSION '{}'", ext.version));
     }
 
+    if ext.cascade {
+        sql.push_str(" CASCADE");
+    }
+
+    Ok(sql)
+}
+
+fn generate_create_schema(schema: &NamedSchema) -> Result<String> {
+    let mut sql = format!("CREATE SCHEMA IF NOT EXISTS {}", schema.name);
+
+    if let Some(owner) = &schema.owner {
+        sql.push_str(&format!(" AUTHORIZATION {}", owner));
+    }
+
     Ok(sql)
 }
 
@@ -2043,6 +2072,17 @@ fn generate_comments(schema: &Schema) -> Result<String> {
             comments.push_str(&format!(
                 "COMMENT ON SEQUENCE {} IS '{}';\n",
                 sequence.name,
+                comment.replace("'", "''")
+            ));
+        }
+    }
+
+    // Extension comments
+    for (_, extension) in &schema.extensions {
+        if let Some(comment) = &extension.comment {
+            comments.push_str(&format!(
+                "COMMENT ON EXTENSION \"{}\" IS '{}';\n",
+                extension.name,
                 comment.replace("'", "''")
             ));
         }

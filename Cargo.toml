@@ -21,13 +21,18 @@ indicatif = "0.17"
 console = "0.15"
 dialoguer = "0.11"
 inquire = "0.7"
-tokio = { version = "1.36", features = ["full"] }
+tokio = { version = "1.36", features = ["full", "test-util"] }
 anyhow = "1.0"
 thiserror = "2.0"
 async-trait = "0.1"
 
 # Database dependencies
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio-rustls",
+    "chrono",
+    "uuid",
+] }
 postgres-types = "0.2.9"
 pg_query = "6.0.0"
 tokio-postgres = { version = "0.7.13", features = [
@@ -47,6 +52,9 @@ chrono = { version = "0.4.41", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 regex = "1.11"
 indexmap = { version = "2.9", features = ["serde"] }
+log = "0.4"
+env_logger = "0.11.8"
+test-log = "0.2.18"
 
 # File & path management
 walkdir = "2.5"

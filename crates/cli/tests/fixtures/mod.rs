@@ -43,7 +43,7 @@ pub mod sql {
         CREATE VIEW active_users AS
         SELECT id, name, email
         FROM users
-        WHERE status = 'active';
+        WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days';
     "#;
 
     /// Function
@@ -246,7 +246,7 @@ pub mod expected {
         CREATE VIEW active_users AS
         SELECT id, name, email
         FROM users
-        WHERE status = 'active';
+        WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days';
     "#;
 
     /// Expected output for extension introspection

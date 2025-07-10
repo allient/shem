@@ -193,6 +193,7 @@ async fn test_introspect_extension_without_if_not_exists() -> Result<()> {
     
     // Verify extension without IF NOT EXISTS was introspected
     let schema_content = std::fs::read_to_string(env.temp_path().join("schema/schema.sql"))?;
+    println!("🚀 schema_content: {}", schema_content);
     assert!(schema_content.contains("CREATE EXTENSION \"uuid-ossp\""));
     
     // Clean up
