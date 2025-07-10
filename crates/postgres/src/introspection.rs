@@ -43,13 +43,13 @@ where
         schema.roles.insert(role.name.clone(), role);
     }
 
-    // // Introspect composite types
-    // let composite_types = introspect_composite_types(&*client).await?;
-    // for composite_type in composite_types {
-    //     schema
-    //         .composite_types
-    //         .insert(composite_type.name.clone(), composite_type);
-    // }
+    // Introspect composite types
+    let composite_types = introspect_composite_types(&*client).await?;
+    for composite_type in composite_types {
+        schema
+            .composite_types
+            .insert(composite_type.name.clone(), composite_type);
+    }
 
     // // Introspect range types separately for detailed information
     // let range_types = introspect_range_types(&*client).await?;
@@ -943,6 +943,13 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
     Ok(procedures)
 }
 
+fn normalize_type_name(type_name: &str) -> String {
+    match type_name {
+        "timestamp with time zone" => "timestamptz".to_string(),
+        _ => type_name.to_string(),
+    }
+}
+
 async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<CompositeType>>
 where
     C: GenericClient + Sync,
@@ -1000,9 +1007,10 @@ where
         let compression: Option<i8> = row.get("compression");
         let default_expr: Option<String> = row.get("default_expr");
         let type_comment: Option<String> = row.get("type_comment");
+        let class_comment: Option<String> = row.get("class_comment");
         let owner: u32 = row.get("owner");
 
-        let storage = match storage_type.map(|b| b as u8 as char) {
+        let storage = match storage_type.and_then(|b| std::char::from_u32(b as u32)) {
             Some('p') => Some(ColumnStorage::Plain),
             Some('e') => Some(ColumnStorage::External),
             Some('x') => Some(ColumnStorage::Extended),
@@ -1010,16 +1018,19 @@ where
             _ => None,
         };
 
-        let compression = compression.map(|b| (b as u8 as char).to_string());
+        // More robust compression handling
+        let compression = compression
+            .and_then(|b| std::char::from_u32(b as u32))
+            .map(|c| c.to_string());
 
         let column = Column {
             name: attr_name,
-            type_name: attr_type,
+            type_name: normalize_type_name(&attr_type),
             nullable: !is_not_null,
             default: default_expr,
             identity: None,  // Composite types don't have identity columns
             generated: None, // Composite types don't have generated columns
-            comment: None,   // Could be enhanced to get column comments if needed
+            comment: class_comment,   // Could be enhanced to get column comments if needed
             collation: collation_name,
             storage,
             compression,
