@@ -9,6 +9,8 @@ where
 {
     let mut schema = Schema::new();
 
+    // Independent Objects (Standalone)
+
     // Introspect extensions
     let extensions = introspect_extensions(&*client).await?;
     for ext in extensions {
@@ -16,6 +18,7 @@ where
     }
 
     // Introspect named schemas
+    // Purpose: Namespace to organize objects (tables, functions, etc.).
     let named_schemas = introspect_named_schemas(&*client).await?;
     for named_schema in named_schemas {
         schema
@@ -23,13 +26,24 @@ where
             .insert(named_schema.name.clone(), named_schema);
     }
 
-    // Introspect enums
-    let enums = introspect_enums(&*client).await?;
-    for enum_type in enums {
-        schema.enums.insert(enum_type.name.clone(), enum_type);
+    // Introspect roles
+    // Purpose: Manage authentication and permissions.
+    // CREATE ROLE analyst WITH LOGIN PASSWORD 'secure123';
+    // GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst;
+    let roles = introspect_roles(&*client).await?;
+    for role in roles {
+        schema.roles.insert(role.name.clone(), role);
+    }
+
+    // Introspect collations
+    //Purpose: Define string sorting/rules (e.g., case-insensitive comparison).
+    let collations = introspect_collations(&*client).await?;
+    for collation in collations {
+        schema.collations.insert(collation.name.clone(), collation);
     }
 
     // Introspect tablespaces
+    // Purpose: Control physical storage locations on disk.
     let tablespaces = introspect_tablespaces(&*client).await?;
     for tablespace in tablespaces {
         schema
@@ -37,13 +51,31 @@ where
             .insert(tablespace.name.clone(), tablespace);
     }
 
-    // Introspect roles
-    let roles = introspect_roles(&*client).await?;
-    for role in roles {
-        schema.roles.insert(role.name.clone(), role);
+    // Introspect enums
+    //Purpose: Define a static set of values (e.g., statuses, categories).
+    let enums = introspect_enums(&*client).await?;
+    for enum_type in enums {
+        schema.enums.insert(enum_type.name.clone(), enum_type);
+    }
+
+    // Introspect domains
+    // Purpose: Create a custom type with constraints (e.g., positive integers).
+    let domains = introspect_domains(&*client).await?;
+    for domain in domains {
+        schema.domains.insert(domain.name.clone(), domain);
+    }
+
+    // Introspect base types
+    // Purpose: Fundamental types like INTEGER, TEXT, JSONB.
+    //CREATE TYPE rgb_color AS ENUM ('red', 'green', 'blue');  -- Extends base types
+    let base_types = introspect_base_types(&*client).await?;
+    for base_type in base_types {
+        schema.base_types.insert(base_type.name.clone(), base_type);
     }
 
     // Introspect composite types
+    // Purpose: Combine multiple base types (e.g., address with street, city, state).
+    // CREATE TYPE address AS (street TEXT, city TEXT, zip VARCHAR(10));
     let composite_types = introspect_composite_types(&*client).await?;
     for composite_type in composite_types {
         schema
@@ -52,6 +84,7 @@ where
     }
 
     // Introspect range types separately for detailed information
+    // Purpose: Represent a range of values (e.g., dates, numbers).
     let range_types = introspect_range_types(&*client).await?;
     for range_type in range_types {
         // Store range types in the types collection with a special prefix
@@ -60,21 +93,9 @@ where
             .insert(range_type.name.clone(), range_type);
     }
 
-    // Introspect base types
-    let base_types = introspect_base_types(&*client).await?;
-    for base_type in base_types {
-        schema.base_types.insert(base_type.name.clone(), base_type);
-    }
-
-    // Introspect array types
-    let array_types = introspect_array_types(&*client).await?;
-    for array_type in array_types {
-        schema
-            .array_types
-            .insert(array_type.name.clone(), array_type);
-    }
-
     // Introspect multirange types
+    // Purpose: Discontinuous ranges (PostgreSQL 14+).
+    // SELECT '[2023-01-01, 2023-01-05), [2023-02-01, 2023-02-03)'::DATEMULTIRANGE;
     let multirange_types = introspect_multirange_types(&*client).await?;
     for multirange_type in multirange_types {
         schema
@@ -82,41 +103,49 @@ where
             .insert(multirange_type.name.clone(), multirange_type);
     }
 
-    // Introspect domains
-    let domains = introspect_domains(&*client).await?;
-    for domain in domains {
-        schema.domains.insert(domain.name.clone(), domain);
+    // Introspect array types
+    // Purpose: Store arrays of any base/composite type.
+    let array_types = introspect_array_types(&*client).await?;
+    for array_type in array_types {
+        schema
+            .array_types
+            .insert(array_type.name.clone(), array_type);
     }
 
     // Introspect sequences
+    //Purpose: Generate auto-incrementing IDs.
     let sequences = introspect_sequences(&*client).await?;
     for seq in sequences {
         schema.sequences.insert(seq.name.clone(), seq);
     }
 
-    // Introspect collations
-    let collations = introspect_collations(&*client).await?;
-    for collation in collations {
-        schema.collations.insert(collation.name.clone(), collation);
+    // Semi-Independent Objects
+
+    // Introspect tables
+    // Purpose: Store data.
+    let tables = introspect_tables(&*client).await?;
+    for table in tables {
+        schema.tables.insert(table.name.clone(), table);
     }
 
-    // // Introspect tables
-    // let tables = introspect_tables(&*client).await?;
-    // for table in tables {
-    //     schema.tables.insert(table.name.clone(), table);
-    // }
+    // Introspect views
+    // Purpose: Virtual table from a query.
+    let views = introspect_views(&*client).await?;
+    for view in views {
+        schema.views.insert(view.name.clone(), view);
+    }
 
-    // // Introspect views
-    // let views = introspect_views(&*client).await?;
-    // for view in views {
-    //     schema.views.insert(view.name.clone(), view);
-    // }
+    // Introspect materialized views
+    let materialized_views = introspect_materialized_views(&*client).await?;
+    for view in materialized_views {
+        schema.materialized_views.insert(view.name.clone(), view);
+    }
 
-    // // Introspect materialized views
-    // let materialized_views = introspect_materialized_views(&*client).await?;
-    // for view in materialized_views {
-    //     schema.materialized_views.insert(view.name.clone(), view);
-    // }
+    // Introspect policies
+    let policies = introspect_policies(&*client).await?;
+    for policy in policies {
+        schema.policies.insert(policy.name.clone(), policy);
+    }
 
     // // Introspect functions
     // let functions = introspect_functions(&*client).await?;
@@ -148,12 +177,6 @@ where
     // let event_triggers = introspect_event_triggers(&*client).await?;
     // for trigger in event_triggers {
     //     schema.event_triggers.insert(trigger.name.clone(), trigger);
-    // }
-
-    // // Introspect policies
-    // let policies = introspect_policies(&*client).await?;
-    // for policy in policies {
-    //     schema.policies.insert(policy.name.clone(), policy);
     // }
 
     // // Introspect servers
@@ -282,8 +305,81 @@ async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
             .map(|row| row.get::<_, String>("parent_table"))
             .collect();
 
-        // Get partitioning information (simplified)
-        let partition_by = None; // TODO: Implement partition detection
+        // Get partitioning information
+        let partition_by = if inherits.is_empty() {
+            // Check if this table is a partitioned table (has partitions)
+            let partition_query = r#"
+                SELECT c.relname as partition_name
+                FROM pg_inherits i
+                JOIN pg_class c ON i.inhrelid = c.oid
+                JOIN pg_class parent ON i.inhparent = parent.oid
+                JOIN pg_namespace n ON parent.relnamespace = n.oid
+                WHERE parent.relname = $1 AND n.nspname = $2
+                LIMIT 1
+            "#;
+            let partition_rows = client
+                .query(
+                    partition_query,
+                    &[&name, &schema.as_deref().unwrap_or("public")],
+                )
+                .await?;
+
+            if !partition_rows.is_empty() {
+                // This is a partitioned table, get the partition strategy and columns
+                let partition_info_query = r#"
+                    SELECT 
+                        pg_get_partkeydef(parent.oid) as partition_expression,
+                        parent.relpartbound as partition_bound
+                    FROM pg_class parent
+                    JOIN pg_namespace n ON parent.relnamespace = n.oid
+                    WHERE parent.relname = $1 AND n.nspname = $2
+                "#;
+                let partition_info_rows = client
+                    .query(
+                        partition_info_query,
+                        &[&name, &schema.as_deref().unwrap_or("public")],
+                    )
+                    .await?;
+
+                if let Some(row) = partition_info_rows.first() {
+                    let partition_expression: Option<String> = row.get("partition_expression");
+                    if let Some(expr) = partition_expression {
+                        // Parse the partition expression to extract method and columns
+                        // Example: "RANGE (created_date)" or "LIST (region)"
+                        if expr.to_uppercase().contains("RANGE") {
+                            // Extract column names from the expression
+                            let columns = extract_partition_columns(&expr);
+                            Some(PartitionBy {
+                                method: PartitionMethod::Range,
+                                columns,
+                            })
+                        } else if expr.to_uppercase().contains("LIST") {
+                            let columns = extract_partition_columns(&expr);
+                            Some(PartitionBy {
+                                method: PartitionMethod::List,
+                                columns,
+                            })
+                        } else if expr.to_uppercase().contains("HASH") {
+                            let columns = extract_partition_columns(&expr);
+                            Some(PartitionBy {
+                                method: PartitionMethod::Hash,
+                                columns,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Parse storage parameters
         let storage_params = storage_parameters
@@ -322,7 +418,9 @@ async fn introspect_columns<C: GenericClient>(
             c.identity_generation,
             c.generation_expression,
             a.attcollation as collation_oid,
-            col.collname as collation_name
+            col.collname as collation_name,
+            obj_description(a.attrelid, 'pg_class') as table_comment,
+            col_description(a.attrelid, a.attnum) as column_comment
         FROM pg_catalog.pg_attribute a
         JOIN pg_catalog.pg_class t ON a.attrelid = t.oid
         JOIN pg_catalog.pg_namespace n ON t.relnamespace = n.oid
@@ -375,6 +473,7 @@ async fn introspect_columns<C: GenericClient>(
                 stored: true,
             });
         let collation: Option<String> = row.get("collation_name");
+        let column_comment: Option<String> = row.get("column_comment");
 
         columns.push(Column {
             name,
@@ -383,7 +482,7 @@ async fn introspect_columns<C: GenericClient>(
             default,
             identity,
             generated,
-            comment: None,
+            comment: column_comment,
             collation,
             storage: None,     // TODO: Get storage type
             compression: None, // TODO: Get compression method
@@ -451,6 +550,7 @@ async fn introspect_constraints<C: GenericClient>(
             }
             'u' => ConstraintKind::Unique,
             'c' => ConstraintKind::Check,
+            'x' => ConstraintKind::Exclusion,
             _ => continue,
         };
 
@@ -611,7 +711,8 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             v.view_definition,
             v.check_option,
             pgc.relowner as owner,
-            pgc.reloptions as options
+            pgc.reloptions as options,
+            obj_description(pgc.oid, 'pg_class') as comment
         FROM information_schema.views v
         JOIN pg_class pgc ON pgc.relname = v.table_name
         JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = v.table_schema
@@ -634,6 +735,7 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
         let definition: String = row.get("view_definition");
         let check_option: Option<String> = row.get("check_option");
         let options: Option<Vec<String>> = row.get("options");
+        let comment: Option<String> = row.get("comment");
 
         let check_option_enum = match check_option.as_deref() {
             Some("LOCAL") => CheckOption::Local,
@@ -665,7 +767,7 @@ async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
             schema,
             definition,
             check_option: check_option_enum,
-            comment: None,
+            comment,
             security_barrier,
             columns,
         });
@@ -685,14 +787,22 @@ async fn introspect_materialized_views<C: GenericClient>(
             c.reloptions as storage_parameters,
             c.reltablespace as tablespace_oid,
             -- Check if the materialized view has been populated with data
-            -- This is a heuristic: if the view has been refreshed or has data, assume it was created WITH DATA
+            -- Materialized views are typically created WITH DATA by default unless explicitly specified WITH NO DATA
+            -- We check if the view has any tuples, but this might not be reliable for empty tables
             (SELECT EXISTS (
                 SELECT 1 FROM pg_class c 
                 JOIN pg_namespace n ON c.relnamespace = n.oid 
                 WHERE c.relname = mv.matviewname 
                 AND n.nspname = mv.schemaname 
-                AND c.reltuples > 0
-            )) as has_data
+                AND c.reltuples >= 0  -- Changed from > 0 to >= 0 since empty tables are still valid
+            )) as has_data,
+            -- Get comment on the materialized view
+            (SELECT description FROM pg_description d
+             JOIN pg_class c2 ON d.objoid = c2.oid
+             JOIN pg_namespace n2 ON c2.relnamespace = n2.oid
+             WHERE c2.relname = mv.matviewname 
+             AND n2.nspname = mv.schemaname
+             AND d.objsubid = 0) as comment
         FROM pg_matviews mv
         JOIN pg_class c ON c.relname = mv.matviewname
         JOIN pg_namespace n ON c.relnamespace = n.oid AND n.nspname = mv.schemaname
@@ -715,9 +825,12 @@ async fn introspect_materialized_views<C: GenericClient>(
         let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
         let tablespace_oid: Option<u32> = row.get("tablespace_oid");
         let has_data: Option<bool> = row.get("has_data");
+        let comment: Option<String> = row.get("comment");
 
-        // Default to true (WITH DATA) if we can't determine, as that's the most common case
-        let populate_with_data = has_data.unwrap_or(true);
+        // Materialized views are created WITH DATA by default unless explicitly specified WITH NO DATA
+        // Since we can't reliably determine this from the system catalogs, we assume WITH DATA for existing views
+        // The user can explicitly create views with WITH NO DATA if needed
+        let populate_with_data = true;
 
         // Get tablespace name if available
         let tablespace = if let Some(oid) = tablespace_oid {
@@ -745,7 +858,7 @@ async fn introspect_materialized_views<C: GenericClient>(
             schema,
             definition,
             check_option: CheckOption::None, // Materialized views don't have check options
-            comment: None,
+            comment,
             tablespace,
             storage_parameters: storage_params,
             indexes,
@@ -2620,4 +2733,23 @@ where
     }
 
     Ok(multirange_types)
+}
+
+fn extract_partition_columns(partition_expression: &str) -> Vec<String> {
+    // Parse partition expression like "RANGE (created_date)" or "LIST (region, country)"
+    // Extract column names from within parentheses
+    if let Some(start) = partition_expression.find('(') {
+        if let Some(end) = partition_expression.rfind(')') {
+            let columns_str = &partition_expression[start + 1..end];
+            columns_str
+                .split(',')
+                .map(|col| col.trim().to_string())
+                .filter(|col| !col.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    }
 }

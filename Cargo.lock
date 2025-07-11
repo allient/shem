@@ -1475,6 +1475,7 @@ dependencies = [
  "serde_json",
  "shem-core",
  "sqlx",
+ "tempfile",
  "test-log",
  "tokio",
  "tokio-postgres",
