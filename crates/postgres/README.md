@@ -58,45 +58,48 @@ Implements the `DatabaseDriver` trait from `shem-core`:
 
 | Object Type | Introspection | SQL Generation | Description |
 |-------------|---------------|----------------|-------------|
-| **Tables** | ❌ Missing | ❌ Missing | Base tables with columns, constraints, indexes |
-| **Views** | ❌ Missing | ❌ Missing | Virtual tables based on SQL queries |
-| **Materialized Views** | ❌ Missing | ❌ Missing | Materialized query results with refresh options |
-| **Functions** | ❌ Missing | ❌ Missing | User-defined functions with parameters and return types |
-| **Procedures** | ❌ Missing | ❌ Missing | Stored procedures (PostgreSQL 11+) |
-| **Enums** | ❌ Missing | ❌ Missing | Custom enumerated types |
-| **Composite Types** | ❌ Missing | ❌ Missing | User-defined composite types |
-| **Range Types** | ❌ Missing | ❌ Missing | Custom range types (int4range, etc.) |
-| **Domains** | ❌ Missing | ❌ Missing | Custom data types with constraints |
-| **Sequences** | ❌ Missing | ❌ Missing | Auto-incrementing number generators |
-| **Extensions** | ❌ Missing | ❌ Missing | PostgreSQL extensions and their objects |
-| **Triggers** | ❌ Missing | ❌ Missing | Row and statement-level triggers |
-| **Constraint Triggers** | ❌ Missing | ❌ Missing | Triggers for constraint enforcement |
-| **Event Triggers** | ❌ Missing | ❌ Missing | Database-level event triggers |
-| **Policies** | ❌ Missing | ❌ Missing | Row-level security policies |
-| **Indexes** | ❌ Missing | ❌ Missing | All index types (B-tree, Hash, GiST, etc.) |
-| **Rules** | ❌ Missing | ❌ Missing | Query rewrite rules |
-| **Servers** | ❌ Missing | ❌ Missing | Foreign data wrapper servers |
-| **Foreign Tables** | ❌ Missing | ❌ Missing | Tables in external data sources |
-| **Foreign Data Wrappers** | ❌ Missing | ❌ Missing | External data source connectors |
-| **Publications** | ❌ Missing | ❌ Missing | Logical replication publications |
-| **Subscriptions** | ❌ Missing | ❌ Missing | Logical replication subscriptions |
-| **Roles** | ❌ Missing | ❌ Missing | Database users and roles |
-| **Tablespaces** | ❌ Missing | ❌ Missing | Physical storage locations |
-| **Named Schemas** | ❌ Missing | ❌ Missing | Schema namespaces |
-| **Foreign Key Constraints** | ❌ Missing | ❌ Missing | Referential integrity constraints |
+| **Tables** | ✅ Complete | ✅ Complete | Base tables with columns, constraints, indexes, inheritance, partitioning |
+| **Views** | ✅ Complete | ✅ Complete | Virtual tables based on SQL queries with check options |
+| **Materialized Views** | ✅ Complete | ✅ Complete | Materialized query results with refresh options and storage parameters |
+| **Functions** | ✅ Complete | ✅ Complete | User-defined functions with parameters, return types, volatility, and behavior settings |
+| **Procedures** | ✅ Complete | ✅ Complete | Stored procedures (PostgreSQL 11+) with parameters and security settings |
+| **Enums** | ✅ Complete | ✅ Complete | Custom enumerated types with values and comments |
+| **Composite Types** | ✅ Complete | ✅ Complete | User-defined composite types with attributes |
+| **Range Types** | ✅ Complete | ✅ Complete | Custom range types (int4range, etc.) with subtypes and functions |
+| **Domains** | ✅ Complete | ✅ Complete | Custom data types with constraints and defaults |
+| **Sequences** | ✅ Complete | ✅ Complete | Auto-incrementing number generators with all options |
+| **Extensions** | ✅ Complete | ✅ Complete | PostgreSQL extensions and their objects |
+| **Triggers** | ✅ Complete | ✅ Complete | Row and statement-level triggers with timing, events, and conditions |
+| **Constraint Triggers** | ✅ Complete | ✅ Complete | Triggers for constraint enforcement with deferrable options |
+| **Event Triggers** | ✅ Complete | ✅ Complete | Database-level event triggers with tags and filters |
+| **Policies** | ✅ Complete | ✅ Complete | Row-level security policies with commands and expressions |
+| **Indexes** | ✅ Complete | ✅ Complete | All index types (B-tree, Hash, GiST, etc.) with options |
+| **Rules** | ✅ Complete | ✅ Complete | Query rewrite rules with conditions and actions |
+| **Collations** | ✅ Complete | ✅ Complete | Text sorting and comparison rules with providers |
+| **Named Schemas** | ✅ Complete | ✅ Complete | Schema namespaces with owners and comments |
+| **Foreign Key Constraints** | ✅ Complete | ✅ Complete | Referential integrity constraints with actions |
+| **Base Types** | ✅ Complete | ✅ Complete | Fundamental types with internal properties |
+| **Array Types** | ✅ Complete | ✅ Complete | Array types with element types |
+| **Multirange Types** | ✅ Complete | ✅ Complete | Discontinuous ranges (PostgreSQL 14+) |
+| **Roles** | ✅ Complete | ✅ Complete | Database users and roles with privileges |
+| **Tablespaces** | ✅ Complete | ✅ Complete | Physical storage locations with options |
+| **Publications** | ✅ Complete | ✅ Complete | Logical replication publications |
 
 ### 🔶 Partially Implemented Objects
 
 | Object Type | Introspection | SQL Generation | Description | Missing Features |
 |-------------|---------------|----------------|-------------|------------------|
-| **Comments** | ❌ Missing | ❌ Missing | Object documentation | Limited to basic COMMENT ON statements |
+| **Comments** | ✅ Complete | ✅ Complete | Object documentation | Limited to basic COMMENT ON statements |
 | **Grants/Privileges** | ❌ Missing | ✅ Basic | Permission management | No introspection of existing grants |
-| **Collations** | ❌ Missing | ❌ Missing | Text sorting and comparison rules |
 
 ### ❌ Not Yet Implemented Objects
 
 | Object Type | Priority | Description | Use Cases |
 |-------------|----------|-------------|-----------|
+| **Servers** | Medium | Foreign data wrapper servers | External data source connections |
+| **Foreign Tables** | Medium | Tables in external data sources | Distributed data access |
+| **Subscriptions** | Medium | Logical replication subscriptions | Data replication |
+| **Foreign Data Wrappers** | Medium | External data source connectors | Custom data source integration |
 | **Casts** | Medium | Type conversion rules | Custom type conversions |
 | **Operators** | Medium | Custom operators (e.g., `#>`, `+=`) | Custom data type operations |
 | **Operator Classes** | Medium | Index behavior definitions | Custom index types |
@@ -217,6 +220,15 @@ The crate includes comprehensive tests that verify:
 - Base Types, Array Types, Multirange Types
 - All DROP operations for the above objects
 - ALTER operations for sequences and enums
+
+**✅ Fully Tested Introspection Methods (25 test files):**
+- Tables, Views, Materialized Views
+- Functions, Procedures, Enums, Domains, Sequences
+- Triggers, Constraint Triggers, Event Triggers
+- Policies, Rules, Collations, Extensions
+- Base Types, Array Types, Multirange Types, Range Types, Composite Types
+- Roles, Tablespaces, Publications, Foreign Key Constraints
+- Named Schemas
 
 **Note:**  
 Direct unit tests for introspection functions (`introspect_*`) are not included in this test suite, as these require a live database connection. Introspection is tested via integration and CLI tests, which connect to a test database and verify the extracted schema matches expectations.

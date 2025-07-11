@@ -13,11 +13,11 @@
  * and automation of database changes, allowing tools to programmatically manage PostgreSQL schemas.
  */
 use shem_core::{
-    Collation, ConstraintTrigger, Domain, EventTrigger, Extension, Function, Index, IndexMethod,
-    MaterializedView, Policy, Procedure, Rule, Sequence, Server, Table, Trigger, View,
+    Collation, ConstraintTrigger, Domain, EventTrigger, Extension, ForeignDataWrapper, ForeignTable, Function, Index, IndexMethod,
+    MaterializedView, Policy, Procedure, Publication, Role, Rule, Sequence, Server, Subscription, Table, Tablespace, Trigger, View,
     schema::{
-        ArrayType, BaseType, CheckOption, CollationProvider, EventTriggerEvent, MultirangeType,
-        ParameterMode, PolicyCommand, RuleEvent, SortOrder, TriggerEvent, TriggerLevel,
+        ArrayType, BaseType, CheckOption, CollationProvider, CompositeType, EventTriggerEvent, MultirangeType,
+        ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder, TriggerEvent, TriggerLevel,
         TriggerTiming,
     },
     traits::SqlGenerator,
@@ -1646,5 +1646,387 @@ impl SqlGenerator for PostgresSqlGenerator {
             Self::force_quote_identifier(&multirange_type.name)
         };
         Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
+    }
+
+    fn create_role(&self, role: &Role) -> Result<String> {
+        let role_name = Self::force_quote_identifier(&role.name);
+        let mut sql = format!("CREATE ROLE {}", role_name);
+
+        // Add role attributes
+        if role.superuser {
+            sql.push_str(" SUPERUSER");
+        }
+        if role.createdb {
+            sql.push_str(" CREATEDB");
+        }
+        if role.createrole {
+            sql.push_str(" CREATEROLE");
+        }
+        if role.inherit {
+            sql.push_str(" INHERIT");
+        }
+        if role.login {
+            sql.push_str(" LOGIN");
+        }
+        if role.replication {
+            sql.push_str(" REPLICATION");
+        }
+
+        // Add connection limit
+        if let Some(limit) = role.connection_limit {
+            sql.push_str(&format!(" CONNECTION LIMIT {}", limit));
+        }
+
+        // Add password
+        if let Some(password) = &role.password {
+            sql.push_str(&format!(" PASSWORD '{}'", password.replace('\'', "''")));
+        }
+
+        // Add valid until
+        if let Some(valid_until) = &role.valid_until {
+            sql.push_str(&format!(" VALID UNTIL '{}'", valid_until.replace('\'', "''")));
+        }
+
+        // Add member of roles
+        if !role.member_of.is_empty() {
+            sql.push_str(&format!(" IN ROLE {}", role.member_of.join(", ")));
+        }
+
+        sql.push(';');
+        Ok(sql)
+    }
+
+    fn drop_role(&self, role: &Role) -> Result<String> {
+        let role_name = Self::force_quote_identifier(&role.name);
+        Ok(format!("DROP ROLE IF EXISTS {} CASCADE;", role_name))
+    }
+
+    fn create_tablespace(&self, tablespace: &Tablespace) -> Result<String> {
+        let tablespace_name = Self::force_quote_identifier(&tablespace.name);
+        let location = tablespace.location.replace('\'', "''");
+        let owner = Self::force_quote_identifier(&tablespace.owner);
+
+        let mut sql = format!(
+            "CREATE TABLESPACE {} OWNER {} LOCATION '{}'",
+            tablespace_name, owner, location
+        );
+
+        // Add options if present
+        if !tablespace.options.is_empty() {
+            let options = tablespace
+                .options
+                .iter()
+                .map(|(k, v)| format!("{} = {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" WITH ({})", options));
+        }
+
+        sql.push(';');
+
+        // Add comment if present
+        if let Some(comment) = &tablespace.comment {
+            sql.push_str(&format!(
+                "\nCOMMENT ON TABLESPACE {} IS '{}';",
+                tablespace_name,
+                comment.replace('\'', "''")
+            ));
+        }
+
+        Ok(sql)
+    }
+
+    fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String> {
+        let tablespace_name = Self::force_quote_identifier(&tablespace.name);
+        Ok(format!("DROP TABLESPACE IF EXISTS {} CASCADE;", tablespace_name))
+    }
+
+    fn create_publication(&self, publication: &Publication) -> Result<String> {
+        let publication_name = Self::force_quote_identifier(&publication.name);
+        let mut sql = format!("CREATE PUBLICATION {}", publication_name);
+
+        // Add FOR ALL TABLES if specified
+        if publication.all_tables {
+            sql.push_str(" FOR ALL TABLES");
+        } else if !publication.tables.is_empty() {
+            // Add specific tables
+            let tables = publication
+                .tables
+                .iter()
+                .map(|t| Self::force_quote_identifier(t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" FOR TABLE {}", tables));
+        }
+
+        // Add operation types
+        let mut operations = Vec::new();
+        if publication.insert {
+            operations.push("INSERT");
+        }
+        if publication.update {
+            operations.push("UPDATE");
+        }
+        if publication.delete {
+            operations.push("DELETE");
+        }
+        if publication.truncate {
+            operations.push("TRUNCATE");
+        }
+
+        if !operations.is_empty() {
+            sql.push_str(&format!(" WITH ({})", operations.join(", ")));
+        }
+
+        sql.push(';');
+        Ok(sql)
+    }
+
+    fn drop_publication(&self, publication: &Publication) -> Result<String> {
+        let publication_name = Self::force_quote_identifier(&publication.name);
+        Ok(format!("DROP PUBLICATION IF EXISTS {} CASCADE;", publication_name))
+    }
+
+    fn create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
+        let type_name = if let Some(schema) = &composite_type.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&composite_type.name)
+            )
+        } else {
+            Self::force_quote_identifier(&composite_type.name)
+        };
+
+        let mut sql = format!("CREATE TYPE {} AS (", type_name);
+
+        let attributes = composite_type
+            .attributes
+            .iter()
+            .map(|attr| {
+                let attr_name = Self::force_quote_identifier(&attr.name);
+                format!("{} {}", attr_name, attr.type_name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        sql.push_str(&attributes);
+        sql.push_str(");");
+
+        // Add comment if present
+        if let Some(comment) = &composite_type.comment {
+            sql.push_str(&format!(
+                "\nCOMMENT ON TYPE {} IS '{}';",
+                type_name,
+                comment.replace('\'', "''")
+            ));
+        }
+
+        Ok(sql)
+    }
+
+    fn drop_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
+        let type_name = if let Some(schema) = &composite_type.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&composite_type.name)
+            )
+        } else {
+            Self::force_quote_identifier(&composite_type.name)
+        };
+        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
+    }
+
+    fn create_range_type(&self, range_type: &RangeType) -> Result<String> {
+        let type_name = if let Some(schema) = &range_type.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&range_type.name)
+            )
+        } else {
+            Self::force_quote_identifier(&range_type.name)
+        };
+
+        let mut sql = format!("CREATE TYPE {} AS RANGE (", type_name);
+        sql.push_str(&format!("SUBTYPE = {}", range_type.subtype));
+
+        // Add subtype operator class if present
+        if let Some(opclass) = &range_type.subtype_opclass {
+            sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", opclass));
+        }
+
+        // Add collation if present
+        if let Some(collation) = &range_type.collation {
+            sql.push_str(&format!(", COLLATION = {}", collation));
+        }
+
+        // Add canonical function if present
+        if let Some(canonical) = &range_type.canonical {
+            sql.push_str(&format!(", CANONICAL = {}", canonical));
+        }
+
+        // Add subtype difference function if present
+        if let Some(diff) = &range_type.subtype_diff {
+            sql.push_str(&format!(", SUBTYPE_DIFF = {}", diff));
+        }
+
+        sql.push_str(");");
+
+        // Add comment if present
+        if let Some(comment) = &range_type.comment {
+            sql.push_str(&format!(
+                "\nCOMMENT ON TYPE {} IS '{}';",
+                type_name,
+                comment.replace('\'', "''")
+            ));
+        }
+
+        Ok(sql)
+    }
+
+    fn drop_range_type(&self, range_type: &RangeType) -> Result<String> {
+        let type_name = if let Some(schema) = &range_type.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&range_type.name)
+            )
+        } else {
+            Self::force_quote_identifier(&range_type.name)
+        };
+        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
+    }
+
+    fn create_subscription(&self, subscription: &Subscription) -> Result<String> {
+        let subscription_name = Self::force_quote_identifier(&subscription.name);
+        let connection_string = subscription.connection.replace('\'', "''");
+        let publications = subscription.publication.join(", ");
+
+        let mut sql = format!(
+            "CREATE SUBSCRIPTION {} CONNECTION '{}' PUBLICATION {}",
+            subscription_name, connection_string, publications
+        );
+
+        // Add enabled/disabled
+        if !subscription.enabled {
+            sql.push_str(" DISABLED");
+        }
+
+        // Add slot name if present
+        if let Some(slot_name) = &subscription.slot_name {
+            sql.push_str(&format!(" SLOT_NAME {}", Self::force_quote_identifier(slot_name)));
+        }
+
+        sql.push(';');
+        Ok(sql)
+    }
+
+    fn drop_subscription(&self, subscription: &Subscription) -> Result<String> {
+        let subscription_name = Self::force_quote_identifier(&subscription.name);
+        Ok(format!("DROP SUBSCRIPTION IF EXISTS {} CASCADE;", subscription_name))
+    }
+
+    fn create_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String> {
+        let table_name = if let Some(schema) = &foreign_table.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&foreign_table.name)
+            )
+        } else {
+            Self::force_quote_identifier(&foreign_table.name)
+        };
+
+        let server_name = Self::force_quote_identifier(&foreign_table.server);
+
+        let mut sql = format!("CREATE FOREIGN TABLE {} (", table_name);
+
+        // Add columns
+        let columns = foreign_table
+            .columns
+            .iter()
+            .map(|col| {
+                let col_name = Self::force_quote_identifier(&col.name);
+                format!("{} {}", col_name, col.type_name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        sql.push_str(&columns);
+        sql.push_str(&format!(") SERVER {}", server_name));
+
+        // Add options if present
+        if !foreign_table.options.is_empty() {
+            let options = foreign_table
+                .options
+                .iter()
+                .map(|(k, v)| format!("{} = {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" OPTIONS ({})", options));
+        }
+
+        sql.push(';');
+
+        // Add comment if present
+        // if let Some(comment) = &foreign_table.comment {
+        //     sql.push_str(&format!(
+        //         "\nCOMMENT ON FOREIGN TABLE {} IS '{}';",
+        //         table_name,
+        //         comment.replace('\'', "''")
+        //     ));
+        // }
+
+        Ok(sql)
+    }
+
+    fn drop_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String> {
+        let table_name = if let Some(schema) = &foreign_table.schema {
+            format!(
+                "{}.{}",
+                Self::force_quote_identifier(schema),
+                Self::force_quote_identifier(&foreign_table.name)
+            )
+        } else {
+            Self::force_quote_identifier(&foreign_table.name)
+        };
+        Ok(format!("DROP FOREIGN TABLE IF EXISTS {} CASCADE;", table_name))
+    }
+
+    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
+        let fdw_name = Self::force_quote_identifier(&fdw.name);
+        
+        let mut sql = format!("CREATE FOREIGN DATA WRAPPER {}", fdw_name);
+
+        // Add handler if present
+        if let Some(handler) = &fdw.handler {
+            sql.push_str(&format!(" HANDLER {}", Self::force_quote_identifier(handler)));
+        }
+
+        // Add validator if present
+        if let Some(validator) = &fdw.validator {
+            sql.push_str(&format!(" VALIDATOR {}", Self::force_quote_identifier(validator)));
+        }
+
+        // Add options if present
+        if !fdw.options.is_empty() {
+            let options = fdw
+                .options
+                .iter()
+                .map(|(k, v)| format!("{} = {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" OPTIONS ({})", options));
+        }
+
+        sql.push(';');
+        Ok(sql)
+    }
+
+    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
+        let fdw_name = Self::force_quote_identifier(&fdw.name);
+        Ok(format!("DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;", fdw_name))
     }
 }

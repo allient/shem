@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::schema::{
     Collation, ConstraintTrigger, Domain, EnumType, EventTrigger, Extension, Function, Index,
-    MaterializedView, Policy, Procedure, Rule, Schema, Sequence, Server, Table, Trigger, View,
-    BaseType, ArrayType, MultirangeType,
+    MaterializedView, Policy, Procedure, Publication, Role, Rule, Schema, Sequence, Server, Table, Tablespace, Trigger, View,
+    BaseType, ArrayType, MultirangeType, CompositeType, RangeType, Subscription, ForeignTable, ForeignDataWrapper,
 };
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -213,6 +213,54 @@ pub trait SqlGenerator: Send + Sync {
 
     /// Generate REVOKE privileges SQL
     fn revoke_privileges(&self, privileges: &[String], on_object: &str, from_roles: &[String]) -> Result<String>;
+
+    /// Generate CREATE ROLE SQL
+    fn create_role(&self, role: &Role) -> Result<String>;
+
+    /// Generate DROP ROLE SQL
+    fn drop_role(&self, role: &Role) -> Result<String>;
+
+    /// Generate CREATE TABLESPACE SQL
+    fn create_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
+
+    /// Generate DROP TABLESPACE SQL
+    fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
+
+    /// Generate CREATE PUBLICATION SQL
+    fn create_publication(&self, publication: &Publication) -> Result<String>;
+
+    /// Generate DROP PUBLICATION SQL
+    fn drop_publication(&self, publication: &Publication) -> Result<String>;
+
+    /// Generate CREATE COMPOSITE TYPE SQL
+    fn create_composite_type(&self, composite_type: &CompositeType) -> Result<String>;
+
+    /// Generate DROP COMPOSITE TYPE SQL
+    fn drop_composite_type(&self, composite_type: &CompositeType) -> Result<String>;
+
+    /// Generate CREATE RANGE TYPE SQL
+    fn create_range_type(&self, range_type: &RangeType) -> Result<String>;
+
+    /// Generate DROP RANGE TYPE SQL
+    fn drop_range_type(&self, range_type: &RangeType) -> Result<String>;
+
+    /// Generate CREATE SUBSCRIPTION SQL
+    fn create_subscription(&self, subscription: &Subscription) -> Result<String>;
+
+    /// Generate DROP SUBSCRIPTION SQL
+    fn drop_subscription(&self, subscription: &Subscription) -> Result<String>;
+
+    /// Generate CREATE FOREIGN TABLE SQL
+    fn create_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String>;
+
+    /// Generate DROP FOREIGN TABLE SQL
+    fn drop_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String>;
+
+    /// Generate CREATE FOREIGN DATA WRAPPER SQL
+    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
+
+    /// Generate DROP FOREIGN DATA WRAPPER SQL
+    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
 }
 
 /// Database features
