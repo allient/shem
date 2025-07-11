@@ -234,6 +234,7 @@ pub struct RangeType {
     pub canonical: Option<String>,
     pub subtype_diff: Option<String>,
     pub multirange_type_name: Option<String>, // Added: multirange type
+    pub comment: Option<String>,
 }
 
 // New structures for additional PostgreSQL objects

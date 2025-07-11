@@ -51,14 +51,14 @@ where
             .insert(composite_type.name.clone(), composite_type);
     }
 
-    // // Introspect range types separately for detailed information
-    // let range_types = introspect_range_types(&*client).await?;
-    // for range_type in range_types {
-    //     // Store range types in the types collection with a special prefix
-    //     schema
-    //         .range_types
-    //         .insert(range_type.name.clone(), range_type);
-    // }
+    // Introspect range types separately for detailed information
+    let range_types = introspect_range_types(&*client).await?;
+    for range_type in range_types {
+        // Store range types in the types collection with a special prefix
+        schema
+            .range_types
+            .insert(range_type.name.clone(), range_type);
+    }
 
     // // Introspect base types
     // let base_types = introspect_base_types(&*client).await?;
@@ -943,13 +943,6 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
     Ok(procedures)
 }
 
-fn normalize_type_name(type_name: &str) -> String {
-    match type_name {
-        "timestamp with time zone" => "timestamptz".to_string(),
-        _ => type_name.to_string(),
-    }
-}
-
 async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<CompositeType>>
 where
     C: GenericClient + Sync,
@@ -1025,12 +1018,12 @@ where
 
         let column = Column {
             name: attr_name,
-            type_name: normalize_type_name(&attr_type),
+            type_name: attr_type,
             nullable: !is_not_null,
             default: default_expr,
-            identity: None,  // Composite types don't have identity columns
-            generated: None, // Composite types don't have generated columns
-            comment: class_comment,   // Could be enhanced to get column comments if needed
+            identity: None,         // Composite types don't have identity columns
+            generated: None,        // Composite types don't have generated columns
+            comment: class_comment, // Could be enhanced to get column comments if needed
             collation: collation_name,
             storage,
             compression,
@@ -1765,27 +1758,33 @@ where
     C: GenericClient + Sync,
 {
     let query = r#"
-        SELECT 
-            t.typname AS type_name,
-            n.nspname AS schema_name,
-            r.rngsubtype AS subtype_oid,
-            r.rngsubopc AS subtype_opclass_oid,
-            r.rngcollation AS collation_oid,
-            p1.proname AS canonical_function,
-            p2.proname AS subtype_diff_function,
-            t.typowner AS owner
-        FROM pg_type t
-        JOIN pg_namespace n ON t.typnamespace = n.oid
-        JOIN pg_range r ON t.oid = r.rngtypid
-        LEFT JOIN pg_proc p1 ON p1.oid = r.rngcanonical
-        LEFT JOIN pg_proc p2 ON p2.oid = r.rngsubdiff
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.typowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
-        )
+    SELECT 
+        t.typname AS type_name,
+        n.nspname AS schema_name,
+        r.rngsubtype AS subtype_oid,
+        r.rngsubopc AS subtype_opclass_oid,
+        r.rngcollation AS collation_oid,
+        p1.proname AS canonical_function,
+        p2.proname AS subtype_diff_function,
+        t.typowner AS owner,
+        obj_description(t.oid, 'pg_type') AS comment,
+        pg_catalog.format_type(r.rngsubtype, NULL) AS subtype_name,  -- <-- Corrected here
+        opc.opcname AS subtype_opclass_name,
+        coll.collname AS collation_name
+    FROM pg_type t
+    JOIN pg_namespace n ON t.typnamespace = n.oid
+    JOIN pg_range r ON t.oid = r.rngtypid
+    LEFT JOIN pg_proc p1 ON p1.oid = r.rngcanonical
+    LEFT JOIN pg_proc p2 ON p2.oid = r.rngsubdiff
+    LEFT JOIN pg_opclass opc ON opc.oid = r.rngsubopc
+    LEFT JOIN pg_collation coll ON coll.oid = r.rngcollation
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+    AND t.typowner > 1
+    AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        JOIN pg_extension e ON d.refobjid = e.oid
+        WHERE d.objid = t.oid AND d.deptype = 'e'
+    )
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -1794,38 +1793,14 @@ where
     for row in rows {
         let name: String = row.get("type_name");
         let schema: Option<String> = row.get("schema_name");
-        let subtype_oid: u32 = row.get("subtype_oid");
-        let subtype_opclass_oid: Option<u32> = row.get("subtype_opclass_oid");
-        let collation_oid: Option<u32> = row.get("collation_oid");
         let canonical = row.get::<_, Option<String>>("canonical_function");
         let subtype_diff = row.get::<_, Option<String>>("subtype_diff_function");
-
-        // Get subtype name
-        let subtype_query = "SELECT typname FROM pg_type WHERE oid = $1";
-        let subtype_rows = client.query(subtype_query, &[&subtype_oid]).await?;
-        let subtype = if let Some(subtype_row) = subtype_rows.first() {
-            subtype_row.get::<_, String>("typname")
-        } else {
-            "unknown".to_string()
-        };
-
-        // Get opclass name
-        let subtype_opclass = if let Some(opclass_oid) = subtype_opclass_oid {
-            let opclass_query = "SELECT opcname FROM pg_opclass WHERE oid = $1";
-            let opclass_rows = client.query(opclass_query, &[&opclass_oid]).await?;
-            opclass_rows.first().map(|row| row.get("opcname"))
-        } else {
-            None
-        };
-
-        // Get collation name
-        let collation = if let Some(coll_oid) = collation_oid {
-            let coll_query = "SELECT collname FROM pg_collation WHERE oid = $1";
-            let coll_rows = client.query(coll_query, &[&coll_oid]).await?;
-            coll_rows.first().map(|row| row.get("collname"))
-        } else {
-            None
-        };
+        let comment = row.get::<_, Option<String>>("comment");
+        let subtype = row
+            .get::<_, Option<String>>("subtype_name")
+            .unwrap_or_else(|| "unknown".to_string());
+        let subtype_opclass = row.get::<_, Option<String>>("subtype_opclass_name");
+        let collation = row.get::<_, Option<String>>("collation_name");
 
         range_types.push(RangeType {
             name,
@@ -1835,6 +1810,7 @@ where
             collation,
             canonical,
             subtype_diff,
+            comment,
             multirange_type_name: None, // TODO: Add when needed
         });
     }

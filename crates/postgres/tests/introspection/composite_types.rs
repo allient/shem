@@ -389,7 +389,7 @@ async fn test_introspect_composite_type_with_complex_types()
         .iter()
         .find(|a| a.name == "created_at")
         .unwrap();
-    assert_eq!(created_at_attr.type_name, "timestamptz");
+    assert_eq!(created_at_attr.type_name, "timestamp with time zone");
 
     let location_attr = comp_type
         .attributes

@@ -1,6 +1,7 @@
 pub mod composite_types;
 pub mod enums;
 pub mod extensions;
+pub mod range_types;
 pub mod roles;
 pub mod schemas;
 pub mod tablespaces;
