@@ -60,19 +60,19 @@ where
             .insert(range_type.name.clone(), range_type);
     }
 
-    // // Introspect base types
-    // let base_types = introspect_base_types(&*client).await?;
-    // for base_type in base_types {
-    //     schema.base_types.insert(base_type.name.clone(), base_type);
-    // }
+    // Introspect base types
+    let base_types = introspect_base_types(&*client).await?;
+    for base_type in base_types {
+        schema.base_types.insert(base_type.name.clone(), base_type);
+    }
 
-    // // Introspect array types
-    // let array_types = introspect_array_types(&*client).await?;
-    // for array_type in array_types {
-    //     schema
-    //         .array_types
-    //         .insert(array_type.name.clone(), array_type);
-    // }
+    // Introspect array types
+    let array_types = introspect_array_types(&*client).await?;
+    for array_type in array_types {
+        schema
+            .array_types
+            .insert(array_type.name.clone(), array_type);
+    }
 
     // // Introspect multirange types
     // let multirange_types = introspect_multirange_types(&*client).await?;

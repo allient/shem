@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use base64::engine::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use shem_core::{DatabaseConnection, DatabaseDriver, Result, Schema};
 use shem_core::traits::{ConnectionMetadata, Feature, SqlGenerator, Transaction};
+use shem_core::{DatabaseConnection, DatabaseDriver, Result, Schema};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_postgres::{Client, Config, NoTls};
@@ -10,9 +10,9 @@ use tokio_postgres::{Client, Config, NoTls};
 pub mod db_util;
 pub mod introspection;
 pub mod sql_generator;
+pub use db_util::TestDb;
 pub use introspection::introspect_schema;
 pub use sql_generator::PostgresSqlGenerator;
-pub use db_util::TestDb;
 
 /// PostgreSQL database driver
 #[derive(Debug, Clone)]
@@ -382,3 +382,4 @@ impl Transaction for PostgresTransaction {
         Ok(())
     }
 }
+
