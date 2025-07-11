@@ -1,3 +1,4 @@
+use log::debug;
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;
@@ -144,7 +145,33 @@ where
     // Introspect policies
     let policies = introspect_policies(&*client).await?;
     for policy in policies {
+        debug!("Policy: {:?}", policy);
         schema.policies.insert(policy.name.clone(), policy);
+    }
+
+    // Introspect rules
+    let rules = introspect_rules(&*client).await?;
+    for rule in &rules {
+        debug!("Rule: {:?}", rule);
+    }
+    for rule in rules {
+        schema.rules.insert(rule.name.clone(), rule);
+    }
+
+    // Introspect publications
+    let publications = introspect_publications(&*client).await?;
+    for publication in publications {
+        schema
+            .publications
+            .insert(publication.name.clone(), publication);
+    }
+
+    // Introspect foreign key constraints separately
+    let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
+    for constraint in foreign_key_constraints {
+        schema
+            .foreign_key_constraints
+            .insert(constraint.name.clone(), constraint);
     }
 
     // // Introspect functions
@@ -185,18 +212,10 @@ where
     //     schema.servers.insert(server.name.clone(), server);
     // }
 
-    // // Introspect rules
-    // let rules = introspect_rules(&*client).await?;
-    // for rule in rules {
-    //     schema.rules.insert(rule.name.clone(), rule);
-    // }
-
-    // // Introspect publications
-    // let publications = introspect_publications(&*client).await?;
-    // for publication in publications {
-    //     schema
-    //         .publications
-    //         .insert(publication.name.clone(), publication);
+    // // Introspect foreign tables
+    // let foreign_tables = introspect_foreign_tables(&*client).await?;
+    // for table in foreign_tables {
+    //     schema.foreign_tables.insert(table.name.clone(), table);
     // }
 
     // // Introspect subscriptions
@@ -211,20 +230,6 @@ where
     // let foreign_data_wrappers = introspect_foreign_data_wrappers(&*client).await?;
     // for fdw in foreign_data_wrappers {
     //     schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
-    // }
-
-    // // Introspect foreign tables
-    // let foreign_tables = introspect_foreign_tables(&*client).await?;
-    // for table in foreign_tables {
-    //     schema.foreign_tables.insert(table.name.clone(), table);
-    // }
-
-    // // Introspect foreign key constraints separately
-    // let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
-    // for constraint in foreign_key_constraints {
-    //     schema
-    //         .foreign_key_constraints
-    //         .insert(constraint.name.clone(), constraint);
     // }
 
     Ok(schema)
@@ -1452,7 +1457,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
             n.nspname as schema_name,
             p.polpermissive as permissive,
             p.polroles as roles,
-            p.polcmd as command,
+                            p.polcmd::text as command,
             pg_get_expr(p.polqual, p.polrelid) as using_expression,
             pg_get_expr(p.polwithcheck, p.polrelid) as check_expression,
             c.relowner as owner
@@ -1478,7 +1483,19 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
         let schema: Option<String> = row.get("schema_name");
         let permissive: bool = row.get("permissive");
         let roles: Vec<u32> = row.get("roles");
-        let command: i8 = row.get("command");
+        let command: &str = row.get("command");
+        let command_char = command.chars().next().unwrap_or('*');
+        // Parse command to PolicyCommand enum
+        // PostgreSQL stores: 'r'=SELECT, 'a'=INSERT, 'w'=UPDATE, 'd'=DELETE, '*'=ALL
+        debug!("Raw command value from PostgreSQL: {}", command_char);
+        let policy_command = match command_char {
+            'r' => PolicyCommand::Select,
+            'a' => PolicyCommand::Insert,
+            'w' => PolicyCommand::Update,
+            'd' => PolicyCommand::Delete,
+            '*' => PolicyCommand::All,
+            _ => PolicyCommand::All, // Default fallback
+        };
         let using_expr: Option<String> = row.get("using_expression");
         let check_expr: Option<String> = row.get("check_expression");
 
@@ -1495,17 +1512,6 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
             }
         } else {
             Vec::new()
-        };
-
-        // Parse command to PolicyCommand enum
-        // PostgreSQL stores: 1=SELECT, 2=INSERT, 3=UPDATE, 4=DELETE, 5=ALL
-        let policy_command = match command {
-            1 => PolicyCommand::Select,
-            2 => PolicyCommand::Insert,
-            3 => PolicyCommand::Update,
-            4 => PolicyCommand::Delete,
-            5 => PolicyCommand::All,
-            _ => PolicyCommand::All, // Default fallback
         };
 
         policies.push(Policy {
@@ -1735,17 +1741,8 @@ where
             _ => RuleEvent::Select,
         };
 
-        // Parse the rule definition to extract just the action part
-        let action = if definition.contains("DO ") {
-            // Extract everything after "DO "
-            if let Some(do_pos) = definition.find("DO ") {
-                definition[do_pos + 3..].trim().to_string()
-            } else {
-                definition.clone()
-            }
-        } else {
-            definition.clone()
-        };
+        // Parse the rule definition to extract WHERE condition and action
+        let (condition, action) = parse_rule_definition(&definition);
 
         rules.push(Rule {
             name,
@@ -1753,7 +1750,7 @@ where
             schema,
             event,
             instead: is_instead,
-            condition: None,       // TODO: parse WHERE condition from definition
+            condition,
             actions: vec![action], // Store just the action part
         });
     }
@@ -2733,6 +2730,35 @@ where
     }
 
     Ok(multirange_types)
+}
+
+fn parse_rule_definition(definition: &str) -> (Option<String>, String) {
+    // Parse rule definition like:
+    // "CREATE RULE rule_name AS ON event TO table WHERE condition DO action"
+    // or "CREATE RULE rule_name AS ON event TO table DO action"
+
+    let mut condition = None;
+    let mut action = definition.to_string();
+
+    // Look for WHERE clause
+    if let Some(where_pos) = definition.find(" WHERE ") {
+        if let Some(do_pos) = definition.find(" DO ") {
+            if do_pos > where_pos {
+                // Extract condition between WHERE and DO
+                let condition_start = where_pos + 7; // " WHERE " is 7 chars
+                let condition_text = definition[condition_start..do_pos].trim();
+                condition = Some(condition_text.to_string());
+
+                // Extract action after DO
+                action = definition[do_pos + 4..].trim().to_string(); // " DO " is 4 chars
+            }
+        }
+    } else if let Some(do_pos) = definition.find(" DO ") {
+        // No WHERE clause, just extract action after DO
+        action = definition[do_pos + 4..].trim().to_string();
+    }
+
+    (condition, action)
 }
 
 fn extract_partition_columns(partition_expression: &str) -> Vec<String> {
