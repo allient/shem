@@ -1,5 +1,6 @@
 pub mod array_types;
 pub mod base_types;
+pub mod collations;
 pub mod composite_types;
 pub mod domains;
 pub mod enums;
