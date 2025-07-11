@@ -756,7 +756,7 @@ fn generate_create_trigger(trigger: &Trigger) -> Result<String> {
         .iter()
         .map(|e| match e {
             TriggerEvent::Insert => "INSERT",
-            TriggerEvent::Update { columns: _ } => "UPDATE",
+            TriggerEvent::Update => "UPDATE",
             TriggerEvent::Delete => "DELETE",
             TriggerEvent::Truncate => "TRUNCATE",
         })

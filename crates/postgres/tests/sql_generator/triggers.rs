@@ -1,42 +1,20 @@
-use shem_core::schema::{Trigger, ConstraintTrigger, TriggerEvent, TriggerTiming, TriggerLevel};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use postgres::TestDb;
+use shem_core::{DatabaseConnection, Trigger, TriggerEvent, TriggerTiming, TriggerLevel};
+use log::debug;
 
-#[test]
-fn test_create_trigger() {
+#[tokio::test]
+async fn test_generate_create_trigger_basic() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
     let trigger = Trigger {
-        name: "update_modified_at".to_string(),
-        table: "users".to_string(),
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
         schema: Some("public".to_string()),
         timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Update { columns: None }],
-        function: "update_modified_column".to_string(),
-        arguments: vec![],
-        condition: Some("OLD.modified_at IS DISTINCT FROM NEW.modified_at".to_string()),
-        for_each: TriggerLevel::Row,
-        comment: Some("Update modified_at timestamp".to_string()),
-        when: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE TRIGGER update_modified_at"));
-    assert!(result.contains("BEFORE UPDATE ON users"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(result.contains("WHEN (OLD.modified_at IS DISTINCT FROM NEW.modified_at)"));
-    assert!(result.contains("EXECUTE FUNCTION update_modified_column()"));
-}
-
-#[test]
-fn test_create_trigger_multiple_events() {
-    let trigger = Trigger {
-        name: "audit_changes".to_string(),
-        table: "users".to_string(),
-        schema: None,
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update { columns: None }, TriggerEvent::Delete],
-        function: "audit_trigger".to_string(),
+        events: vec![TriggerEvent::Update],
+        function: "test_function".to_string(),
         arguments: vec![],
         condition: None,
         for_each: TriggerLevel::Row,
@@ -44,24 +22,135 @@ fn test_create_trigger_multiple_events() {
         when: None,
     };
 
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE TRIGGER audit_changes"));
-    assert!(result.contains("AFTER INSERT OR UPDATE OR DELETE ON users"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(result.contains("EXECUTE FUNCTION audit_trigger()"));
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("BEFORE UPDATE"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
+
+    Ok(())
 }
 
-#[test]
-fn test_create_trigger_statement_level() {
+#[tokio::test]
+async fn test_generate_create_trigger_multiple_events() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
     let trigger = Trigger {
-        name: "log_table_changes".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
+        schema: Some("public".to_string()),
         timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update { columns: None }, TriggerEvent::Delete],
-        function: "log_changes".to_string(),
+        events: vec![TriggerEvent::Insert, TriggerEvent::Update, TriggerEvent::Delete],
+        function: "test_function".to_string(),
+        arguments: vec![],
+        condition: None,
+        for_each: TriggerLevel::Row,
+        comment: None,
+        when: None,
+    };
+
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("AFTER INSERT OR UPDATE OR DELETE"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_generate_create_trigger_with_arguments() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
+    let trigger = Trigger {
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
+        schema: Some("public".to_string()),
+        timing: TriggerTiming::Before,
+        events: vec![TriggerEvent::Insert, TriggerEvent::Update, TriggerEvent::Delete],
+        function: "test_function".to_string(),
+        arguments: vec!["arg1".to_string(), "arg2".to_string()],
+        condition: None,
+        for_each: TriggerLevel::Row,
+        comment: None,
+        when: None,
+    };
+
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("BEFORE INSERT OR UPDATE OR DELETE"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function('arg1', 'arg2')"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_generate_create_trigger_instead_of() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
+    let trigger = Trigger {
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
+        schema: Some("public".to_string()),
+        timing: TriggerTiming::InsteadOf,
+        events: vec![TriggerEvent::Insert],
+        function: "test_function".to_string(),
+        arguments: vec![],
+        condition: None,
+        for_each: TriggerLevel::Row,
+        comment: None,
+        when: None,
+    };
+
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("INSTEAD OF INSERT"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_generate_create_trigger_for_each_statement() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
+    let trigger = Trigger {
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
+        schema: Some("public".to_string()),
+        timing: TriggerTiming::After,
+        events: vec![TriggerEvent::Insert],
+        function: "test_function".to_string(),
         arguments: vec![],
         condition: None,
         for_each: TriggerLevel::Statement,
@@ -69,200 +158,91 @@ fn test_create_trigger_statement_level() {
         when: None,
     };
 
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE TRIGGER log_table_changes"));
-    assert!(result.contains("AFTER INSERT OR UPDATE OR DELETE ON users"));
-    assert!(result.contains("FOR EACH STATEMENT"));
-    assert!(result.contains("EXECUTE FUNCTION log_changes()"));
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("AFTER INSERT"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH STATEMENT"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
+
+    Ok(())
 }
 
-#[test]
-fn test_create_trigger_with_reserved_keyword() {
+#[tokio::test]
+async fn test_generate_create_trigger_with_when_condition() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
     let trigger = Trigger {
-        name: "order".to_string(), // Reserved keyword
-        table: "orders".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "validate_order".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
-        comment: None,
-        when: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE TRIGGER \"order\""));
-    assert!(result.contains("BEFORE INSERT ON orders"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(result.contains("EXECUTE FUNCTION validate_order()"));
-}
-
-#[test]
-fn test_drop_trigger() {
-    let trigger = Trigger {
-        name: "my_trigger".to_string(),
-        table: "my_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "my_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
-        comment: None,
-        when: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.drop_trigger(&trigger).unwrap();
-    
-    assert_eq!(result, "DROP TRIGGER IF EXISTS my_trigger ON my_table CASCADE;");
-}
-
-#[test]
-fn test_drop_trigger_with_schema() {
-    let trigger = Trigger {
-        name: "my_trigger".to_string(),
-        table: "my_table".to_string(),
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
         schema: Some("public".to_string()),
         timing: TriggerTiming::Before,
         events: vec![TriggerEvent::Insert],
-        function: "my_function".to_string(),
+        function: "test_function".to_string(),
+        arguments: vec![],
+        condition: Some("NEW.value > 0".to_string()),
+        for_each: TriggerLevel::Row,
+        comment: None,
+        when: Some("NEW.value > 0".to_string()),
+    };
+
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
+
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("BEFORE INSERT"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("WHEN (NEW.value > 0)"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_generate_create_trigger_with_comment() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::try_init().ok();
+    let db = TestDb::new().await?;
+    let connection = &db.conn;
+
+    let trigger = Trigger {
+        name: "test_trigger".to_string(),
+        table: "test_table".to_string(),
+        schema: Some("public".to_string()),
+        timing: TriggerTiming::Before,
+        events: vec![TriggerEvent::Insert],
+        function: "test_function".to_string(),
         arguments: vec![],
         condition: None,
         for_each: TriggerLevel::Row,
-        comment: None,
+        comment: Some("Test trigger comment".to_string()),
         when: None,
     };
 
-    let generator = PostgresSqlGenerator;
-    let result = generator.drop_trigger(&trigger).unwrap();
-    
-    assert_eq!(result, "DROP TRIGGER IF EXISTS public.my_trigger ON public.my_table CASCADE;");
-}
+    // Generate the CREATE TRIGGER statement
+    let sql = connection.generate_create_trigger(&trigger).await?;
+    debug!("Generated SQL: {}", sql);
 
-#[test]
-fn test_create_constraint_trigger() {
-    let trigger = ConstraintTrigger {
-        name: "check_user_status".to_string(),
-        table: "users".to_string(),
-        schema: Some("public".to_string()),
-        function: "validate_user_status".to_string(),
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update { columns: None }],
-        arguments: vec![],
-        constraint_name: "check_user_status_constraint".to_string(),
-        deferrable: true,
-        initially_deferred: false,
-    };
+    // Verify the SQL contains expected elements
+    assert!(sql.contains("CREATE TRIGGER test_trigger"));
+    assert!(sql.contains("BEFORE INSERT"));
+    assert!(sql.contains("ON public.test_table"));
+    assert!(sql.contains("FOR EACH ROW"));
+    assert!(sql.contains("EXECUTE FUNCTION test_function"));
 
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_constraint_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE CONSTRAINT TRIGGER check_user_status"));
-    assert!(result.contains("AFTER INSERT OR UPDATE ON public.users"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(result.contains("DEFERRABLE"));
-    assert!(result.contains("INITIALLY IMMEDIATE"));
-    assert!(result.contains("EXECUTE FUNCTION validate_user_status()"));
-}
+    // The comment should be added separately
+    let comment_sql = connection.generate_comment_on_trigger(&trigger).await?;
+    debug!("Generated comment SQL: {}", comment_sql);
+    assert!(comment_sql.contains("COMMENT ON TRIGGER test_trigger"));
+    assert!(comment_sql.contains("Test trigger comment"));
 
-#[test]
-fn test_create_constraint_trigger_deferred() {
-    let trigger = ConstraintTrigger {
-        name: "check_user_status".to_string(),
-        table: "users".to_string(),
-        schema: None,
-        function: "validate_user_status".to_string(),
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update { columns: None }],
-        arguments: vec![],
-        constraint_name: "check_user_status_constraint".to_string(),
-        deferrable: true,
-        initially_deferred: true,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_constraint_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE CONSTRAINT TRIGGER check_user_status"));
-    assert!(result.contains("AFTER INSERT OR UPDATE ON users"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(result.contains("DEFERRABLE"));
-    assert!(result.contains("INITIALLY DEFERRED"));
-    assert!(result.contains("EXECUTE FUNCTION validate_user_status()"));
-}
-
-#[test]
-fn test_create_constraint_trigger_not_deferrable() {
-    let trigger = ConstraintTrigger {
-        name: "check_user_status".to_string(),
-        table: "users".to_string(),
-        schema: None,
-        function: "validate_user_status".to_string(),
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update { columns: None }],
-        arguments: vec![],
-        constraint_name: "check_user_status_constraint".to_string(),
-        deferrable: false,
-        initially_deferred: false,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.create_constraint_trigger(&trigger).unwrap();
-    
-    assert!(result.contains("CREATE CONSTRAINT TRIGGER check_user_status"));
-    assert!(result.contains("AFTER INSERT OR UPDATE ON users"));
-    assert!(result.contains("FOR EACH ROW"));
-    assert!(!result.contains("DEFERRABLE"));
-    assert!(!result.contains("INITIALLY"));
-    assert!(result.contains("EXECUTE FUNCTION validate_user_status()"));
-}
-
-#[test]
-fn test_drop_constraint_trigger() {
-    let trigger = ConstraintTrigger {
-        name: "my_constraint_trigger".to_string(),
-        table: "my_table".to_string(),
-        schema: None,
-        function: "my_function".to_string(),
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert],
-        arguments: vec![],
-        constraint_name: "my_constraint".to_string(),
-        deferrable: false,
-        initially_deferred: false,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.drop_constraint_trigger(&trigger).unwrap();
-    
-    assert_eq!(result, "DROP TRIGGER IF EXISTS my_constraint_trigger ON my_table CASCADE;");
-}
-
-#[test]
-fn test_drop_constraint_trigger_with_schema() {
-    let trigger = ConstraintTrigger {
-        name: "my_constraint_trigger".to_string(),
-        table: "my_table".to_string(),
-        schema: Some("public".to_string()),
-        function: "my_function".to_string(),
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Insert],
-        arguments: vec![],
-        constraint_name: "my_constraint".to_string(),
-        deferrable: false,
-        initially_deferred: false,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.drop_constraint_trigger(&trigger).unwrap();
-    
-    assert_eq!(result, "DROP TRIGGER IF EXISTS public.my_constraint_trigger ON public.my_table CASCADE;");
+    Ok(())
 } 

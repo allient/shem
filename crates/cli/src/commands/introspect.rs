@@ -558,9 +558,7 @@ impl SchemaSerializer for SqlSerializer {
                             .into_iter()
                             .map(|event| match event {
                                 ParserTriggerEvent::Insert => TriggerEvent::Insert,
-                                ParserTriggerEvent::Update => {
-                                    TriggerEvent::Update { columns: None }
-                                }
+                                ParserTriggerEvent::Update => TriggerEvent::Update,
                                 ParserTriggerEvent::Delete => TriggerEvent::Delete,
                                 ParserTriggerEvent::Truncate => TriggerEvent::Truncate,
                             })
@@ -2098,7 +2096,7 @@ fn generate_comments(schema: &Schema) -> Result<String> {
 fn trigger_event_to_str(event: &TriggerEvent) -> &'static str {
     match event {
         TriggerEvent::Insert => "INSERT",
-        TriggerEvent::Update { .. } => "UPDATE",
+        TriggerEvent::Update => "UPDATE",
         TriggerEvent::Delete => "DELETE",
         TriggerEvent::Truncate => "TRUNCATE",
     }

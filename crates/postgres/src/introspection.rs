@@ -180,31 +180,31 @@ where
         schema.functions.insert(func.name.clone(), func);
     }
 
-    // // Introspect procedures
-    // let procedures = introspect_procedures(&*client).await?;
-    // for proc in procedures {
-    //     schema.procedures.insert(proc.name.clone(), proc);
-    // }
+    // Introspect procedures
+    let procedures = introspect_procedures(&*client).await?;
+    for proc in procedures {
+        schema.procedures.insert(proc.name.clone(), proc);
+    }
 
-    // // Introspect triggers
-    // let triggers = introspect_triggers(&*client).await?;
-    // for trigger in triggers {
-    //     schema.triggers.insert(trigger.name.clone(), trigger);
-    // }
+    // Introspect triggers
+    let triggers = introspect_triggers(&*client).await?;
+    for trigger in triggers {
+        schema.triggers.insert(trigger.name.clone(), trigger);
+    }
 
-    // // Introspect constraint triggers separately
-    // let constraint_triggers = introspect_constraint_triggers(&*client).await?;
-    // for trigger in constraint_triggers {
-    //     schema
-    //         .constraint_triggers
-    //         .insert(trigger.name.clone(), trigger);
-    // }
+    // Introspect constraint triggers separately
+    let constraint_triggers = introspect_constraint_triggers(&*client).await?;
+    for trigger in constraint_triggers {
+        schema
+            .constraint_triggers
+            .insert(trigger.name.clone(), trigger);
+    }
 
-    // // Introspect event triggers
-    // let event_triggers = introspect_event_triggers(&*client).await?;
-    // for trigger in event_triggers {
-    //     schema.event_triggers.insert(trigger.name.clone(), trigger);
-    // }
+    // Introspect event triggers
+    let event_triggers = introspect_event_triggers(&*client).await?;
+    for trigger in event_triggers {
+        schema.event_triggers.insert(trigger.name.clone(), trigger);
+    }
 
     // // Introspect servers
     // let servers = introspect_servers(&*client).await?;
@@ -1386,6 +1386,92 @@ async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Exten
     Ok(extensions)
 }
 
+fn parse_trigger_from_definition(
+    trigger_definition: &str,
+) -> (TriggerTiming, Vec<TriggerEvent>, TriggerLevel) {
+    debug!("Parsing trigger definition: {}", trigger_definition);
+
+    let mut timing = TriggerTiming::Before; // default
+    let mut events = Vec::new();
+    let mut for_each = TriggerLevel::Row; // default
+
+    // Parse timing
+    if trigger_definition.contains(" AFTER ") {
+        timing = TriggerTiming::After;
+    } else if trigger_definition.contains(" INSTEAD OF ") {
+        timing = TriggerTiming::InsteadOf;
+    }
+
+    // Parse events
+    if trigger_definition.contains(" INSERT") {
+        events.push(TriggerEvent::Insert);
+    }
+    if trigger_definition.contains(" DELETE") {
+        events.push(TriggerEvent::Delete);
+    }
+    if trigger_definition.contains(" UPDATE") {
+        events.push(TriggerEvent::Update);
+    }
+    if trigger_definition.contains(" TRUNCATE") {
+        events.push(TriggerEvent::Truncate);
+    }
+
+    // Parse FOR EACH level
+    if trigger_definition.contains(" FOR EACH STATEMENT") {
+        for_each = TriggerLevel::Statement;
+    }
+
+    debug!(
+        "  Parsed timing: {:?}, events: {:?}, for_each: {:?}",
+        timing, events, for_each
+    );
+    (timing, events, for_each)
+}
+
+fn parse_trigger_arguments(bytes: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current_arg = Vec::new();
+
+    for &byte in bytes {
+        if byte == 0 {
+            // Null terminator - end of argument
+            if !current_arg.is_empty() {
+                if let Ok(arg) = String::from_utf8(current_arg.clone()) {
+                    args.push(arg);
+                }
+                current_arg.clear();
+            }
+        } else {
+            current_arg.push(byte);
+        }
+    }
+
+    // Handle last argument if it doesn't end with null
+    if !current_arg.is_empty() {
+        if let Ok(arg) = String::from_utf8(current_arg) {
+            args.push(arg);
+        }
+    }
+
+    args
+}
+
+fn parse_when_condition(trigger_definition: &str) -> Option<String> {
+    // Look for WHEN clause in the trigger definition
+    let when_start = trigger_definition.find(" WHEN ")?;
+    let when_clause = &trigger_definition[when_start + 6..];
+
+    // Find the end of the WHEN clause (before EXECUTE)
+    let execute_pos = when_clause.find(" EXECUTE ")?;
+    let condition = when_clause[..execute_pos].trim();
+
+    if condition.is_empty() {
+        None
+    } else {
+        Some(condition.to_string())
+    }
+}
+
 async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<Trigger>> {
     let query = r#"
         SELECT 
@@ -1398,19 +1484,20 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
             t.tgconstraint AS constraint_oid,
             t.tgenabled::text AS enabled,
             pg_get_triggerdef(t.oid) AS trigger_definition,
-            c.relowner AS owner
+            c.relowner AS owner,
+            obj_description(t.oid, 'pg_trigger') as comment
         FROM pg_trigger t
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
         JOIN pg_proc p ON t.tgfoid = p.oid
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND NOT t.tgisinternal
-          AND c.relowner > 1
           AND NOT EXISTS (
               SELECT 1 FROM pg_depend d
               JOIN pg_extension e ON d.refobjid = e.oid
               WHERE d.objid = c.oid AND d.deptype = 'e'
           )
+        ORDER BY n.nspname, c.relname, t.tgname
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -1424,16 +1511,25 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
         let trigger_type: i16 = row.get("trigger_type");
         let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
         let constraint_oid: Option<u32> = row.get("constraint_oid");
+        let trigger_definition: String = row.get("trigger_definition");
+        let comment: Option<String> = row.get("comment");
+
+        debug!("Trigger: {} on {}.{}", name, schema, table);
+        debug!("  trigger_type: {} (0x{:x})", trigger_type, trigger_type);
+        debug!("  trigger_definition: {}", trigger_definition);
 
         // Skip constraint triggers - they are handled separately
-        if constraint_oid.is_some() {
+        if constraint_oid.is_some() && constraint_oid.unwrap() != 0 {
             continue;
         }
 
-        let (timing, events) = parse_trigger_type(trigger_type);
+        let (timing, events, for_each) = parse_trigger_from_definition(&trigger_definition);
         let args = arguments
             .map(|bytes| parse_trigger_arguments(&bytes))
             .unwrap_or_default();
+
+        // Parse WHEN condition from trigger definition
+        let when = parse_when_condition(&trigger_definition);
 
         triggers.push(Trigger {
             name,
@@ -1443,10 +1539,10 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
             timing,
             events,
             arguments: args,
-            condition: None, // Optional: parse from pg_get_triggerdef if needed
-            for_each: TriggerLevel::Row, // Optional: improve if you parse tgtype bits
-            comment: None,
-            when: None, // Optional: parse from trigger definition if needed
+            condition: when.clone(), // Use the parsed WHEN condition
+            for_each,
+            comment,
+            when,
         });
     }
 
@@ -1774,7 +1870,9 @@ async fn introspect_constraint_triggers<C: GenericClient>(
             t.tgtype as trigger_type,
             t.tgargs as trigger_arguments,
             t.tgconstraint as constraint_oid,
-            c.relowner as owner
+            c.relowner as owner,
+            pg_get_triggerdef(t.oid) AS trigger_definition,
+            obj_description(t.oid, 'pg_trigger') as comment
         FROM pg_trigger t
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -1782,7 +1880,6 @@ async fn introspect_constraint_triggers<C: GenericClient>(
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND NOT t.tgisinternal
         AND t.tgconstraint IS NOT NULL
-        AND c.relowner > 1
         AND NOT EXISTS (
             SELECT 1 FROM pg_depend d
             JOIN pg_extension e ON d.refobjid = e.oid
@@ -1801,9 +1898,20 @@ async fn introspect_constraint_triggers<C: GenericClient>(
         let trigger_type: i16 = row.get("trigger_type");
         let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
         let constraint_oid: u32 = row.get("constraint_oid");
+        let trigger_definition: String = row.get("trigger_definition");
+        let comment: Option<String> = row.get("comment");
 
-        // Parse trigger type into timing and events
-        let (timing, events) = parse_trigger_type(trigger_type);
+        debug!(
+            "Constraint Trigger: {} on {}.{}",
+            name,
+            schema.as_deref().unwrap_or("public"),
+            table
+        );
+        debug!("  trigger_type: {} (0x{:x})", trigger_type, trigger_type);
+        debug!("  trigger_definition: {}", trigger_definition);
+
+        // Parse trigger type into timing and events from definition
+        let (timing, events, _for_each) = parse_trigger_from_definition(&trigger_definition);
 
         // Decode arguments (null-byte separated)
         let args = if let Some(arg_bytes) = arguments {
@@ -2507,55 +2615,6 @@ fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
     }
 
     parameters
-}
-
-fn parse_trigger_type(trigger_type: i16) -> (TriggerTiming, Vec<TriggerEvent>) {
-    let mut timing = TriggerTiming::Before;
-    let mut events = Vec::new();
-
-    // Parse trigger type bits
-    if (trigger_type & 66) != 0 {
-        // TG_AFTER
-        timing = TriggerTiming::After;
-    } else if (trigger_type & 64) != 0 {
-        // TG_INSTEAD
-        timing = TriggerTiming::InsteadOf;
-    }
-
-    if (trigger_type & 1) != 0 {
-        // TG_INSERT
-        events.push(TriggerEvent::Insert);
-    }
-    if (trigger_type & 2) != 0 {
-        // TG_DELETE
-        events.push(TriggerEvent::Delete);
-    }
-    if (trigger_type & 4) != 0 {
-        // TG_UPDATE
-        events.push(TriggerEvent::Update { columns: None });
-    }
-    if (trigger_type & 8) != 0 {
-        // TG_TRUNCATE
-        events.push(TriggerEvent::Truncate);
-    }
-
-    (timing, events)
-}
-
-fn parse_trigger_arguments(arg_bytes: &[u8]) -> Vec<String> {
-    // Convert bytes to strings - this is a simplified implementation
-    // In a real implementation, you'd need to properly parse the argument format
-    if arg_bytes.is_empty() {
-        return Vec::new();
-    }
-
-    // Simple conversion - split by null bytes and convert to strings
-    let args_str = String::from_utf8_lossy(arg_bytes);
-    args_str
-        .split('\0')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect()
 }
 
 fn parse_server_options(options: &[String]) -> std::collections::HashMap<String, String> {

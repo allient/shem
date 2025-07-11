@@ -144,6 +144,27 @@ pub struct Extension {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TriggerTiming {
+    Before,
+    After,
+    InsteadOf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TriggerEvent {
+    Insert,
+    Update,
+    Delete,
+    Truncate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TriggerLevel {
+    Row,
+    Statement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Trigger {
     pub name: String,
     pub table: String,
@@ -423,27 +444,6 @@ pub enum ParameterMode {
 pub enum SortOrder {
     Ascending,
     Descending,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum TriggerTiming {
-    Before,
-    After,
-    InsteadOf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum TriggerEvent {
-    Insert,
-    Update { columns: Option<Vec<String>> }, // Enhanced: UPDATE OF columns
-    Delete,
-    Truncate,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum TriggerLevel {
-    Row,
-    Statement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
