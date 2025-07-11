@@ -174,11 +174,11 @@ where
             .insert(constraint.name.clone(), constraint);
     }
 
-    // // Introspect functions
-    // let functions = introspect_functions(&*client).await?;
-    // for func in functions {
-    //     schema.functions.insert(func.name.clone(), func);
-    // }
+    // Introspect functions
+    let functions = introspect_functions(&*client).await?;
+    for func in functions {
+        schema.functions.insert(func.name.clone(), func);
+    }
 
     // // Introspect procedures
     // let procedures = introspect_procedures(&*client).await?;
@@ -885,13 +885,14 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             pg_get_function_arguments(p.oid) as arguments,
             p.proowner as owner,
             p.prokind as kind,
-            p.provolatile as volatility,
+            p.provolatile::text as volatility,
             p.proleakproof as leakproof,
             p.proisstrict as strict,
             p.prosecdef as security_definer,
-            p.proparallel as parallel_safety,
-            p.procost as cost,
-            p.prorows as rows
+            p.proparallel::text as parallel_safety,
+            p.procost::float8 as cost,
+            p.prorows::float8 as rows,
+            obj_description(p.oid, 'pg_proc') as comment
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
@@ -943,7 +944,8 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
         let security_definer: bool = row.get("security_definer");
         let parallel_safety_code: String = row.get("parallel_safety");
         let cost: Option<f64> = row.get("cost");
-        let rows: Option<i64> = row.get("rows");
+        let rows: Option<f64> = row.get("rows");
+        let comment: Option<String> = row.get("comment");
 
         // Parse parameters from the arguments string
         let parameters = parse_function_parameters(&arguments);
@@ -992,7 +994,7 @@ async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Functi
             returns,
             language,
             definition,
-            comment: None,
+            comment,
             volatility,
             strict,
             security_definer,
@@ -1014,7 +1016,8 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             l.lanname as language,
             pg_get_function_arguments(p.oid) as arguments,
             p.proowner as owner,
-            p.prosecdef as security_definer
+            p.prosecdef as security_definer,
+            obj_description(p.oid, 'pg_proc') as comment
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
         JOIN pg_language l ON p.prolang = l.oid
@@ -1043,6 +1046,7 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
         let language: String = row.get("language");
         let arguments: String = row.get("arguments");
         let security_definer: bool = row.get("security_definer");
+        let comment: Option<String> = row.get("comment");
 
         // Parse parameters from the arguments string
         let parameters = parse_function_parameters(&arguments);
@@ -1053,7 +1057,7 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
             parameters,
             language,
             definition,
-            comment: None,
+            comment,
             security_definer,
         });
     }
@@ -2339,10 +2343,8 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(
             c.conname AS constraint_name,
             t.relname AS table_name,
             n.nspname AS schema_name,
-            array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names,
             rt.relname AS references_table,
             rn.nspname AS references_schema,
-            array_agg(ra.attname ORDER BY array_position(c.confkey, ra.attnum)) AS references_columns,
             c.confdeltype::text AS on_delete,
             c.confupdtype::text AS on_update,
             c.condeferrable AS deferrable,
@@ -2350,10 +2352,8 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(
         FROM pg_constraint c
         JOIN pg_class t ON c.conrelid = t.oid
         JOIN pg_namespace n ON t.relnamespace = n.oid
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
         JOIN pg_class rt ON c.confrelid = rt.oid
         JOIN pg_namespace rn ON rt.relnamespace = rn.oid
-        JOIN pg_attribute ra ON ra.attrelid = rt.oid AND ra.attnum = ANY(c.confkey)
         WHERE c.contype = 'f'
         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND t.relowner > 1
@@ -2362,8 +2362,6 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(
             JOIN pg_extension e ON d.refobjid = e.oid
             WHERE d.objid = t.oid AND d.deptype = 'e'
         )
-        GROUP BY c.oid, c.conname, t.relname, n.nspname, rt.relname, rn.nspname, 
-                 c.confdeltype, c.confupdtype, c.condeferrable, c.condeferred
         ORDER BY n.nspname, t.relname, c.conname
     "#;
 
@@ -2374,14 +2372,32 @@ async fn introspect_foreign_key_constraints<C: GenericClient>(
         let name: String = row.get("constraint_name");
         let table: String = row.get("table_name");
         let schema: Option<String> = row.get("schema_name");
-        let columns: Vec<String> = row.get("column_names");
         let references_table: String = row.get("references_table");
         let references_schema: Option<String> = row.get("references_schema");
-        let references_columns: Vec<String> = row.get("references_columns");
         let on_delete_code: String = row.get("on_delete");
         let on_update_code: String = row.get("on_update");
         let deferrable: bool = row.get("deferrable");
         let initially_deferred: bool = row.get("initially_deferred");
+
+        // Get the columns for this constraint
+        let columns_query = r#"
+            SELECT array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.conname = $1
+        "#;
+        let columns_row = client.query_one(columns_query, &[&name]).await?;
+        let columns: Vec<String> = columns_row.get("column_names");
+
+        // Get the referenced columns for this constraint
+        let ref_columns_query = r#"
+            SELECT array_agg(a.attname ORDER BY array_position(c.confkey, a.attnum)) AS references_columns
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = ANY(c.confkey)
+            WHERE c.conname = $1
+        "#;
+        let ref_columns_row = client.query_one(ref_columns_query, &[&name]).await?;
+        let references_columns: Vec<String> = ref_columns_row.get("references_columns");
 
         // Convert action codes to ReferentialAction enum
         let on_delete = match on_delete_code.as_str() {

@@ -94,7 +94,7 @@ pub struct Function {
     pub security_definer: bool, // Added: security context
     pub parallel_safety: ParallelSafety, // Added: parallel execution safety
     pub cost: Option<f64>,      // Added: execution cost hint
-    pub rows: Option<i64>,      // Added: rows estimate for set-returning functions
+    pub rows: Option<f64>,      // Added: rows estimate for set-returning functions
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
