@@ -88,11 +88,17 @@ where
         schema.domains.insert(domain.name.clone(), domain);
     }
 
-    // // Introspect sequences
-    // let sequences = introspect_sequences(&*client).await?;
-    // for seq in sequences {
-    //     schema.sequences.insert(seq.name.clone(), seq);
-    // }
+    // Introspect sequences
+    let sequences = introspect_sequences(&*client).await?;
+    for seq in sequences {
+        schema.sequences.insert(seq.name.clone(), seq);
+    }
+
+    // Introspect collations
+    let collations = introspect_collations(&*client).await?;
+    for collation in collations {
+        schema.collations.insert(collation.name.clone(), collation);
+    }
 
     // // Introspect tables
     // let tables = introspect_tables(&*client).await?;
@@ -154,12 +160,6 @@ where
     // let servers = introspect_servers(&*client).await?;
     // for server in servers {
     //     schema.servers.insert(server.name.clone(), server);
-    // }
-
-    // // Introspect collations
-    // let collations = introspect_collations(&*client).await?;
-    // for collation in collations {
-    //     schema.collations.insert(collation.name.clone(), collation);
     // }
 
     // // Introspect rules
@@ -1124,8 +1124,23 @@ where
     Ok(domain_map.into_values().collect())
 }
 
-async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequence>> {
+async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequence>>
+where
+    C: GenericClient + Sync,
+{
     let query = r#"
+        WITH owned_info AS (
+            SELECT
+                dep.objid AS sequence_oid,
+                n.nspname AS table_schema,
+                c.relname AS table_name,
+                a.attname AS column_name
+            FROM pg_depend dep
+            JOIN pg_class c ON dep.refobjid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = dep.refobjsubid
+            WHERE dep.deptype IN ('a', 'i')
+        )
         SELECT 
             c.relname AS sequence_name,
             n.nspname AS sequence_schema,
@@ -1137,14 +1152,13 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
             s.seqcycle AS cycle_option,
             c.relowner AS owner,
             obj_description(c.oid, 'pg_class') AS sequence_comment,
-            pg_get_expr(ad.adbin, ad.adrelid) AS sequence_default,
-            dep.refobjid AS owned_by_table_oid,
-            dep.refobjsubid AS owned_by_column_num
+            oi.table_schema,
+            oi.table_name,
+            oi.column_name
         FROM pg_class c
         JOIN pg_namespace n ON c.relnamespace = n.oid
         JOIN pg_sequence s ON s.seqrelid = c.oid
-        LEFT JOIN pg_attrdef ad ON ad.adrelid = c.oid
-        LEFT JOIN pg_depend dep ON dep.objid = c.oid AND dep.deptype = 'a'
+        LEFT JOIN owned_info oi ON oi.sequence_oid = c.oid
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
           AND c.relkind = 'S'
           AND c.relowner > 1
@@ -1162,7 +1176,7 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
 
     for row in rows {
         let name: String = row.get("sequence_name");
-        let schema: Option<String> = row.get("sequence_schema");
+        let schema: String = row.get("sequence_schema");
         let start: i64 = row.get("start_value");
         let min_value: i64 = row.get("minimum_value");
         let max_value: i64 = row.get("maximum_value");
@@ -1170,58 +1184,29 @@ async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequen
         let cache: i64 = row.get("cache_value");
         let cycle: bool = row.get("cycle_option");
         let comment: Option<String> = row.get("sequence_comment");
-        let _owner: u32 = row.get("owner");
-        let _default: Option<String> = row.get("sequence_default");
-        let owned_by_table_oid: Option<u32> = row.get("owned_by_table_oid");
-        let owned_by_column_num: Option<i32> = row.get("owned_by_column_num");
 
-        // Determine sequence data type based on min/max values
-        let data_type = if min_value >= i32::MIN as i64 && max_value <= i32::MAX as i64 {
-            "integer"
-        } else if min_value >= i16::MIN as i64 && max_value <= i16::MAX as i64 {
+        let data_type = if min_value >= i16::MIN as i64 && max_value <= i16::MAX as i64 {
             "smallint"
+        } else if min_value >= i32::MIN as i64 && max_value <= i32::MAX as i64 {
+            "integer"
         } else {
             "bigint"
         };
 
-        // Get owned_by information if available
-        let owned_by = if let (Some(table_oid), Some(column_num)) =
-            (owned_by_table_oid, owned_by_column_num)
-        {
-            // Query to get table and column name
-            let owned_query = r#"
-                SELECT 
-                    c.relname AS table_name,
-                    n.nspname AS table_schema,
-                    a.attname AS column_name
-                FROM pg_class c
-                JOIN pg_namespace n ON c.relnamespace = n.oid
-                JOIN pg_attribute a ON a.attrelid = c.oid
-                WHERE c.oid = $1 AND a.attnum = $2
-            "#;
-
-            if let Ok(owned_rows) = client
-                .query(owned_query, &[&(table_oid as i32), &column_num])
-                .await
-            {
-                if let Some(owned_row) = owned_rows.first() {
-                    let table_schema: String = owned_row.get("table_schema");
-                    let table_name: String = owned_row.get("table_name");
-                    let column_name: String = owned_row.get("column_name");
-                    Some(format!("{}.{}.{}", table_schema, table_name, column_name))
-                } else {
-                    None
-                }
-            } else {
-                None
+        let owned_by = match (
+            row.get::<_, Option<String>>("table_schema"),
+            row.get::<_, Option<String>>("table_name"),
+            row.get::<_, Option<String>>("column_name"),
+        ) {
+            (Some(schema), Some(table), Some(column)) => {
+                Some(format!("{}.{}.{}", schema, table, column))
             }
-        } else {
-            None
+            _ => None,
         };
 
         sequences.push(Sequence {
             name,
-            schema,
+            schema: Some(schema),
             data_type: data_type.to_string(),
             start,
             increment,

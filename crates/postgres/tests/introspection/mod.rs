@@ -8,4 +8,5 @@ pub mod multirange_types;
 pub mod range_types;
 pub mod roles;
 pub mod schemas;
+pub mod sequences;
 pub mod tablespaces;
