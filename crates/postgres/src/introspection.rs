@@ -2561,7 +2561,7 @@ where
         JOIN pg_type et ON t.typelem = et.oid
         JOIN pg_namespace en ON et.typnamespace = en.oid
         WHERE t.typtype = 'b'  -- base types
-        AND t.typelem IS NOT NULL  -- array types have element types
+        AND t.typelem != 0     -- has element type (is array)
         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND t.typowner > 1
         AND NOT EXISTS (
