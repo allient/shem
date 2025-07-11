@@ -1,8 +1,10 @@
 pub mod array_types;
 pub mod base_types;
 pub mod composite_types;
+pub mod domains;
 pub mod enums;
 pub mod extensions;
+pub mod multirange_types;
 pub mod range_types;
 pub mod roles;
 pub mod schemas;

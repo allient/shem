@@ -74,12 +74,24 @@ where
             .insert(array_type.name.clone(), array_type);
     }
 
-    // // Introspect multirange types
-    // let multirange_types = introspect_multirange_types(&*client).await?;
-    // for multirange_type in multirange_types {
-    //     schema
-    //         .multirange_types
-    //         .insert(multirange_type.name.clone(), multirange_type);
+    // Introspect multirange types
+    let multirange_types = introspect_multirange_types(&*client).await?;
+    for multirange_type in multirange_types {
+        schema
+            .multirange_types
+            .insert(multirange_type.name.clone(), multirange_type);
+    }
+
+    // Introspect domains
+    let domains = introspect_domains(&*client).await?;
+    for domain in domains {
+        schema.domains.insert(domain.name.clone(), domain);
+    }
+
+    // // Introspect sequences
+    // let sequences = introspect_sequences(&*client).await?;
+    // for seq in sequences {
+    //     schema.sequences.insert(seq.name.clone(), seq);
     // }
 
     // // Introspect tables
@@ -110,18 +122,6 @@ where
     // let procedures = introspect_procedures(&*client).await?;
     // for proc in procedures {
     //     schema.procedures.insert(proc.name.clone(), proc);
-    // }
-
-    // // Introspect domains
-    // let domains = introspect_domains(&*client).await?;
-    // for domain in domains {
-    //     schema.domains.insert(domain.name.clone(), domain);
-    // }
-
-    // // Introspect sequences
-    // let sequences = introspect_sequences(&*client).await?;
-    // for seq in sequences {
-    //     schema.sequences.insert(seq.name.clone(), seq);
     // }
 
     // // Introspect triggers
@@ -1062,7 +1062,7 @@ where
             n.nspname AS domain_schema,
             bt.typname AS base_type,
             pg_catalog.format_type(t.typbasetype, t.typtypmod) AS formatted_base_type,
-            pg_get_expr(d.adbin, d.adrelid) AS domain_default,
+            pg_get_expr(t.typdefaultbin, 0) AS domain_default,
             c.conname AS constraint_name,
             pg_get_constraintdef(c.oid) AS check_clause,
             c.convalidated AS is_valid,
@@ -1073,7 +1073,6 @@ where
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
         JOIN pg_type bt ON t.typbasetype = bt.oid
-        LEFT JOIN pg_attrdef d ON t.typrelid = d.adrelid AND t.typtypmod = d.adnum
         LEFT JOIN pg_constraint c ON c.contypid = t.oid AND c.contype = 'c'
         WHERE t.typtype = 'd'
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
@@ -1093,22 +1092,19 @@ where
     for row in rows {
         let name: String = row.get("domain_name");
         let schema: String = row.get("domain_schema");
-        let _base_type: String = row.get("base_type");
         let formatted_base_type: String = row.get("formatted_base_type");
         let default: Option<String> = row.get("domain_default");
         let check_clause: Option<String> = row.get("check_clause");
         let is_valid: Option<bool> = row.get("is_valid");
         let not_null: bool = row.get("is_not_null");
         let comment: Option<String> = row.get("domain_comment");
-        let _owner: u32 = row.get("owner");
-        let _type_modifier: i32 = row.get("type_modifier");
 
         let key = (schema.clone(), name.clone());
 
         let domain = domain_map.entry(key.clone()).or_insert(Domain {
             name: name.clone(),
             schema: Some(schema),
-            base_type: formatted_base_type, // Use formatted type which includes length/precision
+            base_type: formatted_base_type,
             constraints: vec![],
             default,
             not_null,
@@ -2600,25 +2596,23 @@ where
 {
     let query = r#"
         SELECT 
-            t.typname AS name,
+            mrt.typname AS name,
             n.nspname AS schema,
             rt.typname AS range_type,
             rn.nspname AS range_schema,
-            obj_description(t.oid, 'pg_type') AS comment
-        FROM pg_type t
-        JOIN pg_namespace n ON t.typnamespace = n.oid
-        JOIN pg_type rt ON t.typarray = rt.oid
+            obj_description(mrt.oid, 'pg_type') AS comment
+        FROM pg_range r
+        JOIN pg_type rt ON r.rngtypid = rt.oid
         JOIN pg_namespace rn ON rt.typnamespace = rn.oid
-        WHERE t.typtype = 'b'  -- base types
-        AND t.typname LIKE '%_multirange'  -- multirange types
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.typowner > 1
+        JOIN pg_type mrt ON r.rngmultitypid = mrt.oid
+        JOIN pg_namespace n ON mrt.typnamespace = n.oid
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         AND NOT EXISTS (
             SELECT 1 FROM pg_depend d
             JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
+            WHERE d.objid = mrt.oid AND d.deptype = 'e'
         )
-        ORDER BY n.nspname, t.typname
+        ORDER BY n.nspname, mrt.typname
     "#;
 
     let rows = client.query(query, &[]).await?;
