@@ -1,6 +1,6 @@
-use shem_core::schema::{Rule, Collation, RuleEvent, CollationProvider};
-use shem_core::traits::SqlGenerator;
 use postgres::PostgresSqlGenerator;
+use shem_core::schema::{Rule, RuleEvent};
+use shem_core::traits::SqlGenerator;
 
 #[test]
 fn test_create_rule() {
@@ -16,7 +16,7 @@ fn test_create_rule() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_rule(&rule).unwrap();
-    
+
     assert!(result.contains("CREATE RULE update_users_rule AS"));
     assert!(result.contains("ON public.users"));
     assert!(result.contains("TO UPDATE"));
@@ -38,7 +38,7 @@ fn test_create_rule_also() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_rule(&rule).unwrap();
-    
+
     assert!(result.contains("CREATE RULE log_updates AS"));
     assert!(result.contains("ON users"));
     assert!(result.contains("TO UPDATE"));
@@ -60,7 +60,7 @@ fn test_create_rule_insert() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_rule(&rule).unwrap();
-    
+
     assert!(result.contains("CREATE RULE validate_insert AS"));
     assert!(result.contains("ON users"));
     assert!(result.contains("TO INSERT"));
@@ -82,7 +82,7 @@ fn test_create_rule_delete() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_rule(&rule).unwrap();
-    
+
     assert!(result.contains("CREATE RULE soft_delete AS"));
     assert!(result.contains("ON users"));
     assert!(result.contains("TO DELETE"));
@@ -104,7 +104,7 @@ fn test_create_rule_with_reserved_keyword() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_rule(&rule).unwrap();
-    
+
     assert!(result.contains("CREATE RULE \"order\" AS"));
     assert!(result.contains("ON orders"));
     assert!(result.contains("TO UPDATE"));
@@ -125,7 +125,7 @@ fn test_drop_rule() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.drop_rule(&rule).unwrap();
-    
+
     assert_eq!(result, "DROP RULE IF EXISTS my_rule ON my_table CASCADE;");
 }
 
@@ -143,6 +143,9 @@ fn test_drop_rule_with_schema() {
 
     let generator = PostgresSqlGenerator;
     let result = generator.drop_rule(&rule).unwrap();
-    
-    assert_eq!(result, "DROP RULE IF EXISTS public.my_rule ON public.my_table CASCADE;");
+
+    assert_eq!(
+        result,
+        "DROP RULE IF EXISTS public.my_rule ON public.my_table CASCADE;"
+    );
 }

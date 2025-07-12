@@ -17,6 +17,10 @@ help:
 	@echo "  clean-dbs       Clean up orphaned test databases"
 	@echo "  help            Show this help message"
 
+dev-db: ## Start development environment
+	@echo "Starting development environment..."
+	docker-compose --env-file .env up
+
 # Build the project
 build:
 	cargo build

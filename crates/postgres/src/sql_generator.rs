@@ -13,12 +13,13 @@
  * and automation of database changes, allowing tools to programmatically manage PostgreSQL schemas.
  */
 use shem_core::{
-    Collation, ConstraintTrigger, Domain, EventTrigger, Extension, ForeignDataWrapper, ForeignTable, Function, Index, IndexMethod,
-    MaterializedView, Policy, Procedure, Publication, Role, Rule, Sequence, Server, Subscription, Table, Tablespace, Trigger, View,
+    Collation, ConstraintTrigger, Domain, EventTrigger, Extension, ForeignDataWrapper,
+    ForeignTable, Function, Index, IndexMethod, MaterializedView, Policy, Procedure, Publication,
+    Role, Rule, Sequence, Server, Subscription, Table, Tablespace, Trigger, View,
     schema::{
-        ArrayType, BaseType, CheckOption, CollationProvider, CompositeType, EventTriggerEvent, MultirangeType,
-        ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder, TriggerEvent, TriggerLevel,
-        TriggerTiming,
+        ArrayType, BaseType, CheckOption, CollationProvider, CompositeType, EventTriggerEvent,
+        MultirangeType, ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder,
+        TriggerEvent, TriggerLevel, TriggerTiming,
     },
     traits::SqlGenerator,
 };
@@ -30,7 +31,7 @@ pub struct PostgresSqlGenerator;
 
 impl PostgresSqlGenerator {
     /// Quote an identifier to handle reserved keywords and preserve case sensitivity
-    fn quote_identifier(identifier: &str) -> String {
+    fn _quote_identifier(identifier: &str) -> String {
         // Check if quoting is needed
         let needs_quoting = identifier.chars().any(|c| !c.is_alphanumeric() && c != '_')
             || {
@@ -1684,7 +1685,10 @@ impl SqlGenerator for PostgresSqlGenerator {
 
         // Add valid until
         if let Some(valid_until) = &role.valid_until {
-            sql.push_str(&format!(" VALID UNTIL '{}'", valid_until.replace('\'', "''")));
+            sql.push_str(&format!(
+                " VALID UNTIL '{}'",
+                valid_until.replace('\'', "''")
+            ));
         }
 
         // Add member of roles
@@ -1738,7 +1742,10 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String> {
         let tablespace_name = Self::force_quote_identifier(&tablespace.name);
-        Ok(format!("DROP TABLESPACE IF EXISTS {} CASCADE;", tablespace_name))
+        Ok(format!(
+            "DROP TABLESPACE IF EXISTS {} CASCADE;",
+            tablespace_name
+        ))
     }
 
     fn create_publication(&self, publication: &Publication) -> Result<String> {
@@ -1784,7 +1791,10 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn drop_publication(&self, publication: &Publication) -> Result<String> {
         let publication_name = Self::force_quote_identifier(&publication.name);
-        Ok(format!("DROP PUBLICATION IF EXISTS {} CASCADE;", publication_name))
+        Ok(format!(
+            "DROP PUBLICATION IF EXISTS {} CASCADE;",
+            publication_name
+        ))
     }
 
     fn create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
@@ -1916,7 +1926,10 @@ impl SqlGenerator for PostgresSqlGenerator {
 
         // Add slot name if present
         if let Some(slot_name) = &subscription.slot_name {
-            sql.push_str(&format!(" SLOT_NAME {}", Self::force_quote_identifier(slot_name)));
+            sql.push_str(&format!(
+                " SLOT_NAME {}",
+                Self::force_quote_identifier(slot_name)
+            ));
         }
 
         sql.push(';');
@@ -1925,7 +1938,10 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn drop_subscription(&self, subscription: &Subscription) -> Result<String> {
         let subscription_name = Self::force_quote_identifier(&subscription.name);
-        Ok(format!("DROP SUBSCRIPTION IF EXISTS {} CASCADE;", subscription_name))
+        Ok(format!(
+            "DROP SUBSCRIPTION IF EXISTS {} CASCADE;",
+            subscription_name
+        ))
     }
 
     fn create_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String> {
@@ -1992,22 +2008,31 @@ impl SqlGenerator for PostgresSqlGenerator {
         } else {
             Self::force_quote_identifier(&foreign_table.name)
         };
-        Ok(format!("DROP FOREIGN TABLE IF EXISTS {} CASCADE;", table_name))
+        Ok(format!(
+            "DROP FOREIGN TABLE IF EXISTS {} CASCADE;",
+            table_name
+        ))
     }
 
     fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
         let fdw_name = Self::force_quote_identifier(&fdw.name);
-        
+
         let mut sql = format!("CREATE FOREIGN DATA WRAPPER {}", fdw_name);
 
         // Add handler if present
         if let Some(handler) = &fdw.handler {
-            sql.push_str(&format!(" HANDLER {}", Self::force_quote_identifier(handler)));
+            sql.push_str(&format!(
+                " HANDLER {}",
+                Self::force_quote_identifier(handler)
+            ));
         }
 
         // Add validator if present
         if let Some(validator) = &fdw.validator {
-            sql.push_str(&format!(" VALIDATOR {}", Self::force_quote_identifier(validator)));
+            sql.push_str(&format!(
+                " VALIDATOR {}",
+                Self::force_quote_identifier(validator)
+            ));
         }
 
         // Add options if present
@@ -2027,6 +2052,9 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
         let fdw_name = Self::force_quote_identifier(&fdw.name);
-        Ok(format!("DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;", fdw_name))
+        Ok(format!(
+            "DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;",
+            fdw_name
+        ))
     }
 }

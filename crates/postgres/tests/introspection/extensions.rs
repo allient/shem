@@ -25,6 +25,7 @@ async fn test_introspect_basic_extension() -> Result<(), Box<dyn std::error::Err
     // Verify the extension was introspected
     let extension = schema.extensions.get("uuid-ossp");
     debug!("Extension: {:?}", extension);
+    println!("Extension: {:?}", extension);
     assert!(
         extension.is_some(),
         "Extension 'uuid-ossp' should be introspected"

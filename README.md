@@ -365,6 +365,9 @@ For your Shem declarative PostgreSQL migration tool, focus on supporting it
 | 23 | **Aggregate** | A custom aggregation function (like `SUM` or `AVG`). | Very Low | **High** | Logic | 🔶 Missing |
 <!-- markdown-table-sort-enable -->
 
+count code tokei
+zellij
+
 ## Inspiration
 Tool/Crate	Notes
 refinery	For migration management, not schema diffing or introspection.

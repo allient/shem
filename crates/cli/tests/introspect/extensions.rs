@@ -471,6 +471,7 @@ async fn test_introspect_extension_with_objects_using_extension() -> Result<()> 
     // Verify extension and dependent objects were introspected
     let schema_content = std::fs::read_to_string(env.temp_path().join("schema/schema.sql"))?;
     debug!("🚀 schema_content: \n{}", schema_content);
+    println!("🚀 schema_content: \n{}", schema_content);
     assert!(schema_content.contains("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""));
     assert!(schema_content.contains("CREATE TABLE public.documents"));
     assert!(schema_content.contains("id uuid NOT NULL DEFAULT gen_random_uuid()"));

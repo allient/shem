@@ -24,3 +24,5 @@ pg-schema-diff
 sample_project
 db_schema
 my_project
+
+.env

@@ -1089,10 +1089,10 @@ fn parse_create_role(stmt: &protobuf::CreateRoleStmt) -> Result<Statement> {
     let mut inherit = false;
     let mut login = false;
     let mut replication = false;
-    let mut connection_limit = None;
+    let connection_limit = None;
     let mut password = None;
-    let mut valid_until = None;
-    let mut member_of = Vec::new();
+    let valid_until = None;
+    let member_of = Vec::new();
 
     // Parse role options - these might be stored as role options or flags
     for option in &stmt.options {

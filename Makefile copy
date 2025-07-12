@@ -1,0 +1,112 @@
+.PHONY: help dev prod setup migrate generate-types lint test clean
+
+# Database configuration
+DB_DIR = db
+ATLAS_CONFIG = $(DB_DIR)/atlas.hcl
+
+# Load environment variables
+include .env.dev
+
+help: ## Show this help message
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Targets:'
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+dev: ## Start development environment
+	@echo "Starting development environment..."
+	docker-compose --env-file .env.dev up
+
+prod: ## Start production environment
+	@echo "Starting production environment..."
+	docker-compose -f docker-compose.prod.yml up -d
+
+setup: ## Initial setup
+	@echo "Setting up the project..."
+	npm install
+	make generate-types
+	@echo "Setup complete!"
+
+# Database schema management
+schema-apply: ## Validate schema files
+	@echo "Validating schema files..."
+	atlas schema apply -c file://db/atlas.hcl --env dev --url $(DATABASE_URL)?sslmode=disable
+
+schema-inspect: ## Inspect current database schema
+	@echo "Inspecting current database schema..."
+	atlas schema inspect -c file://db/atlas.hcl --env dev --url $(DATABASE_URL)?sslmode=disable
+
+
+schema-diff: ## Show differences between schema files and database
+	@echo "Showing schema differences..."
+	$(ATLAS_CMD) schema diff --env dev
+
+migrate-generate: ## Generate new migration from schema changes
+	@echo "Generating migration from schema changes..."
+	atlas migrate diff \
+		--env dev \
+		--name "$(shell read -p 'Migration name: ' name; echo $$name)"
+
+migrate-apply: ## Apply pending migrations
+	@echo "Applying migrations..."
+	atlas migrate apply --env dev
+
+migrate-status: ## Show migration status
+	atlas migrate status --env dev
+
+migrate-validate: ## Validate migrations
+	atlas migrate validate --env dev
+
+# Schema file management
+schema-lint: ## Lint all schema files
+	@echo "Linting schema files..."
+	@for file in packages/database/schema/*.sql; do \
+		echo "Checking $$file..."; \
+		sqlfluff lint "$$file" || true; \
+	done
+
+schema-format: ## Format schema files
+	@echo "Formatting schema files..."
+	@for file in packages/database/schema/*.sql; do \
+		echo "Formatting $$file..."; \
+		sqlfluff format "$$file" --overwrite || true; \
+	done
+
+
+migrate: ## Run database migrations
+	@echo "Running database migrations..."
+	atlas migrate apply \
+		--dir "file://packages/database/migrations" \
+		--url "$(DATABASE_URL)"
+
+
+generate-types: ## Generate TypeScript types from database
+	@echo "Generating TypeScript types..."
+	node scripts/generate-types.js
+
+lint: ## Run linting
+	npm run lint
+
+test: ## Run tests
+	npm run test
+
+clean: ## Clean up containers and volumes
+	docker-compose down -v
+	docker-compose -f docker-compose.prod.yml down -v
+	docker system prune -f
+
+db-console: ## Open database console
+	docker-compose exec postgres psql -U postgres -d myapp_dev
+
+hasura-console: ## Open Hasura console
+	@echo "Opening Hasura console at http://localhost:8080"
+	@echo "Admin secret: myadminsecret"
+
+logs: ## Show logs
+	docker-compose logs -f
+
+logs-api: ## Show API logs
+	docker-compose logs -f api
+
+logs-web: ## Show web logs
+	docker-compose logs -f web

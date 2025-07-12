@@ -1,7 +1,7 @@
-use tracing::debug;
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;
+use tracing::debug;
 
 /// Introspect PostgreSQL database schema
 pub async fn introspect_schema<C>(client: &C) -> Result<Schema>
@@ -829,7 +829,6 @@ async fn introspect_materialized_views<C: GenericClient>(
         let definition: String = row.get("definition");
         let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
         let tablespace_oid: Option<u32> = row.get("tablespace_oid");
-        let has_data: Option<bool> = row.get("has_data");
         let comment: Option<String> = row.get("comment");
 
         // Materialized views are created WITH DATA by default unless explicitly specified WITH NO DATA
@@ -1629,7 +1628,7 @@ async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>
     Ok(policies)
 }
 
-async fn introspect_servers<C: GenericClient + Sync>(client: &C) -> Result<Vec<Server>> {
+async fn _introspect_servers<C: GenericClient + Sync>(client: &C) -> Result<Vec<Server>> {
     let query = r#"
         SELECT 
             s.srvname AS server_name,
@@ -1899,7 +1898,6 @@ async fn introspect_constraint_triggers<C: GenericClient>(
         let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
         let constraint_oid: u32 = row.get("constraint_oid");
         let trigger_definition: String = row.get("trigger_definition");
-        let comment: Option<String> = row.get("comment");
 
         debug!(
             "Constraint Trigger: {} on {}.{}",
@@ -2161,7 +2159,7 @@ async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Pub
     Ok(publications)
 }
 
-async fn introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<Subscription>> {
+async fn _introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<Subscription>> {
     let query = r#"
         SELECT 
             s.subname AS name,
@@ -2346,7 +2344,7 @@ async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tabl
     Ok(tablespaces)
 }
 
-async fn introspect_foreign_data_wrappers<C: GenericClient>(
+async fn _introspect_foreign_data_wrappers<C: GenericClient>(
     client: &C,
 ) -> Result<Vec<ForeignDataWrapper>> {
     let query = r#"
@@ -2392,7 +2390,7 @@ async fn introspect_foreign_data_wrappers<C: GenericClient>(
     Ok(fdws)
 }
 
-async fn introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<ForeignTable>> {
+async fn _introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<ForeignTable>> {
     let query = r#"
         SELECT 
             c.relname AS table_name,

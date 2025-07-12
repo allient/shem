@@ -249,6 +249,7 @@ cargo test -p postgres -- --list
 cargo test -p postgres -- --nocapture --test-threads=1
 
 RUST_LOG=debug cargo test -p postgres --test generator test_introspect_basic_extension -- --nocapture
+RUST_LOG=debug bacon test -- -p postgres --test generator test_introspect_basic_extension -- --nocapture
 
 ```
 

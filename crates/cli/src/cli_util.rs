@@ -84,7 +84,6 @@ pub mod db {
     use super::*;
     use sqlx::PgPool;
     use std::env;
-    use std::process::Command;
 
     /// Generate a unique test database name
     pub fn generate_unique_db_name() -> String {
