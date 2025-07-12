@@ -1,4 +1,4 @@
-use log::debug;
+use tracing::debug;
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;

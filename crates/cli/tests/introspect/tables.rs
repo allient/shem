@@ -5,6 +5,7 @@
 use crate::common::{TestEnv, cli, db};
 use crate::fixtures::sql;
 use anyhow::Result;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_simple_table() -> Result<()> {

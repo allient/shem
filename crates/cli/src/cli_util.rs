@@ -1,14 +1,16 @@
 //! Common test utilities for CLI command tests
 
+use anyhow::Result;
+use chrono::Utc;
+use std::fs;
 use std::path::PathBuf;
 use tempfile::{TempDir, tempdir};
-use std::fs;
-use anyhow::Result;
-use ::cli::Config;
 use uuid::Uuid;
-use chrono::Utc;
+
+use crate::Config;
 
 /// Test environment setup and teardown utilities
+#[derive(Debug)]
 pub struct TestEnv {
     pub temp_dir: TempDir,
     pub config: Config,
@@ -21,7 +23,7 @@ impl TestEnv {
         let temp_dir = tempdir()?;
         let config = Config::default();
         let db_name = db::generate_unique_db_name();
-        
+
         Ok(Self {
             temp_dir,
             config,
@@ -52,10 +54,14 @@ impl TestEnv {
     pub fn assert_file_content(&self, filename: &str, expected_content: &str) -> Result<()> {
         let file_path = self.temp_path().join(filename);
         assert!(file_path.exists(), "File {} does not exist", filename);
-        
+
         let content = fs::read_to_string(&file_path)?;
-        assert_eq!(content.trim(), expected_content.trim(), 
-                   "File content mismatch for {}", filename);
+        assert_eq!(
+            content.trim(),
+            expected_content.trim(),
+            "File content mismatch for {}",
+            filename
+        );
         Ok(())
     }
 
@@ -112,7 +118,9 @@ pub mod db {
             format!("{}/postgres", base_url.trim_end_matches('/'))
         };
         let pool = PgPool::connect(&postgres_url).await?;
-        sqlx::query(&format!("CREATE DATABASE {}", db_name)).execute(&pool).await?;
+        sqlx::query(&format!("CREATE DATABASE {}", db_name))
+            .execute(&pool)
+            .await?;
         Ok(())
     }
 
@@ -132,7 +140,9 @@ pub mod db {
         ))
         .execute(&pool)
         .await?;
-        sqlx::query(&format!("DROP DATABASE IF EXISTS {}", db_name)).execute(&pool).await?;
+        sqlx::query(&format!("DROP DATABASE IF EXISTS {}", db_name))
+            .execute(&pool)
+            .await?;
         Ok(())
     }
 
@@ -152,7 +162,8 @@ pub mod db {
 
     /// Clean up test database (drop all non-system schemas)
     pub async fn cleanup_test_db(pool: &PgPool) -> Result<()> {
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             DO $$
             DECLARE
                 schema_name text;
@@ -166,7 +177,10 @@ pub mod db {
                     EXECUTE 'DROP SCHEMA IF EXISTS ' || quote_ident(schema_name) || ' CASCADE';
                 END LOOP;
             END $$;
-        "#).execute(pool).await?;
+        "#,
+        )
+        .execute(pool)
+        .await?;
         sqlx::query("CREATE SCHEMA IF NOT EXISTS public")
             .execute(pool)
             .await?;
@@ -192,75 +206,64 @@ pub mod db {
 /// CLI command execution utilities
 pub mod cli {
     use super::*;
-    use std::process::Command;
     use std::env;
     use std::path::PathBuf;
+    use std::process::Command;
 
     /// Get the path to the CLI crate directory
     pub fn cli_crate_dir() -> PathBuf {
-        // Traverse up from CARGO_MANIFEST_DIR to the cli crate
-        // This works for both workspace and direct runs
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+        PathBuf::from(manifest_dir)
     }
 
-    /// Execute a shem CLI command and return the result
+    /// Run a shem command with the given arguments
     pub fn run_shem_command(args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new("cargo")
-            .args(&["run", "--bin", "shem"])
-            .args(args)
-            .current_dir(cli_crate_dir())
-            .output()?;
+        let cli_dir = cli_crate_dir();
+        let mut command = Command::new("cargo");
+        command
+            .current_dir(&cli_dir)
+            .arg("run")
+            .arg("--")
+            .args(args);
+
+        let output = command.output()?;
+        Ok(output)
+    }
+
+    /// Run a shem command in a specific directory
+    pub fn run_shem_command_in_dir(
+        args: &[&str],
+        temp_dir: &PathBuf,
+    ) -> Result<std::process::Output> {
+        let cli_dir = cli_crate_dir();
+        let binary_path = cli_dir.join("../../target/debug/shem");
         
+        let mut command = Command::new(&binary_path);
+        command
+            .current_dir(temp_dir)
+            .args(args);
+
+        let output = command.output()?;
         Ok(output)
     }
 
-    /// Execute a shem CLI command, but always run in the CLI crate directory.
-    /// The output path should be absolute or relative to the CLI crate dir.
-    pub fn run_shem_command_in_dir(args: &[&str], temp_dir: &PathBuf) -> Result<std::process::Output> {
-        // Convert output path to absolute if needed
-        let mut new_args: Vec<String> = vec![];
-        let mut skip_next = false;
-        for (i, arg) in args.iter().enumerate() {
-            if skip_next {
-                skip_next = false;
-                continue;
-            }
-            if (*arg == "--output" || *arg == "-o") && i + 1 < args.len() {
-                // Make output path absolute
-                let output_path = temp_dir.join(args[i + 1]);
-                new_args.push(arg.to_string());
-                new_args.push(output_path.to_string_lossy().to_string());
-                skip_next = true;
-            } else {
-                new_args.push(arg.to_string());
-            }
-        }
-        let output = Command::new("cargo")
-            .args(&["run", "--bin", "shem"])
-            .args(&new_args)
-            .current_dir(cli_crate_dir())
-            .output()?;
-        Ok(output)
-    }
-
-    /// Assert that a CLI command succeeds
+    /// Assert that a command executed successfully
     pub fn assert_command_success(output: &std::process::Output) {
-        assert!(
-            output.status.success(),
-            "Command failed with status: {}\nStdout: {}\nStderr: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!(
+                "Command failed with status {}: stderr: {}, stdout: {}",
+                output.status, stderr, stdout
+            );
+        }
     }
 
-    /// Assert that a CLI command fails with expected error
+    /// Assert that a command failed with expected error
     pub fn assert_command_failure(output: &std::process::Output, expected_error: &str) {
-        assert!(
-            !output.status.success(),
-            "Command should have failed but succeeded"
-        );
-        
+        if output.status.success() {
+            panic!("Command succeeded but expected failure");
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains(expected_error),
@@ -269,4 +272,4 @@ pub mod cli {
             stderr
         );
     }
-} 
+}

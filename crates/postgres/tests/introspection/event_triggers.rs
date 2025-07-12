@@ -2,7 +2,7 @@
 //! 
 //! Tests for introspecting various types of event triggers.
 
-use log::debug;
+use tracing::debug;
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
 use shem_core::schema::{EventTriggerEvent};

@@ -1,7 +1,7 @@
 use postgres::TestDb;
 use shem_core::schema::CheckOption;
 use shem_core::DatabaseConnection;
-use log::debug;
+use tracing::debug;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -35,6 +35,7 @@ async fn test_introspect_basic_view() -> Result<(), Box<dyn std::error::Error>> 
 
     // Verify the view exists
     let view = schema.views.get("active_users").expect("View should exist");
+    debug!("View: {:?}", view);
     assert_eq!(view.name, "active_users");
     assert_eq!(view.schema, Some("public".to_string())); // Public schema
     assert!(view.definition.contains("SELECT id,\n    name\n   FROM users"));

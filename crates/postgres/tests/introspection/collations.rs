@@ -1,4 +1,4 @@
-use log::debug;
+use tracing::debug;
 use postgres::TestDb;
 use shem_core::{DatabaseConnection, schema::CollationProvider};
 

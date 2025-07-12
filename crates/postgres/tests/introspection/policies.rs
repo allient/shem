@@ -1,7 +1,7 @@
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
 use shem_core::schema::PolicyCommand;
-use log::debug;
+use tracing::debug;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(

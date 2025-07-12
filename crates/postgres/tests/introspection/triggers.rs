@@ -1,7 +1,7 @@
 use postgres::TestDb;
 use shem_core::{DatabaseConnection, TriggerTiming, TriggerLevel};
 use shem_core::schema::TriggerEvent;
-use log::debug;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_basic_trigger() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,7 +1,7 @@
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
 use shem_core::schema::RuleEvent;
-use log::debug;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_basic_rule() -> Result<(), Box<dyn std::error::Error>> {

@@ -13,11 +13,12 @@ use shared_types::{
 use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
-        CheckOption, Collation, CollationProvider, Column, Constraint, ConstraintKind,
-        ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent, Extension, Function,
-        GeneratedColumn, Identity, MaterializedView, NamedSchema, ParallelSafety, Parameter, ParameterMode,
-        Policy, PolicyCommand, Procedure, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table,
-        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility, RangeType, CompositeType
+        CheckOption, Collation, CollationProvider, Column, CompositeType, Constraint,
+        ConstraintKind, ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent,
+        Extension, Function, GeneratedColumn, Identity, MaterializedView, NamedSchema,
+        ParallelSafety, Parameter, ParameterMode, Policy, PolicyCommand, Procedure, RangeType,
+        ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table, Trigger, TriggerEvent,
+        TriggerLevel, TriggerTiming, View, Volatility,
     },
     traits::SchemaSerializer,
 };
@@ -139,10 +140,12 @@ pub async fn execute(
 
     if verbose {
         info!("Schema written to {}", schema_file.display());
-        info!("Introspected {} tables, {} views, {} functions", 
-            schema.tables.len(), 
-            schema.views.len(), 
-            schema.functions.len());
+        info!(
+            "Introspected {} tables, {} views, {} functions",
+            schema.tables.len(),
+            schema.views.len(),
+            schema.functions.len()
+        );
     } else {
         info!("Schema written to {}", schema_file.display());
     }
@@ -156,7 +159,6 @@ fn get_driver(_config: &Config) -> AnyhowResult<Box<dyn DatabaseDriver>> {
 }
 
 fn get_serializer(_config: &Config) -> AnyhowResult<Box<dyn SchemaSerializer>> {
-    // TODO: Support multiple serializers
     Ok(Box::new(SqlSerializer))
 }
 
@@ -1403,7 +1405,8 @@ fn generate_create_enum(type_def: &EnumType) -> Result<String> {
 
     sql.push_str(" AS ENUM (");
 
-    let values_str = type_def.values
+    let values_str = type_def
+        .values
         .iter()
         .map(|v| format!("'{}'", v))
         .collect::<Vec<_>>()
@@ -1423,7 +1426,8 @@ fn generate_create_type(type_def: &CompositeType) -> Result<String> {
     }
 
     sql.push_str(" AS (");
-    let attrs = type_def.attributes
+    let attrs = type_def
+        .attributes
         .iter()
         .map(|attr| format!("{} {}", attr.name, attr.type_name))
         .collect::<Vec<_>>()
@@ -2110,7 +2114,8 @@ fn generate_create_composite_type(composite_type: &CompositeType) -> Result<Stri
     }
 
     sql.push_str(" AS (");
-    let attrs = composite_type.attributes
+    let attrs = composite_type
+        .attributes
         .iter()
         .map(|attr| format!("{} {}", attr.name, attr.type_name))
         .collect::<Vec<_>>()

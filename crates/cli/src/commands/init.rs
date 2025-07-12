@@ -1,7 +1,7 @@
 use crate::config::Config;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{debug, info};
 
 pub async fn execute(path: PathBuf, _config: &Config) -> Result<()> {
     // Create base directory if it doesn't exist

@@ -1,7 +1,7 @@
 use postgres::TestDb;
 use shem_core::schema::CheckOption;
 use shem_core::DatabaseConnection;
-use log::debug;
+use tracing::debug;
 use std::fs;
 
 /// Test helper function to execute SQL on the test database

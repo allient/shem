@@ -1,6 +1,6 @@
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
-use log::debug;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_foreign_key_basic() -> Result<(), Box<dyn std::error::Error>> {

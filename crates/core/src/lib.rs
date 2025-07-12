@@ -8,6 +8,7 @@ pub mod traits;
 
 pub use error::{Error, Result};
 pub use migration::Migration;
+
 // Re-export specific schema types that don't conflict with shared_types
 pub use schema::{
     Collation, Column, ColumnStorage, Constraint, ConstraintKind, ConstraintTrigger, Domain,

@@ -1,6 +1,6 @@
 use postgres::TestDb;
 use shem_core::{DatabaseConnection, Volatility, ParallelSafety, ReturnKind};
-use log::debug;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_function_with_comment() -> Result<(), Box<dyn std::error::Error>> {

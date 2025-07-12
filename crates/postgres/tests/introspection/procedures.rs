@@ -1,6 +1,6 @@
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
-use log::debug;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_introspect_basic_procedure() -> Result<(), Box<dyn std::error::Error>> {
