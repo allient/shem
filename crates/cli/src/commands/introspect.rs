@@ -17,8 +17,9 @@ use shem_core::{
         ConstraintKind, ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent,
         Extension, Function, GeneratedColumn, Identity, MaterializedView, NamedSchema,
         ParallelSafety, Parameter, ParameterMode, Policy, PolicyCommand, Procedure, RangeType,
-        ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table, Trigger, TriggerEvent,
-        TriggerLevel, TriggerTiming, View, Volatility,
+        ReferentialAction, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table, Trigger, TriggerEvent,
+        TriggerLevel, TriggerTiming, View, Volatility, Server, Publication, Subscription, Role,
+        Tablespace, ForeignKeyConstraint, BaseType, ArrayType, MultirangeType,
     },
     traits::SchemaSerializer,
 };
@@ -45,6 +46,17 @@ enum SchemaObject<'a> {
     EventTrigger(&'a EventTrigger),
     Policy(&'a Policy),
     Rule(&'a Rule),
+    // Add missing objects that are introspected but not generated
+    NamedSchema(&'a NamedSchema),
+    Server(&'a Server),
+    Publication(&'a Publication),
+    Subscription(&'a Subscription),
+    Role(&'a Role),
+    Tablespace(&'a Tablespace),
+    ForeignKeyConstraint(&'a ForeignKeyConstraint),
+    BaseType(&'a BaseType),
+    ArrayType(&'a ArrayType),
+    MultirangeType(&'a MultirangeType),
 }
 
 impl<'a> SchemaObject<'a> {
@@ -67,6 +79,16 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::EventTrigger(t) => t.name.clone(),
             SchemaObject::Policy(p) => p.name.clone(),
             SchemaObject::Rule(r) => r.name.clone(),
+            SchemaObject::NamedSchema(ns) => ns.name.clone(),
+            SchemaObject::Server(s) => s.name.clone(),
+            SchemaObject::Publication(p) => p.name.clone(),
+            SchemaObject::Subscription(s) => s.name.clone(),
+            SchemaObject::Role(r) => r.name.clone(),
+            SchemaObject::Tablespace(t) => t.name.clone(),
+            SchemaObject::ForeignKeyConstraint(fk) => fk.name.clone(),
+            SchemaObject::BaseType(b) => b.name.clone(),
+            SchemaObject::ArrayType(a) => a.name.clone(),
+            SchemaObject::MultirangeType(m) => m.name.clone(),
         }
     }
 
@@ -89,6 +111,17 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::EventTrigger(_) => None, // Event triggers don't have schemas
             SchemaObject::Policy(p) => p.schema.clone(),
             SchemaObject::Rule(r) => r.schema.clone(),
+            // Objects that don't have schemas
+            SchemaObject::NamedSchema(_) => None, // NamedSchema is the schema itself
+            SchemaObject::Server(_) => None, // Servers don't have schemas
+            SchemaObject::Publication(_) => None, // Publications don't have schemas
+            SchemaObject::Subscription(_) => None, // Subscriptions don't have schemas
+            SchemaObject::Role(_) => None, // Roles don't have schemas
+            SchemaObject::Tablespace(_) => None, // Tablespaces don't have schemas
+            SchemaObject::ForeignKeyConstraint(fk) => fk.schema.clone(),
+            SchemaObject::BaseType(b) => b.schema.clone(),
+            SchemaObject::ArrayType(a) => a.schema.clone(),
+            SchemaObject::MultirangeType(m) => m.schema.clone(),
         }
     }
 
@@ -250,6 +283,46 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 SchemaObject::Rule(rule) => {
                     sql.push_str(&generate_create_rule(rule)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::NamedSchema(ns) => {
+                    sql.push_str(&generate_create_schema(ns)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::Server(s) => {
+                    sql.push_str(&generate_create_server(s)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::Publication(p) => {
+                    sql.push_str(&generate_create_publication(p)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::Subscription(s) => {
+                    sql.push_str(&generate_create_subscription(s)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::Role(r) => {
+                    sql.push_str(&generate_create_role(r)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::Tablespace(t) => {
+                    sql.push_str(&generate_create_tablespace(t)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::ForeignKeyConstraint(fk) => {
+                    sql.push_str(&generate_create_foreign_key_constraint(fk)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::BaseType(b) => {
+                    sql.push_str(&generate_create_base_type(b)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::ArrayType(a) => {
+                    sql.push_str(&generate_create_array_type(a)?);
+                    sql.push_str(";\n\n");
+                }
+                SchemaObject::MultirangeType(m) => {
+                    sql.push_str(&generate_create_multirange_type(m)?);
                     sql.push_str(";\n\n");
                 }
             }
@@ -605,42 +678,77 @@ impl SchemaSerializer for SqlSerializer {
 fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
     let mut ordered_objects = Vec::new();
 
-    // 1. Extensions
+    // 1. Named Schemas (must come first as other objects depend on them)
+    for (_, named_schema) in &schema.named_schemas {
+        ordered_objects.push(SchemaObject::NamedSchema(named_schema));
+    }
+
+    // 2. Extensions
     for (_, ext) in &schema.extensions {
         ordered_objects.push(SchemaObject::Extension(ext));
     }
 
-    // 2. Enums
+    // 3. Roles (needed for ownership)
+    for (_, role) in &schema.roles {
+        ordered_objects.push(SchemaObject::Role(role));
+    }
+
+    // 4. Tablespaces (needed for storage)
+    for (_, tablespace) in &schema.tablespaces {
+        ordered_objects.push(SchemaObject::Tablespace(tablespace));
+    }
+
+    // 5. Servers (needed for foreign data)
+    for (_, server) in &schema.servers {
+        ordered_objects.push(SchemaObject::Server(server));
+    }
+
+    // 6. Base Types (fundamental types)
+    for (_, base_type) in &schema.base_types {
+        ordered_objects.push(SchemaObject::BaseType(base_type));
+    }
+
+    // 7. Enums
     for (_, enum_type) in &schema.enums {
         ordered_objects.push(SchemaObject::Enum(enum_type));
     }
 
-    // 3. Domains
+    // 8. Domains
     for (_, domain) in &schema.domains {
         ordered_objects.push(SchemaObject::Domain(domain));
     }
 
-    // 4. Composite types - moved before tables
+    // 9. Composite types - moved before tables
     for (_, composite_type) in &schema.composite_types {
         ordered_objects.push(SchemaObject::CompositeType(composite_type));
     }
 
-    // 5. Range types
+    // 10. Range types
     for (_, range_type) in &schema.range_types {
         ordered_objects.push(SchemaObject::RangeType(range_type));
     }
 
-    // 6. Collations
+    // 11. Array types
+    for (_, array_type) in &schema.array_types {
+        ordered_objects.push(SchemaObject::ArrayType(array_type));
+    }
+
+    // 12. Multirange types
+    for (_, multirange_type) in &schema.multirange_types {
+        ordered_objects.push(SchemaObject::MultirangeType(multirange_type));
+    }
+
+    // 13. Collations
     for (_, collation) in &schema.collations {
         ordered_objects.push(SchemaObject::Collation(collation));
     }
 
-    // 7. Sequences (moved before tables)
+    // 14. Sequences (moved before tables)
     for (_, seq) in &schema.sequences {
         ordered_objects.push(SchemaObject::Sequence(seq));
     }
 
-    // 8. Tables (petgraph order)
+    // 15. Tables (petgraph order)
     let mut table_graph = DiGraph::new();
     let mut table_name_to_index = std::collections::HashMap::new();
     let mut table_objs = Vec::new();
@@ -697,42 +805,57 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
     };
     ordered_objects.extend(sorted_tables);
 
-    // 9. Views
+    // 16. Foreign Key Constraints (after tables)
+    for (_, fk) in &schema.foreign_key_constraints {
+        ordered_objects.push(SchemaObject::ForeignKeyConstraint(fk));
+    }
+
+    // 17. Views
     for (_, view) in &schema.views {
         ordered_objects.push(SchemaObject::View(view));
     }
 
-    // 10. Materialized views
+    // 18. Materialized views
     for (_, view) in &schema.materialized_views {
         ordered_objects.push(SchemaObject::MaterializedView(view));
     }
 
-    // 11. Policies
+    // 19. Publications (after tables and views)
+    for (_, publication) in &schema.publications {
+        ordered_objects.push(SchemaObject::Publication(publication));
+    }
+
+    // 20. Subscriptions (after publications)
+    for (_, subscription) in &schema.subscriptions {
+        ordered_objects.push(SchemaObject::Subscription(subscription));
+    }
+
+    // 21. Policies
     for (_, policy) in &schema.policies {
         ordered_objects.push(SchemaObject::Policy(policy));
     }
 
-    // 12. Rules
+    // 22. Rules
     for (_, rule) in &schema.rules {
         ordered_objects.push(SchemaObject::Rule(rule));
     }
 
-    // 13. Functions
+    // 23. Functions
     for (_, func) in &schema.functions {
         ordered_objects.push(SchemaObject::Function(func));
     }
 
-    // 14. Event triggers
+    // 24. Event triggers
     for (_, trigger) in &schema.event_triggers {
         ordered_objects.push(SchemaObject::EventTrigger(trigger));
     }
 
-    // 15. Triggers
+    // 25. Triggers
     for (_, trigger) in &schema.triggers {
         ordered_objects.push(SchemaObject::Trigger(trigger));
     }
 
-    // 16. Constraint triggers
+    // 26. Constraint triggers
     for (_, trigger) in &schema.constraint_triggers {
         ordered_objects.push(SchemaObject::ConstraintTrigger(trigger));
     }
@@ -2124,4 +2247,245 @@ fn generate_create_composite_type(composite_type: &CompositeType) -> Result<Stri
     sql.push_str(")");
 
     Ok(sql)
+}
+
+// SQL generation functions for the new objects
+fn generate_create_server(server: &Server) -> Result<String> {
+    let mut sql = format!("CREATE SERVER {}", server.name);
+    
+    if let Some(version) = &server.version {
+        sql.push_str(&format!(" VERSION '{}'", version));
+    }
+    
+    sql.push_str(&format!(" FOREIGN DATA WRAPPER {}", server.foreign_data_wrapper));
+    
+    if !server.options.is_empty() {
+        let options: Vec<String> = server.options
+            .iter()
+            .map(|(k, v)| format!("{} '{}'", k, v))
+            .collect();
+        sql.push_str(&format!(" OPTIONS ({})", options.join(", ")));
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_publication(publication: &Publication) -> Result<String> {
+    let mut sql = format!("CREATE PUBLICATION {}", publication.name);
+    
+    if publication.all_tables {
+        sql.push_str(" FOR ALL TABLES");
+    } else if !publication.tables.is_empty() {
+        sql.push_str(&format!(" FOR TABLE {}", publication.tables.join(", ")));
+    }
+    
+    let mut operations = Vec::new();
+    if publication.insert { operations.push("INSERT"); }
+    if publication.update { operations.push("UPDATE"); }
+    if publication.delete { operations.push("DELETE"); }
+    if publication.truncate { operations.push("TRUNCATE"); }
+    
+    if !operations.is_empty() {
+        sql.push_str(&format!(" WITH ({})", operations.join(", ")));
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_subscription(subscription: &Subscription) -> Result<String> {
+    let mut sql = format!("CREATE SUBSCRIPTION {}", subscription.name);
+    
+    sql.push_str(&format!(" CONNECTION '{}'", subscription.connection));
+    sql.push_str(&format!(" PUBLICATION {}", subscription.publication.join(", ")));
+    
+    if let Some(slot_name) = &subscription.slot_name {
+        sql.push_str(&format!(" SLOT NAME {}", slot_name));
+    }
+    
+    if !subscription.enabled {
+        sql.push_str(" WITH (enabled = false)");
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_role(role: &Role) -> Result<String> {
+    let mut sql = format!("CREATE ROLE {}", role.name);
+    
+    let mut options = Vec::new();
+    
+    if role.superuser { options.push("SUPERUSER".to_string()); }
+    if role.createdb { options.push("CREATEDB".to_string()); }
+    if role.createrole { options.push("CREATEROLE".to_string()); }
+    if role.inherit { options.push("INHERIT".to_string()); }
+    if role.login { options.push("LOGIN".to_string()); }
+    if role.replication { options.push("REPLICATION".to_string()); }
+    
+    if let Some(limit) = role.connection_limit {
+        options.push(format!("CONNECTION LIMIT {}", limit));
+    }
+    
+    if let Some(password) = &role.password {
+        options.push(format!("PASSWORD '{}'", password));
+    }
+    
+    if let Some(valid_until) = &role.valid_until {
+        options.push(format!("VALID UNTIL '{}'", valid_until));
+    }
+    
+    if !options.is_empty() {
+        sql.push_str(&format!(" WITH {}", options.join(" ")));
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_tablespace(tablespace: &Tablespace) -> Result<String> {
+    let mut sql = format!("CREATE TABLESPACE {}", tablespace.name);
+    
+    sql.push_str(&format!(" OWNER {}", tablespace.owner));
+    sql.push_str(&format!(" LOCATION '{}'", tablespace.location));
+    
+    if !tablespace.options.is_empty() {
+        let options: Vec<String> = tablespace.options
+            .iter()
+            .map(|(k, v)| format!("{} = {}", k, v))
+            .collect();
+        sql.push_str(&format!(" WITH ({})", options.join(", ")));
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_foreign_key_constraint(fk: &ForeignKeyConstraint) -> Result<String> {
+    let mut sql = format!("ALTER TABLE {}", fk.table);
+    
+    if let Some(schema) = &fk.schema {
+        sql = format!("ALTER TABLE {}.{}", schema, fk.table);
+    }
+    
+    sql.push_str(&format!(" ADD CONSTRAINT {} FOREIGN KEY ({})", 
+        fk.name, fk.columns.join(", ")));
+    
+    sql.push_str(&format!(" REFERENCES {}", fk.references_table));
+    if let Some(ref_schema) = &fk.references_schema {
+        sql = format!("{}.{}", ref_schema, fk.references_table);
+    }
+    sql.push_str(&format!(" ({})", fk.references_columns.join(", ")));
+    
+    if let Some(on_delete) = &fk.on_delete {
+        sql.push_str(&format!(" ON DELETE {}", referential_action_to_str(on_delete)));
+    }
+    
+    if let Some(on_update) = &fk.on_update {
+        sql.push_str(&format!(" ON UPDATE {}", referential_action_to_str(on_update)));
+    }
+    
+    if fk.deferrable {
+        sql.push_str(" DEFERRABLE");
+        if fk.initially_deferred {
+            sql.push_str(" INITIALLY DEFERRED");
+        } else {
+            sql.push_str(" INITIALLY IMMEDIATE");
+        }
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_base_type(base_type: &BaseType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", base_type.name);
+    
+    if let Some(schema) = &base_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, base_type.name);
+    }
+    
+    if let Some(length) = base_type.internal_length {
+        sql.push_str(&format!(" (INTERNALLENGTH = {})", length));
+    }
+    
+    if base_type.is_passed_by_value {
+        sql.push_str(" (PASSEDBYVALUE)");
+    }
+    
+    sql.push_str(&format!(" (ALIGNMENT = {})", base_type.alignment));
+    sql.push_str(&format!(" (STORAGE = {})", base_type.storage));
+    
+    if let Some(category) = &base_type.category {
+        sql.push_str(&format!(" (CATEGORY = '{}')", category));
+    }
+    
+    if base_type.preferred {
+        sql.push_str(" (PREFERRED = true)");
+    }
+    
+    if let Some(default) = &base_type.default {
+        sql.push_str(&format!(" (DEFAULT = '{}')", default));
+    }
+    
+    if let Some(element) = &base_type.element {
+        sql.push_str(&format!(" (ELEMENT = {})", element));
+    }
+    
+    if let Some(delimiter) = &base_type.delimiter {
+        sql.push_str(&format!(" (DELIMITER = '{}')", delimiter));
+    }
+    
+    if base_type.collatable {
+        sql.push_str(" (COLLATABLE = true)");
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_array_type(array_type: &ArrayType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", array_type.name);
+    
+    if let Some(schema) = &array_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, array_type.name);
+    }
+    
+    sql.push_str(&format!(" AS {}[]", array_type.element_type));
+    
+    if let Some(element_schema) = &array_type.element_schema {
+        sql = format!("CREATE TYPE {}.{} AS {}.{}[]", 
+            array_type.schema.as_deref().unwrap_or("public"), 
+            array_type.name, 
+            element_schema, 
+            array_type.element_type);
+    }
+    
+    Ok(sql)
+}
+
+fn generate_create_multirange_type(multirange_type: &MultirangeType) -> Result<String> {
+    let mut sql = format!("CREATE TYPE {}", multirange_type.name);
+    
+    if let Some(schema) = &multirange_type.schema {
+        sql = format!("CREATE TYPE {}.{}", schema, multirange_type.name);
+    }
+    
+    sql.push_str(&format!(" AS MULTIRANGE (SUBTYPE = {}", multirange_type.range_type));
+    
+    if let Some(range_schema) = &multirange_type.range_schema {
+        sql = format!("CREATE TYPE {}.{} AS MULTIRANGE (SUBTYPE = {}.{})", 
+            multirange_type.schema.as_deref().unwrap_or("public"), 
+            multirange_type.name, 
+            range_schema, 
+            multirange_type.range_type);
+    }
+    
+    sql.push_str(")");
+    
+    Ok(sql)
+}
+
+fn referential_action_to_str(action: &ReferentialAction) -> &'static str {
+    match action {
+        ReferentialAction::NoAction => "NO ACTION",
+        ReferentialAction::Restrict => "RESTRICT",
+        ReferentialAction::Cascade => "CASCADE",
+        ReferentialAction::SetNull => "SET NULL",
+        ReferentialAction::SetDefault => "SET DEFAULT",
+    }
 }
