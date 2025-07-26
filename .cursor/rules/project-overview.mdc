@@ -1,0 +1,29 @@
+# Shem CLI - Declarative PostgreSQL Schema Management
+
+## Project Overview
+Shem is a Rust-based CLI tool for declarative PostgreSQL schema management. Instead of writing imperative migration scripts, you declare your desired schema state in SQL files, and Shem generates versioned migrations automatically.
+
+## Architecture
+- **Main Entry Point**: [crates/cli/src/main.rs](mdc:crates/cli/src/main.rs) - CLI application with commands
+- **Core Logic**: [crates/core/src/lib.rs](mdc:crates/core/src/lib.rs) - Core schema and migration logic
+- **PostgreSQL Integration**: [crates/postgres/src/lib.rs](mdc:crates/postgres/src/lib.rs) - Database introspection and SQL generation
+- **SQL Parser**: [crates/parser/src/lib.rs](mdc:crates/parser/src/lib.rs) - SQL parsing and AST manipulation
+- **Shared Types**: [crates/shared-types/src/lib.rs](mdc:crates/shared-types/src/lib.rs) - Common data structures
+
+## Key Commands
+- `shem init` - Initialize new schema project
+- `shem diff` - Generate migrations from schema changes
+- `shem migrate` - Apply migrations to database
+- `shem introspect` - Generate schema from existing database
+- `shem validate` - Validate schema files
+- `shem inspect` - Show schema information
+
+## Development Workflow
+1. Use `cargo run --bin shem --` for development testing
+2. Run `cargo build --workspace --release` for production builds
+3. Use `cargo test` to run all tests across the workspace
+4. Check [Cargo.toml](mdc:Cargo.toml) for workspace dependencies and configuration
+description:
+globs:
+alwaysApply: false
+---

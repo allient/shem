@@ -1,0 +1,180 @@
+# Testing Guidelines for Shem
+
+## Test Structure
+- **Unit Tests**: In `mod tests` blocks within source files
+- **Integration Tests**: In [crates/*/tests/](mdc:crates/*/tests/) directories
+- **Fixtures**: Test data in [crates/cli/tests/fixtures/](mdc:crates/cli/tests/fixtures/)
+- **SQL Tests**: Sample schemas in [test/](mdc:test/) directory
+
+## PostgreSQL Testing
+- **Test Database**: Use temporary PostgreSQL instances
+- **Fixtures**: [test/all.sql](mdc:test/all.sql) contains comprehensive schema examples
+- **Introspection Tests**: [crates/postgres/tests/introspection/](mdc:crates/postgres/tests/introspection/)
+- **SQL Generation Tests**: [crates/postgres/tests/sql_generator/](mdc:crates/postgres/tests/sql_generator/)
+
+## Test Categories
+
+### Parser Tests
+- **Location**: [crates/parser/tests/](mdc:crates/parser/tests/)
+- **Files**: `parser_basic.rs`, `parser_comprehensive.rs`
+- **Purpose**: Test SQL parsing and AST generation
+- **Coverage**: All PostgreSQL object types
+
+### Introspection Tests
+- **Location**: [crates/postgres/tests/introspection/](mdc:crates/postgres/tests/introspection/)
+- **Structure**: One test file per PostgreSQL object type
+- **Examples**: `tables.rs`, `functions.rs`, `triggers.rs`, etc.
+- **Purpose**: Test database introspection accuracy
+
+### CLI Tests
+- **Location**: [crates/cli/tests/](mdc:crates/cli/tests/)
+- **Generator**: [crates/cli/tests/generator.rs](mdc:crates/cli/tests/generator.rs)
+- **Fixtures**: [crates/cli/tests/fixtures/](mdc:crates/cli/tests/fixtures/)
+- **Purpose**: Test CLI command behavior
+
+## Running Tests
+
+### Basic Cargo Testing
+```bash
+# Run all tests
+cargo test
+
+# Run specific crate tests
+cargo test -p postgres
+cargo test -p parser
+cargo test -p cli
+
+# Run specific test with output
+cargo test test_name -- --nocapture
+
+# Run tests with logging
+RUST_LOG=debug cargo test
+
+# Run integration tests only
+cargo test --test '*'
+```
+
+### Bacon Testing (Recommended)
+Bacon provides faster, incremental testing with better output formatting:
+
+```bash
+# Install bacon if not already installed
+cargo install bacon
+
+# Run all tests with bacon
+bacon test
+
+# Run specific crate tests
+bacon test -- -p postgres
+bacon test -- -p parser
+bacon test -- -p cli
+
+# Run specific test with verbose output
+bacon test -- -p postgres --test generator test_introspect_basic_extension -- --nocapture
+
+# Run with debug logging
+RUST_LOG=debug bacon test
+
+# Run specific test suite
+bacon test -- -p postgres --test introspection -- --nocapture
+
+# Run with specific test pattern
+bacon test -- -p postgres --test sql_generator test_create_table -- --nocapture
+```
+
+### Debug Testing Patterns
+Use debug flags for detailed troubleshooting:
+
+```bash
+# Debug with cargo
+RUST_LOG=debug cargo test -p postgres -- --nocapture
+
+# Debug with bacon (recommended)
+RUST_LOG=debug bacon test -- -p postgres --test introspection -- --nocapture
+
+# Debug specific test
+RUST_LOG=debug bacon test -- -p postgres --test generator test_introspect_basic_extension -- --nocapture
+
+# Debug with trace level
+RUST_LOG=trace bacon test -- -p postgres -- --nocapture
+
+# Debug with specific module
+RUST_LOG=shem_postgres::introspection=debug bacon test -- -p postgres -- --nocapture
+```
+
+### Test Output and Debugging
+```bash
+# Show test output even for passing tests
+cargo test -- --nocapture
+
+# Run single test with output
+cargo test test_extensions_serialized_content_standalone -- --nocapture
+
+# Run with bacon for better output
+bacon test -- -p postgres --test generator test_extensions_serialized_content_standalone -- --nocapture
+
+# Debug specific introspection test
+RUST_LOG=debug bacon test -- -p postgres --test introspection test_tables -- --nocapture
+
+# Debug SQL generation
+RUST_LOG=debug bacon test -- -p postgres --test sql_generator -- --nocapture
+```
+
+## Test Data
+- **Sample Schema**: [test/all.sql](mdc:test/all.sql) - Comprehensive PostgreSQL objects
+- **Seed Data**: [test/all_seed.sql](mdc:test/all_seed.sql) - Test data for tables
+- **Tables Only**: [test/tables.sql](mdc:test/tables.sql) - Basic table definitions
+
+## Testing Best Practices
+- Use `test-log` crate for logging in tests
+- Use `tempfile` for temporary database instances
+- Test both positive and negative cases
+- Verify SQL generation matches expected output
+- Test error conditions and edge cases
+- Use descriptive test names that explain the scenario
+- **Use bacon for faster, incremental testing**
+- **Use debug flags for troubleshooting complex issues**
+
+## Database Testing Setup
+- Use Docker for consistent PostgreSQL testing
+- [docker-compose.yml](mdc:docker-compose.yml) provides test database
+- Test against multiple PostgreSQL versions when possible
+- Use transaction rollback for test isolation
+
+## Debug and Troubleshooting
+
+### Common Debug Scenarios
+```bash
+# Debug introspection issues
+RUST_LOG=shem_postgres::introspection=debug bacon test -- -p postgres --test introspection -- --nocapture
+
+# Debug SQL generation issues
+RUST_LOG=shem_postgres::sql_generator=debug bacon test -- -p postgres --test sql_generator -- --nocapture
+
+# Debug parser issues
+RUST_LOG=shem_parser=debug bacon test -- -p parser -- --nocapture
+
+# Debug CLI command issues
+RUST_LOG=shem_cli=debug bacon test -- -p cli -- --nocapture
+```
+
+### Performance Testing
+```bash
+# Run tests with performance profiling
+RUST_LOG=debug bacon test --release -- -p postgres -- --nocapture
+
+# Test specific performance-critical functions
+RUST_LOG=debug bacon test -- -p postgres --test introspection test_large_schema -- --nocapture
+```
+
+### Continuous Testing
+```bash
+# Watch mode with bacon (automatically reruns on file changes)
+bacon test --watch
+
+# Watch specific crate
+bacon test --watch -- -p postgres
+
+# Watch with debug output
+RUST_LOG=debug bacon test --watch -- -p postgres -- --nocapture
+```

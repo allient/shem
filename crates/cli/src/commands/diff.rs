@@ -1,19 +1,15 @@
 use crate::config::Config;
 use anyhow::{Context, Result};
+use parser::{ast::Statement as ParserStatement, parse_file};
+use postgres::PostgresDriver;
+use shared_types::{
+    CheckOption, DataType, FunctionReturn, ParameterMode, PolicyCommand, TableConstraint,
+    TriggerWhen,
+};
 use shem_core::{
     DatabaseDriver, Schema,
     migration::{generate_migration, write_migration},
 };
-use parser::{
-    ast::{
-        Statement as ParserStatement,
-    },
-    parse_file,
-};
-use shared_types::{
-    CheckOption, DataType, FunctionReturn, ParameterMode, PolicyCommand, TableConstraint, TriggerWhen,
-};
-use postgres::PostgresDriver;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -254,10 +250,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         cache: None,
                         cycle: false,
                     }),
-                    generated: col.generated.as_ref().map(|g| shem_core::schema::GeneratedColumn {
-                        expression: format!("{:?}", g.expression),
-                        stored: g.stored,
-                    }),
+                    generated: col
+                        .generated
+                        .as_ref()
+                        .map(|g| shem_core::schema::GeneratedColumn {
+                            expression: format!("{:?}", g.expression),
+                            stored: g.stored,
+                        }),
                     comment: None,
                     collation: None,
                     storage: None,
@@ -479,10 +478,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateExtension(create) => {
             let extension = shem_core::Extension {
+                oid: 0,
+                owner: "".to_string(),
                 name: create.name.clone(),
-                schema: create.schema.clone(),
+                schema: create.schema.clone().unwrap_or_default(),
                 version: create.version.clone().unwrap_or_default(),
-                cascade: false,
+                relocatable: false,
+                is_user_defined: false,
                 comment: None,
             };
             schema.extensions.insert(extension.name.clone(), extension);

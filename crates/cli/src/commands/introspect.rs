@@ -94,7 +94,7 @@ impl<'a> SchemaObject<'a> {
 
     fn get_schema(&self) -> Option<String> {
         match self {
-            SchemaObject::Extension(ext) => ext.schema.clone(),
+            SchemaObject::Extension(ext) => Some(ext.schema.clone()),
             SchemaObject::Collation(coll) => coll.schema.clone(),
             SchemaObject::Enum(t) => t.schema.clone(),
             SchemaObject::CompositeType(t) => t.schema.clone(),
@@ -345,10 +345,13 @@ impl SchemaSerializer for SqlSerializer {
                 Statement::CreateExtension(create) => {
                     let ext = Extension {
                         name: create.name,
-                        schema: create.schema,
+                        oid: 0,
+                        owner: "".to_string(),
+                        relocatable: false,
                         version: create.version.unwrap_or_default(),
-                        cascade: false,
+                        schema: create.schema.unwrap_or_default(),
                         comment: None,
+                        is_user_defined: false,
                     };
                     schema.extensions.insert(ext.name.clone(), ext);
                 }
@@ -1494,15 +1497,15 @@ fn extract_view_dependencies(definition: &str, schema: &Schema) -> Vec<String> {
 fn generate_create_extension(ext: &Extension) -> Result<String> {
     let mut sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext.name);
 
-    if let Some(schema) = &ext.schema {
-        sql.push_str(&format!(" SCHEMA {}", schema));
+    if !ext.schema.is_empty() {
+        sql.push_str(&format!(" SCHEMA {}", ext.schema));
     }
 
     if !ext.version.trim().is_empty() {
         sql.push_str(&format!(" VERSION '{}'", ext.version));
     }
 
-    if ext.cascade {
+    if ext.relocatable {
         sql.push_str(" CASCADE");
     }
 
@@ -1512,8 +1515,8 @@ fn generate_create_extension(ext: &Extension) -> Result<String> {
 fn generate_create_schema(schema: &NamedSchema) -> Result<String> {
     let mut sql = format!("CREATE SCHEMA IF NOT EXISTS {}", schema.name);
 
-    if let Some(owner) = &schema.owner {
-        sql.push_str(&format!(" AUTHORIZATION {}", owner));
+    if !schema.owner.is_empty() {
+        sql.push_str(&format!(" AUTHORIZATION {}", schema.owner));
     }
 
     Ok(sql)
@@ -1541,7 +1544,7 @@ fn generate_create_enum(type_def: &EnumType) -> Result<String> {
     Ok(sql)
 }
 
-fn generate_create_type(type_def: &CompositeType) -> Result<String> {
+fn _generate_create_type(type_def: &CompositeType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", type_def.name);
 
     if let Some(schema) = &type_def.schema {
@@ -2321,8 +2324,8 @@ fn generate_create_role(role: &Role) -> Result<String> {
     if role.login { options.push("LOGIN".to_string()); }
     if role.replication { options.push("REPLICATION".to_string()); }
     
-    if let Some(limit) = role.connection_limit {
-        options.push(format!("CONNECTION LIMIT {}", limit));
+    if role.connection_limit != -1 {
+        options.push(format!("CONNECTION LIMIT {}", role.connection_limit));
     }
     
     if let Some(password) = &role.password {

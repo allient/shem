@@ -102,107 +102,169 @@ pub mod sql {
 
     /// Extension with schema
     pub const EXTENSION_WITH_SCHEMA: &str = r#"
-        CREATE SCHEMA IF NOT EXISTS extensions;
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA crypto;
     "#;
 
     /// Extension with all options
     pub const EXTENSION_WITH_ALL_OPTIONS: &str = r#"
-        CREATE SCHEMA IF NOT EXISTS extensions;
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" VERSION '1.1' SCHEMA extensions CASCADE;
-        COMMENT ON EXTENSION "uuid-ossp" IS 'UUID generation extension with all options';
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" 
+        SCHEMA extensions 
+        VERSION '1.1' 
+        CASCADE;
     "#;
 
-    /// Extension with objects using it
+    /// Extension with objects
     pub const EXTENSION_WITH_OBJECTS: &str = r#"
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        CREATE TABLE test_table (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT
+        );
+    "#;
+
+    // Schema-related fixtures
+
+    /// Simple schema
+    pub const SIMPLE_SCHEMA: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS test_schema;
+    "#;
+
+    /// Schema with owner
+    pub const SCHEMA_WITH_OWNER: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS app_schema AUTHORIZATION postgres;
+    "#;
+
+    /// Multiple schemas
+    pub const MULTIPLE_SCHEMAS: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS app;
+        CREATE SCHEMA IF NOT EXISTS audit;
+        CREATE SCHEMA IF NOT EXISTS reporting;
+    "#;
+
+    /// Schema with various objects
+    pub const SCHEMA_WITH_OBJECTS: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS app;
         
-        CREATE TABLE documents (
-            id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-            title TEXT NOT NULL,
+        CREATE TYPE app.user_status AS ENUM ('active', 'inactive', 'suspended');
+        
+        CREATE TABLE app.users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            status app.user_status DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
-        CREATE FUNCTION generate_document_id() RETURNS UUID AS $$
-        BEGIN
-            RETURN gen_random_uuid();
-        END;
-        $$ LANGUAGE plpgsql;
-    "#;
-
-    /// Complete schema with multiple objects
-    pub const COMPLETE_SCHEMA: &str = r#"
-        -- Extensions
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-        
-        -- Enums
-        CREATE TYPE user_status AS ENUM ('active', 'inactive', 'suspended');
-        CREATE TYPE post_status AS ENUM ('draft', 'published', 'archived');
-        
-        -- Domains
-        CREATE DOMAIN email_address AS VARCHAR(255)
-        CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$');
-        
-        -- Sequences
-        CREATE SEQUENCE custom_id_seq START 1000;
-        
-        -- Tables
-        CREATE TABLE users (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            email email_address UNIQUE NOT NULL,
-            status user_status DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE posts (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            title VARCHAR(255) NOT NULL,
-            content TEXT,
-            status post_status DEFAULT 'draft',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- Views
-        CREATE VIEW active_users AS
-        SELECT id, name, email, created_at
-        FROM users
-        WHERE status = 'active';
-        
-        CREATE VIEW published_posts AS
-        SELECT p.id, p.title, p.content, u.name as author_name, p.created_at
-        FROM posts p
-        JOIN users u ON p.user_id = u.id
-        WHERE p.status = 'published';
-        
-        -- Functions
-        CREATE OR REPLACE FUNCTION get_user_count()
+        CREATE OR REPLACE FUNCTION app.get_user_count()
         RETURNS INTEGER AS $$
         BEGIN
-            RETURN (SELECT COUNT(*) FROM users);
+            RETURN (SELECT COUNT(*) FROM app.users);
         END;
         $$ LANGUAGE plpgsql;
         
-        CREATE OR REPLACE FUNCTION get_posts_by_user(user_id INTEGER)
-        RETURNS TABLE (
-            id INTEGER,
-            title VARCHAR(255),
-            status post_status,
-            created_at TIMESTAMP
-        ) AS $$
+        CREATE VIEW app.active_users AS
+        SELECT id, name, email
+        FROM app.users
+        WHERE status = 'active';
+    "#;
+
+    /// Schema with comment
+    pub const SCHEMA_WITH_COMMENT: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS documented_schema;
+        COMMENT ON SCHEMA documented_schema IS 'Application schema for user management';
+    "#;
+
+    /// Schemas with dependencies
+    pub const SCHEMA_DEPENDENCIES: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS base;
+        CREATE SCHEMA IF NOT EXISTS dependent;
+        
+        CREATE TABLE base.core_table (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL
+        );
+        
+        CREATE TABLE dependent.dependent_table (
+            id SERIAL PRIMARY KEY,
+            core_id INTEGER REFERENCES base.core_table(id),
+            description TEXT
+        );
+    "#;
+
+    /// Schema with extension
+    pub const SCHEMA_WITH_EXTENSION: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS crypto_schema;
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA crypto_schema;
+    "#;
+
+    /// Schema with role
+    pub const SCHEMA_WITH_ROLE: &str = r#"
+        CREATE ROLE app_user WITH LOGIN PASSWORD 'password';
+        CREATE SCHEMA IF NOT EXISTS app_schema AUTHORIZATION app_user;
+    "#;
+
+    /// Schema with invalid objects (for testing error handling)
+    pub const SCHEMA_WITH_INVALID_OBJECTS: &str = r#"
+        CREATE SCHEMA IF NOT EXISTS test_schema;
+        
+        -- This will fail but shouldn't break schema introspection
+        CREATE TABLE test_schema.invalid_table (
+            id INTEGER REFERENCES nonexistent_table(id)
+        );
+    "#;
+
+    /// Complete schema with all object types
+    pub const COMPLETE_SCHEMA: &str = r#"
+        -- Create schemas
+        CREATE SCHEMA IF NOT EXISTS app;
+        CREATE SCHEMA IF NOT EXISTS audit;
+        CREATE SCHEMA IF NOT EXISTS reporting;
+        
+        -- Create extensions
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA app;
+        
+        -- Create types
+        CREATE TYPE app.user_status AS ENUM ('active', 'inactive', 'suspended');
+        CREATE DOMAIN app.email_address AS VARCHAR(255)
+            CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$');
+        
+        -- Create sequences
+        CREATE SEQUENCE app.user_id_seq START 1000;
+        
+        -- Create tables
+        CREATE TABLE app.users (
+            id INTEGER PRIMARY KEY DEFAULT nextval('app.user_id_seq'),
+            name VARCHAR(255) NOT NULL,
+            email app.email_address UNIQUE NOT NULL,
+            status app.user_status DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE app.posts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES app.users(id),
+            title VARCHAR(255) NOT NULL,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        -- Create views
+        CREATE VIEW app.active_users AS
+        SELECT id, name, email
+        FROM app.users
+        WHERE status = 'active';
+        
+        -- Create functions
+        CREATE OR REPLACE FUNCTION app.get_user_count()
+        RETURNS INTEGER AS $$
         BEGIN
-            RETURN QUERY
-            SELECT p.id, p.title, p.status, p.created_at
-            FROM posts p
-            WHERE p.user_id = get_posts_by_user.user_id;
+            RETURN (SELECT COUNT(*) FROM app.users);
         END;
         $$ LANGUAGE plpgsql;
         
-        -- Triggers
-        CREATE OR REPLACE FUNCTION update_updated_at()
+        -- Create triggers
+        CREATE OR REPLACE FUNCTION app.update_updated_at()
         RETURNS TRIGGER AS $$
         BEGIN
             NEW.updated_at = CURRENT_TIMESTAMP;
@@ -211,22 +273,24 @@ pub mod sql {
         $$ LANGUAGE plpgsql;
         
         CREATE TRIGGER update_users_updated_at
-            BEFORE UPDATE ON users
+            BEFORE UPDATE ON app.users
             FOR EACH ROW
-            EXECUTE FUNCTION update_updated_at();
-            
-        CREATE TRIGGER update_posts_updated_at
-            BEFORE UPDATE ON posts
-            FOR EACH ROW
-            EXECUTE FUNCTION update_updated_at();
+            EXECUTE FUNCTION app.update_updated_at();
+        
+        -- Create policies
+        ALTER TABLE app.users ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY users_select_policy ON app.users
+            FOR SELECT USING (status = 'active');
+        
+        -- Create comments
+        COMMENT ON SCHEMA app IS 'Application schema for user management';
+        COMMENT ON TABLE app.users IS 'User accounts table';
+        COMMENT ON COLUMN app.users.email IS 'User email address';
     "#;
 }
 
-/// Expected schema output fixtures
 pub mod expected {
-    use super::*;
-
-    /// Expected output for simple table introspection
+    /// Expected schema output for simple table
     pub const SIMPLE_TABLE_SCHEMA: &str = r#"
         CREATE TABLE users (
             id SERIAL PRIMARY KEY,
@@ -236,12 +300,12 @@ pub mod expected {
         );
     "#;
 
-    /// Expected output for enum type introspection
+    /// Expected schema output for enum type
     pub const ENUM_TYPE_SCHEMA: &str = r#"
         CREATE TYPE user_status AS ENUM ('active', 'inactive', 'suspended');
     "#;
 
-    /// Expected output for view introspection
+    /// Expected schema output for view
     pub const VIEW_SCHEMA: &str = r#"
         CREATE VIEW active_users AS
         SELECT id, name, email
@@ -249,46 +313,42 @@ pub mod expected {
         WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days';
     "#;
 
-    /// Expected output for extension introspection
+    /// Expected schema output for extension
     pub const EXTENSION_SCHEMA: &str = r#"
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
     "#;
 
-    /// Expected output for extension with version
+    /// Expected schema output for extension with version
     pub const EXTENSION_WITH_VERSION_SCHEMA: &str = r#"
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp" VERSION '1.1';
     "#;
 
-    /// Expected output for extension with schema
+    /// Expected schema output for extension with schema
     pub const EXTENSION_WITH_SCHEMA_SCHEMA: &str = r#"
-        CREATE SCHEMA IF NOT EXISTS extensions;
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
+        CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA crypto;
     "#;
 }
 
-/// Test configuration fixtures
 pub mod config {
-    /// Default test configuration
+    /// Default configuration
     pub const DEFAULT_CONFIG: &str = r#"
-        [database]
-        url = "postgresql://postgres:postgres@localhost:5432/shem_test"
-        
-        [output]
-        format = "sql"
-        directory = "schema"
+[database]
+url = "postgresql://postgres:postgres@localhost:5432/test_db"
+
+[declarative]
+enabled = true
+schema_paths = ["./schema/*.sql"]
+shadow_port = 5432
     "#;
 
-    /// Configuration with custom settings
+    /// Custom configuration
     pub const CUSTOM_CONFIG: &str = r#"
-        [database]
-        url = "postgresql://test:test@localhost:5432/test_db"
-        
-        [output]
-        format = "sql"
-        directory = "custom_schema"
-        
-        [introspect]
-        include_system_objects = false
-        exclude_schemas = ["information_schema", "pg_catalog"]
+[database]
+url = "postgresql://user:pass@localhost:5432/custom_db"
+
+[declarative]
+enabled = true
+schema_paths = ["./schemas/**/*.sql", "./types/*.sql"]
+shadow_port = 5433
     "#;
 } 

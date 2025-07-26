@@ -8,6 +8,8 @@ Declarative Database Schema Management for PostgreSQL
 
 **Shem** is a CLI tool for managing your PostgreSQL database schema declaratively. Instead of writing imperative migration scripts, you declare your desired schema state in SQL files, and Shem generates versioned migrations for you. This approach is inspired by modern tools like Supabase CLI and aims to make schema management safer, more reproducible, and developer-friendly.
 
+Shem provides comprehensive support for PostgreSQL database objects, including tables, views, functions, triggers, policies, and more. It uses PostgreSQL's official parser for accurate SQL parsing and supports all major PostgreSQL features.
+
 ---
 
 ## Features
@@ -15,9 +17,51 @@ Declarative Database Schema Management for PostgreSQL
 - **Declarative schema files**: Describe your database in SQL, not migration scripts
 - **Automatic migration generation**: Generate migrations by diffing your schema files against the current database
 - **Shadow database diffing**: Safe, isolated schema comparison using a temporary database
+- **Comprehensive PostgreSQL support**: Full support for 25+ PostgreSQL object types
+- **Accurate SQL parsing**: Uses PostgreSQL's official parser for precise syntax handling
 - **Glob pattern support**: Organize your schema files flexibly
 - **Safety checks**: Warnings for destructive operations (e.g., DROP statements)
 - **Migration history tracking**: Reliable, versioned migrations
+
+---
+
+## PostgreSQL Object Support
+
+Shem provides comprehensive support for PostgreSQL database objects:
+
+### ✅ Fully Supported Objects (25+ types)
+
+| Category | Objects | Description |
+|----------|---------|-------------|
+| **Data Structures** | Tables, Views, Materialized Views | Complete support with constraints, indexes, partitioning |
+| **Data Types** | Enums, Composite Types, Domains, Range Types | Custom types with constraints and validation |
+| **Logic & Functions** | Functions, Procedures, Triggers, Event Triggers | Complete procedural logic support |
+| **Security** | Policies, Roles | Row-level security and access control |
+| **Storage** | Sequences, Indexes, Tablespaces | Performance and storage optimization |
+| **Extensions** | Extensions, Publications, Subscriptions | PostgreSQL extensions and replication |
+| **Constraints** | Primary Keys, Foreign Keys, Unique, Check, Exclusion | All constraint types with referential actions |
+
+### 🔶 Partially Supported Objects
+
+| Object | Status | Missing Features |
+|--------|--------|------------------|
+| **Comments** | Basic | Limited to basic COMMENT ON statements |
+| **Grants/Privileges** | Basic | No introspection of existing grants |
+| **Servers** | Structure | Foreign data wrapper connections |
+| **Foreign Tables** | Structure | External data source tables |
+
+### Advanced PostgreSQL Features
+
+- **Partitioning**: Range, list, and hash partitioning
+- **Inheritance**: Table inheritance hierarchies  
+- **Row-Level Security**: Fine-grained access control policies
+- **Generated Columns**: Computed column values
+- **Identity Columns**: Auto-incrementing columns
+- **Complex Constraints**: Exclusion constraints, deferrable constraints
+- **Advanced Indexes**: B-tree, Hash, GiST, GIN, BRIN with custom options
+- **Materialized Views**: Cached query results with refresh options
+- **Event Triggers**: Database-level event handling
+- **Logical Replication**: Publications and subscriptions
 
 ---
 
@@ -54,10 +98,57 @@ This creates:
 Create a file `schema/01_employees.sql`:
 
 ```sql
-CREATE TABLE employees (
-  id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL
+-- Create custom types
+CREATE TYPE user_role AS ENUM ('admin', 'user', 'guest');
+CREATE DOMAIN email AS TEXT CHECK (VALUE ~* '^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$');
+
+-- Create tables with advanced features
+CREATE TABLE departments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT UNIQUE NOT NULL,
+    budget NUMERIC CHECK (budget > 0)
 );
+
+CREATE TABLE employees (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email email NOT NULL UNIQUE,
+    role user_role NOT NULL DEFAULT 'user',
+    salary NUMERIC CHECK (salary >= 0),
+    department_id UUID REFERENCES departments(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT salary_nonzero CHECK (salary <> 0)
+);
+
+-- Create indexes for performance
+CREATE INDEX idx_employees_salary ON employees(salary);
+CREATE INDEX idx_employees_department ON employees(department_id);
+
+-- Enable row-level security
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY only_admins ON employees
+    FOR SELECT USING (role = 'admin');
+
+-- Create functions
+CREATE FUNCTION get_department_budget(dept_id UUID) 
+RETURNS NUMERIC AS $$
+    SELECT COALESCE(SUM(salary), 0)
+    FROM employees
+    WHERE department_id = dept_id;
+$$ LANGUAGE SQL STABLE;
+
+-- Create triggers
+CREATE FUNCTION log_employee_changes() RETURNS trigger AS $$
+BEGIN
+    RAISE NOTICE 'Employee %: %', TG_OP, NEW.id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_log_employee_changes
+    AFTER INSERT OR UPDATE ON employees
+    FOR EACH ROW
+    EXECUTE FUNCTION log_employee_changes();
 ```
 
 You can split your schema into multiple files. Files are processed in lexicographic order.
@@ -143,9 +234,14 @@ Edit `schema/01_employees.sql` to add a new column:
 
 ```sql
 CREATE TABLE employees (
-  id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL,
-  age SMALLINT NOT NULL
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email email NOT NULL UNIQUE,
+    role user_role NOT NULL DEFAULT 'user',
+    salary NUMERIC CHECK (salary >= 0),
+    department_id UUID REFERENCES departments(id) ON DELETE CASCADE,
+    age SMALLINT CHECK (age >= 18),  -- New column
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT salary_nonzero CHECK (salary <> 0)
 );
 ```
 
@@ -156,13 +252,58 @@ $ shem diff -m "add_age_column"
 $ shem migrate
 ```
 
-### 7. Rollback (Optional)
+### 7. Introspect Existing Database
 
-To rollback to a previous migration version:
+To generate schema files from an existing database:
 
 ```sh
-$ shem reset --version 20241004112233
+$ shem introspect --database-url "postgresql://user:pass@localhost:5432/existing_db" --output schema/
 ```
+
+This will create SQL files representing the current database state.
+
+### 8. Validate Schema Files
+
+Check your schema files for syntax and structural issues:
+
+```sh
+$ shem validate schema/
+```
+
+### 9. Inspect Schema Information
+
+Get a summary of your schema objects:
+
+```sh
+$ shem inspect schema/
+```
+
+---
+
+## Architecture
+
+Shem is built as a modular Rust workspace with specialized crates:
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Shem CLI      │───▶│  shem-postgres   │───▶│  PostgreSQL     │
+│   (Commands)    │    │  (Database)      │    │   Database      │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │
+         ▼                       ▼
+┌─────────────────┐    ┌──────────────────┐
+│  shem-parser    │    │   shem-core      │
+│  (SQL Parsing)  │    │  (Schema Types)  │
+└─────────────────┘    └──────────────────┘
+```
+
+### Core Components
+
+- **`shem-cli`**: Command-line interface and user commands
+- **`shem-postgres`**: PostgreSQL database introspection and SQL generation
+- **`shem-parser`**: SQL parsing using PostgreSQL's official parser
+- **`shem-core`**: Core schema types and database driver traits
+- **`shem-shared-types`**: Shared type definitions across crates
 
 ---
 
@@ -171,14 +312,100 @@ $ shem reset --version 20241004112233
 - **DROP statement detection**: Shem warns you if a migration contains potentially destructive operations.
 - **Shadow database**: All diffs are performed in an isolated environment, never against production data.
 - **Migration history**: All applied migrations are tracked in a dedicated table.
+- **Comprehensive validation**: Schema files are validated for syntax and structural integrity.
+- **Dry-run mode**: Preview changes without applying them to the database.
 
 ---
 
 ## Advanced Usage
 
-- **Custom schema file order**: Use numeric prefixes or configure `schema_paths` in your config file for precise control.
-- **Multiple environments**: Use different config files for dev, staging, and production.
-- **Glob patterns**: Organize your schema files by feature or domain.
+### Complex Schema Examples
+
+#### Materialized Views with Refresh
+```sql
+CREATE MATERIALIZED VIEW department_stats AS
+SELECT 
+    d.name,
+    COUNT(e.id) as employee_count,
+    AVG(e.salary) as avg_salary
+FROM departments d
+LEFT JOIN employees e ON d.id = e.department_id
+GROUP BY d.id, d.name
+WITH DATA;
+
+CREATE UNIQUE INDEX idx_department_stats_name ON department_stats(name);
+```
+
+#### Partitioned Tables
+```sql
+CREATE TABLE events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    event_type TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    data JSONB
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE events_2024_01 PARTITION OF events
+    FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+```
+
+#### Complex Constraints and Triggers
+```sql
+-- Exclusion constraint for meeting rooms
+CREATE TABLE meeting_rooms (
+    id SERIAL PRIMARY KEY,
+    room_name TEXT,
+    during TSRANGE,
+    EXCLUDE USING gist (room_name WITH =, during WITH &&)
+);
+
+-- Constraint trigger for budget validation
+CREATE FUNCTION validate_department_budget() RETURNS trigger AS $$
+BEGIN
+    IF (SELECT SUM(salary) FROM employees WHERE department_id = NEW.department_id) > 100000 THEN
+        RAISE EXCEPTION 'Department budget exceeded';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_budget_check
+    AFTER INSERT OR UPDATE ON employees
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_department_budget();
+```
+
+### Custom Schema File Organization
+
+Organize your schema files by feature or domain:
+
+```
+schema/
+├── 01_extensions.sql      # PostgreSQL extensions
+├── 02_types.sql          # Custom types and domains
+├── 03_tables.sql         # Base tables
+├── 04_functions.sql      # Functions and procedures
+├── 05_triggers.sql       # Triggers and event triggers
+├── 06_policies.sql       # Row-level security policies
+├── 07_views.sql          # Views and materialized views
+└── 08_indexes.sql        # Performance indexes
+```
+
+### Multiple Environments
+
+Use different config files for different environments:
+
+```sh
+# Development
+shem diff --config shem.dev.toml
+
+# Staging  
+shem diff --config shem.staging.toml
+
+# Production
+shem diff --config shem.prod.toml
+```
 
 ---
 
@@ -204,6 +431,40 @@ $ cargo test
 ```
 
 **Note**: The `--` after `cargo run --bin shem` is important—it tells Cargo to pass the following arguments to your CLI, not to Cargo itself.
+
+### Development Commands
+
+```bash
+# Build all crates
+cargo build --workspace
+
+# Run tests for specific crate
+cargo test -p postgres
+cargo test -p parser
+
+# Run with verbose output
+cargo test -- --nocapture
+
+# Check code quality
+cargo fmt
+cargo clippy
+
+# Update dependencies
+cargo upgrade
+```
+
+---
+
+## PostgreSQL Version Compatibility
+
+Shem is designed to work with PostgreSQL 10.0 and later, with full support for:
+
+- **PostgreSQL 10+**: Basic functionality
+- **PostgreSQL 11+**: Procedures, generated columns
+- **PostgreSQL 12+**: Generated columns improvements
+- **PostgreSQL 13+**: Logical replication improvements
+- **PostgreSQL 14+**: Range type improvements, multirange types
+- **PostgreSQL 15+**: Latest features and optimizations
 
 ---
 
@@ -243,6 +504,11 @@ $ cargo test
 - Check that `migrations/` directory contains `.sql` files
 - Verify migration files have the correct timestamp format
 
+**"Unsupported PostgreSQL feature"**
+- Check the PostgreSQL object support table above
+- Some advanced features may be partially implemented
+- Consider using a different approach for unsupported features
+
 ### Verbose Output
 
 For detailed debugging information, use the `--verbose` flag:
@@ -257,6 +523,13 @@ cargo run --bin shem -- --verbose migrate
 ## Contributing
 
 Contributions are welcome! Please open issues or pull requests for bug fixes, features, or documentation improvements.
+
+### Development Guidelines
+
+- Follow Rust coding standards and use `cargo fmt` and `cargo clippy`
+- Add comprehensive tests for new features
+- Update documentation for new PostgreSQL object support
+- Test against multiple PostgreSQL versions when possible
 
 ---
 

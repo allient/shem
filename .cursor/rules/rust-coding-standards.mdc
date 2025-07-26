@@ -1,0 +1,43 @@
+# Rust Coding Standards for Shem
+
+## Code Style
+- Follow Rust standard formatting with `cargo fmt`
+- Use `cargo clippy` for linting and best practices
+- Prefer `anyhow::Result` for error handling in CLI code
+- Use `thiserror` for custom error types in library crates
+- Follow async/await patterns consistently
+
+## Error Handling
+- Use `anyhow::Result<T>` for CLI commands in [crates/cli/src/](mdc:crates/cli/src/)
+- Use `thiserror` for structured errors in library crates
+- Always provide meaningful error messages
+- Use `?` operator for error propagation
+
+## Testing
+- Write unit tests in `mod tests` blocks within source files
+- Use `#[cfg(test)]` for test-only modules
+- Integration tests go in [crates/*/tests/](mdc:crates/*/tests/) directories
+- Use `test-log` crate for logging in tests
+- Use `tempfile` for temporary database testing
+
+## Dependencies
+- Check [Cargo.toml](mdc:Cargo.toml) for workspace dependencies
+- Use workspace dependencies when possible
+- Keep dependencies minimal and up-to-date
+- Use `cargo upgrade` to update dependencies
+
+## Async Patterns
+- Use `tokio` runtime for async operations
+- Prefer `async fn` for database operations
+- Use `async-trait` for trait methods that need to be async
+- Handle async operations properly in CLI commands
+
+## Documentation
+- Use `///` for public API documentation
+- Include examples in doc comments
+- Document error conditions and edge cases
+- Keep README files updated with usage examples
+description:
+globs:
+alwaysApply: false
+---

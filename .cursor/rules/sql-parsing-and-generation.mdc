@@ -1,0 +1,142 @@
+# SQL Parsing and Generation in Shem
+
+## Parser Architecture
+- **Main Parser**: [crates/parser/src/lib.rs](mdc:crates/parser/src/lib.rs) - SQL parsing entry point
+- **AST Definition**: [crates/parser/src/ast.rs](mdc:crates/parser/src/ast.rs) - Abstract Syntax Tree structures
+- **Visitor Pattern**: [crates/parser/src/visitor.rs](mdc:crates/parser/src/visitor.rs) - AST traversal utilities
+
+## SQL Generation
+- **Generator**: [crates/postgres/src/sql_generator.rs](mdc:crates/postgres/src/sql_generator.rs) - SQL output generation
+- **Object-Specific**: [crates/postgres/tests/sql_generator/](mdc:crates/postgres/tests/sql_generator/) - Tests for each object type
+- **Pattern**: Each PostgreSQL object type has dedicated generation logic
+
+## ✅ Fully Implemented Parsing
+
+| Statement Type | Parser Function | AST Structure | Test Coverage | Description |
+|----------------|-----------------|---------------|---------------|-------------|
+| **CREATE TABLE** | `parse_create_table` | `CreateTable` | ✅ Complete | Tables with columns, constraints, inheritance, partitioning |
+| **CREATE VIEW** | `parse_create_view` | `CreateView` | ✅ Complete | Views with query definitions and check options |
+| **CREATE FUNCTION** | `parse_create_function` | `CreateFunction` | ✅ Complete | Functions with parameters, return types, language |
+| **CREATE ENUM** | `parse_create_enum` | `CreateEnum` | ✅ Complete | Enum types with values |
+| **CREATE TYPE** | `parse_create_type` | `CreateType` | ✅ Complete | Composite types with attributes |
+| **CREATE DOMAIN** | `parse_create_domain` | `CreateDomain` | ✅ Complete | Domain types with constraints |
+| **CREATE SEQUENCE** | `parse_create_sequence` | `CreateSequence` | ✅ Complete | Sequences with options |
+| **CREATE EXTENSION** | `parse_create_extension` | `CreateExtension` | ✅ Complete | Extensions with version and schema |
+| **CREATE TRIGGER** | `parse_create_trigger` | `CreateTrigger` | ✅ Complete | Triggers with timing and events |
+| **CREATE POLICY** | `parse_create_policy` | `CreatePolicy` | ✅ Complete | Row-level security policies |
+| **CREATE SERVER** | `parse_create_server` | `CreateServer` | ✅ Complete | Foreign data wrapper servers |
+| **CREATE SCHEMA** | `parse_create_schema` | `CreateSchema` | ✅ Complete | Schema namespaces |
+| **CREATE PUBLICATION** | `parse_create_publication` | `CreatePublication` | ✅ Complete | Logical replication publications |
+| **CREATE RANGE TYPE** | `parse_create_range_type` | `CreateRangeType` | ✅ Complete | Custom range types |
+| **CREATE ROLE** | `parse_create_role` | `CreateRole` | ✅ Complete | Database roles and users |
+| **CREATE RULE** | `parse_create_rule` | `CreateRule` | ✅ Complete | Query rewrite rules |
+| **CREATE FOREIGN TABLE** | `parse_create_foreign_table` | `CreateForeignTable` | ✅ Complete | Foreign tables |
+| **CREATE FOREIGN DATA WRAPPER** | `parse_create_foreign_data_wrapper` | `CreateForeignDataWrapper` | ✅ Complete | FDW definitions |
+| **CREATE SUBSCRIPTION** | `parse_create_subscription` | `CreateSubscription` | ✅ Complete | Logical replication subscriptions |
+| **CREATE TABLESPACE** | `parse_create_tablespace` | `CreateTablespace` | ✅ Complete | Physical storage locations |
+| **ALTER TABLE** | `parse_alter_table` | `AlterTable` | ✅ Complete | Table modifications |
+| **DROP OBJECT** | `parse_drop_object` | `DropObject` | ✅ Complete | Object deletion |
+
+## 🔶 Partially Implemented Parsing
+
+| Statement Type | Parser Function | AST Structure | Missing Features | Description |
+|----------------|-----------------|---------------|------------------|-------------|
+| **Column Definitions** | `parse_column_def` | `ColumnDefinition` | Generated columns, identity columns, collations | Basic column parsing works |
+| **Table Constraints** | `parse_table_constraint` | `TableConstraint` | Foreign keys, check constraints, exclusion constraints | Primary key and unique constraints work |
+| **Function Parameters** | `parse_function_parameter` | `FunctionParameter` | Parameter modes, default values | Basic parameter parsing works |
+| **Expressions** | `parse_expression` | `Expression` | Complex expressions, operators, functions | Placeholder implementation |
+| **Partitioning** | `parse_partition_definition` | `PartitionDefinition` | Partition bounds, strategies | Basic structure only |
+
+## ❌ Not Yet Implemented Parsing
+
+| Statement Type | Priority | Description | Use Cases |
+|----------------|----------|-------------|-----------|
+| **CREATE MATERIALIZED VIEW** | High | Materialized view creation | Cached query results |
+| **CREATE PROCEDURE** | High | Stored procedure creation | Procedural logic (PostgreSQL 11+) |
+| **CREATE COLLATION** | Medium | Collation creation | Text sorting rules |
+| **CREATE INDEX** | Medium | Index creation | Performance optimization |
+| **CREATE CONSTRAINT TRIGGER** | Medium | Constraint trigger creation | Constraint enforcement |
+| **CREATE EVENT TRIGGER** | Medium | Event trigger creation | Database-level events |
+| **CREATE FOREIGN KEY CONSTRAINT** | Medium | Foreign key constraint creation | Referential integrity |
+| **COMMENT ON** | Low | Object comments | Documentation |
+| **GRANT/REVOKE** | Low | Privilege management | Access control |
+| **CREATE CAST** | Low | Type conversion rules | Custom type conversions |
+| **CREATE OPERATOR** | Low | Custom operators | Custom data type operations |
+| **CREATE OPERATOR CLASS** | Low | Index behavior definitions | Custom index types |
+| **CREATE AGGREGATE** | Low | Custom aggregation functions | Statistical functions |
+| **CREATE LANGUAGE** | Low | Procedural languages | PL/pgSQL, PL/Python, etc. |
+
+## PostgreSQL Features Supported in Parsing
+
+### Data Types
+- **Numeric**: `INTEGER`, `BIGINT`, `DECIMAL`, `NUMERIC`, `REAL`, `DOUBLE PRECISION`, `SERIAL`, `BIGSERIAL`, `SMALLSERIAL`
+- **Character**: `CHAR`, `VARCHAR`, `TEXT`
+- **Date/Time**: `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMPTZ`, `INTERVAL`
+- **Boolean**: `BOOLEAN`
+- **Binary**: `BYTEA`
+- **JSON**: `JSON`, `JSONB`
+- **Special**: `UUID`, `XML`, `BIT`, `BIT VARYING`
+- **Arrays**: All types with array notation
+- **Custom**: User-defined types, enums, composite types, domains, range types
+
+### Constraints
+- **Primary Keys**: Single and composite primary keys
+- **Unique**: Single and composite unique constraints
+- **Foreign Keys**: Basic foreign key parsing (limited)
+- **Check**: Basic check constraint parsing (limited)
+- **Exclusion**: Not yet implemented
+
+### Advanced Features
+- **Partitioning**: Basic partition definition parsing
+- **Inheritance**: Table inheritance parsing
+- **Generated Columns**: Structure defined (parsing limited)
+- **Identity Columns**: Structure defined (parsing limited)
+- **Row-Level Security**: Policy parsing with commands and expressions
+- **Triggers**: Basic trigger parsing with timing and events
+- **Functions**: Parameter parsing, return types, language, behavior settings
+
+## Parsing Process
+1. **SQL Input**: Raw SQL string from schema files
+2. **PostgreSQL Parser**: Uses `pg_query` (PostgreSQL's official parser)
+3. **AST Conversion**: Convert PostgreSQL AST to Shem's structured format
+4. **Validation**: Check syntax and object dependencies
+5. **Normalization**: Standardize object representations
+
+## Generation Process
+1. **Object Analysis**: Analyze PostgreSQL objects from database
+2. **AST Creation**: Build AST from database metadata
+3. **SQL Output**: Generate CREATE/DROP/ALTER statements
+4. **Formatting**: Ensure consistent SQL formatting
+
+## Testing Strategy
+- **Parser Tests**: [crates/parser/tests/](mdc:crates/parser/tests/) - SQL parsing accuracy
+- **Generator Tests**: [crates/postgres/tests/sql_generator/](mdc:crates/postgres/tests/sql_generator/) - SQL output validation
+- **Round-trip Tests**: Parse → Generate → Parse should be equivalent
+- **Sample Data**: [test/all.sql](mdc:test/all.sql) - Comprehensive test cases
+
+## Common Patterns
+- Use `pg_query` crate for PostgreSQL-compatible parsing
+- Implement visitor pattern for AST traversal
+- Generate SQL that matches PostgreSQL's exact syntax
+- Handle complex object dependencies correctly
+- Support all PostgreSQL object attributes and options
+
+## Error Handling
+- Provide meaningful error messages for parsing failures
+- Handle unsupported PostgreSQL features gracefully
+- Validate object dependencies before generation
+- Report specific line numbers for syntax errors
+
+## Why PostgreSQL's Parser?
+Using PostgreSQL's official parser (`pg_query`) provides:
+- **Accuracy**: Matches PostgreSQL's exact parsing behavior
+- **Completeness**: Supports all PostgreSQL features and syntax
+- **Maintenance**: Automatically stays up-to-date with PostgreSQL versions
+- **Reliability**: Battle-tested in production PostgreSQL installations
+
+## Known Limitations
+- **Complex Expressions**: Limited support for complex SQL expressions
+- **Generated Columns**: Structure defined but parsing incomplete
+- **Identity Columns**: Structure defined but parsing incomplete
+- **Foreign Keys**: Basic parsing only, missing referential actions
+- **Check Constraints**: Basic parsing only, missing complex expressions

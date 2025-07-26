@@ -1,0 +1,144 @@
+# Database Introspection and Migration Patterns
+
+## Introspection Architecture
+- **Main Module**: [crates/postgres/src/introspection.rs](mdc:crates/postgres/src/introspection.rs) - Database introspection logic
+- **Database Utils**: [crates/postgres/src/db_util.rs](mdc:crates/postgres/src/db_util.rs) - Database connection and query utilities
+- **CLI Command**: [crates/cli/src/commands/introspect.rs](mdc:crates/cli/src/commands/introspect.rs) - Introspection CLI interface
+
+## Migration System
+- **Core Logic**: [crates/core/src/migration.rs](mdc:crates/core/src/migration.rs) - Migration management
+- **Schema Handling**: [crates/core/src/schema.rs](mdc:crates/core/src/schema.rs) - Schema representation
+- **CLI Commands**: [crates/cli/src/commands/migrate.rs](mdc:crates/cli/src/commands/migrate.rs) - Migration application
+
+## Introspection Process
+1. **Connection**: Establish database connection using `sqlx`
+2. **Metadata Queries**: Query PostgreSQL system catalogs
+3. **Object Discovery**: Identify all schema objects (tables, functions, etc.)
+4. **AST Generation**: Build Abstract Syntax Tree from database metadata
+5. **SQL Output**: Generate CREATE statements for all objects
+
+## Migration Process
+1. **Schema Diffing**: Compare declared schema with current database state
+2. **Shadow Database**: Use temporary database for safe diffing
+3. **Migration Generation**: Create ALTER/DROP/CREATE statements
+4. **History Tracking**: Record applied migrations in `shem_migrations` table
+5. **Safety Checks**: Warn about destructive operations
+
+## ✅ Fully Implemented Introspection (25+ object types)
+
+### Data Structures
+- **Tables**: Columns, constraints, indexes, triggers, inheritance, partitioning
+- **Views**: Virtual tables with complex queries and check options
+- **Materialized Views**: Stored result sets with refresh options and storage parameters
+- **Sequences**: Auto-incrementing generators with all options
+
+### Data Types
+- **Enum Types**: Custom enumerated types with values and comments
+- **Composite Types**: User-defined record types with attributes
+- **Domain Types**: Constrained base types with defaults and NOT NULL
+- **Range Types**: Custom range types with subtypes and functions
+- **Base Types**: Fundamental types with internal properties
+- **Array Types**: Array types with element types
+- **Multirange Types**: Discontinuous ranges (PostgreSQL 14+)
+
+### Logic & Functions
+- **Functions**: Complete support with parameters, return types, volatility, behavior settings
+- **Procedures**: Stored procedures (PostgreSQL 11+) with parameters and security settings
+- **Triggers**: Row and statement-level triggers with timing, events, and conditions
+- **Constraint Triggers**: Triggers for constraint enforcement with deferrable options
+- **Event Triggers**: Database-level event triggers with tags and filters
+
+### Security & Access Control
+- **Policies**: Row-level security policies with commands and expressions
+- **Roles**: Database users and roles with privileges and member relationships
+
+### Storage & Performance
+- **Indexes**: All index types (B-tree, Hash, GiST, SP-GiST, GIN, BRIN) with options
+- **Tablespaces**: Physical storage locations with options
+- **Foreign Key Constraints**: Referential integrity constraints with actions
+
+### Extensions & Administration
+- **Extensions**: PostgreSQL extensions with version and schema information
+- **Rules**: Query rewrite rules with conditions and actions
+- **Collations**: Text sorting and comparison rules with providers
+- **Named Schemas**: Schema namespaces with owners and comments
+- **Publications**: Logical replication publications
+
+## 🔶 Partially Implemented Introspection
+
+| Object | Status | Missing Features |
+|--------|--------|------------------|
+| **Comments** | Complete | Limited to basic COMMENT ON statements |
+| **Grants/Privileges** | Basic | No introspection of existing grants |
+
+## ❌ Not Yet Implemented Introspection
+
+| Object | Priority | Description | Use Cases |
+|--------|----------|-------------|-----------|
+| **Servers** | Medium | Foreign data wrapper servers | External data source connections |
+| **Foreign Tables** | Medium | Tables in external data sources | Distributed data access |
+| **Subscriptions** | Medium | Logical replication subscriptions | Data replication |
+| **Foreign Data Wrappers** | Medium | External data source connectors | Custom data source integration |
+| **Casts** | Medium | Type conversion rules | Custom type conversions |
+| **Operators** | Medium | Custom operators (e.g., `#>`, `+=`) | Custom data type operations |
+| **Operator Classes** | Medium | Index behavior definitions | Custom index types |
+| **Aggregates** | Low | Custom aggregation functions | Statistical and analytical functions |
+| **Languages** | Low | Procedural languages | PL/pgSQL, PL/Python, etc. |
+
+## Testing Strategy
+- **Introspection Tests**: [crates/postgres/tests/introspection/](mdc:crates/postgres/tests/introspection/) - 25 test files covering all object types
+- **Sample Data**: [test/all.sql](mdc:test/all.sql) - Comprehensive schema examples
+- **Round-trip Testing**: Introspect → Generate → Apply should be idempotent
+- **Edge Cases**: Test complex object dependencies and constraints
+
+## Database Connection Patterns
+```rust
+// Connection setup
+let pool = sqlx::PgPool::connect(&database_url).await?;
+
+// Transaction handling
+let mut tx = pool.begin().await?;
+
+// Error handling
+use anyhow::Result;
+use sqlx::Error as SqlxError;
+```
+
+## Migration Safety Features
+- **Shadow Database**: Isolated testing environment
+- **Dry Run Mode**: Preview changes without applying
+- **Destructive Operation Warnings**: Alert for DROP operations
+- **Migration History**: Track applied migrations
+- **Rollback Support**: Reset to previous migration state
+
+## Common Introspection Queries
+- **Tables**: Query `information_schema.tables` and `pg_class`
+- **Functions**: Query `pg_proc` and `pg_namespace`
+- **Triggers**: Query `pg_trigger` and `pg_class`
+- **Constraints**: Query `information_schema.table_constraints`
+- **Indexes**: Query `pg_index` and `pg_class`
+- **Types**: Query `pg_type` and `pg_enum`
+- **Sequences**: Query `pg_sequence` and `pg_class`
+- **Extensions**: Query `pg_extension`
+- **Policies**: Query `pg_policy` and `pg_class`
+- **Roles**: Query `pg_roles`
+
+## Error Handling Patterns
+- **Connection Errors**: Graceful handling of database connectivity issues
+- **Permission Errors**: Clear messages for insufficient privileges
+- **Object Dependencies**: Handle complex object relationships
+- **Unsupported Features**: Graceful degradation for unsupported PostgreSQL features
+
+## Performance Considerations
+- **Optimized Queries**: Minimize database load during introspection
+- **Connection Pooling**: Reuse database connections when possible
+- **Streaming Processing**: Handle large schemas efficiently
+- **Memory Management**: Process objects incrementally
+
+## PostgreSQL Version Compatibility
+- **PostgreSQL 10+**: Basic functionality
+- **PostgreSQL 11+**: Procedures, generated columns
+- **PostgreSQL 12+**: Generated columns improvements
+- **PostgreSQL 13+**: Logical replication improvements
+- **PostgreSQL 14+**: Range type improvements, multirange types
+- **PostgreSQL 15+**: Latest features and optimizations

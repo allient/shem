@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;
@@ -12,28 +14,28 @@ where
 
     // Independent Objects (Standalone)
 
+    // Introspect roles
+    // Purpose: Manage authentication and permissions.
+    // CREATE ROLE analyst WITH LOGIN PASSWORD 'secure123';
+    // GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst;
+    let roles = introspect_roles(&*client, false).await?;
+    for role in roles {
+        schema.roles.insert(role.name.clone(), role);
+    }
+
     // Introspect extensions
-    let extensions = introspect_extensions(&*client).await?;
+    let extensions = introspect_extensions(&*client, false).await?;
     for ext in extensions {
         schema.extensions.insert(ext.name.clone(), ext);
     }
 
     // Introspect named schemas
     // Purpose: Namespace to organize objects (tables, functions, etc.).
-    let named_schemas = introspect_named_schemas(&*client).await?;
+    let named_schemas = introspect_named_schemas(&*client, false).await?;
     for named_schema in named_schemas {
         schema
             .named_schemas
             .insert(named_schema.name.clone(), named_schema);
-    }
-
-    // Introspect roles
-    // Purpose: Manage authentication and permissions.
-    // CREATE ROLE analyst WITH LOGIN PASSWORD 'secure123';
-    // GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst;
-    let roles = introspect_roles(&*client).await?;
-    for role in roles {
-        schema.roles.insert(role.name.clone(), role);
     }
 
     // Introspect collations
@@ -233,6 +235,257 @@ where
     // }
 
     Ok(schema)
+}
+
+// Introspect roles
+pub async fn introspect_roles<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Role>> {
+    // Determine server version to use the best filtering method
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
+
+    // --- Query 1: Fetch all roles and their properties ---
+    let mut role_query = String::from(
+        r#"
+        SELECT 
+            r.oid,
+            r.rolname AS name,
+            r.rolsuper AS superuser,
+            r.rolcreatedb AS createdb,
+            r.rolcreaterole AS createrole,
+            r.rolinherit AS inherit,
+            r.rolcanlogin AS login,
+            r.rolreplication AS replication,
+            r.rolconnlimit AS connection_limit,
+            r.rolvaliduntil::text AS valid_until,
+            r.rolconfig AS config
+    "#,
+    );
+
+    // Use `rolsystem` on PG16+ for the most reliable filtering
+    if server_version_num >= 160000 {
+        role_query.push_str(", r.rolsystem AS is_predefined ");
+    } else {
+        // Fallback for older versions
+        role_query.push_str(", r.rolname LIKE 'pg_%' AS is_predefined ");
+    }
+
+    role_query.push_str("FROM pg_catalog.pg_roles r ORDER BY r.rolname");
+
+    let role_rows = client.query(role_query.as_str(), &[]).await?;
+
+    // --- Query 2: Fetch all role memberships at once ---
+    let membership_query = r#"
+        SELECT
+            member AS member_oid,
+            roleid AS group_oid
+        FROM pg_catalog.pg_auth_members;
+    "#;
+    let membership_rows = client.query(membership_query, &[]).await?;
+
+    // --- Process and Join data in memory ---
+
+    // Map memberships for efficient lookup: member_oid -> [group_oid, group_oid, ...]
+    let mut memberships: HashMap<u32, Vec<u32>> = HashMap::new();
+    for row in membership_rows {
+        let member_oid: u32 = row.get("member_oid");
+        let group_oid: u32 = row.get("group_oid");
+        memberships.entry(member_oid).or_default().push(group_oid);
+    }
+
+    // Create a temporary map of oid -> name for converting membership OIDs to names
+    let oid_to_name: HashMap<u32, String> = role_rows
+        .iter()
+        .map(|row| (row.get("oid"), row.get("name")))
+        .collect();
+
+    // Build the final Vec<Role>
+    let mut roles = Vec::with_capacity(role_rows.len());
+    for row in role_rows {
+        let oid: u32 = row.get("oid");
+        let name: String = row.get("name");
+
+        let member_of_oids = memberships.get(&oid).cloned().unwrap_or_default();
+        let mut member_of_names: Vec<String> = member_of_oids
+            .iter()
+            .filter_map(|group_oid| oid_to_name.get(group_oid).cloned())
+            .collect();
+        member_of_names.sort(); // For consistent output
+
+        roles.push(Role {
+            oid,
+            name,
+            superuser: row.get("superuser"),
+            createdb: row.get("createdb"),
+            createrole: row.get("createrole"),
+            inherit: row.get("inherit"),
+            login: row.get("login"),
+            replication: row.get("replication"),
+            connection_limit: row.get("connection_limit"),
+            password: None, // Cannot be read safely
+            valid_until: row.get("valid_until"),
+            member_of: member_of_names,
+            config: row.get("config"),
+            is_predefined: row.get("is_predefined"),
+        });
+    }
+
+    // --- Apply the filter based on the new flag ---
+    if include_predefined {
+        // If the flag is true, return everything we collected.
+        return Ok(roles);
+    }
+    // If the flag is false, filter out the predefined roles.
+    let dumpable_roles = roles.into_iter().filter(|r| !r.is_predefined).collect();
+    Ok(dumpable_roles)
+}
+
+// Introspect schemas
+async fn introspect_named_schemas<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<NamedSchema>> {
+    // 1. Get the last system OID to reliably distinguish system objects.
+    let last_system_oid_row = client
+        .query_one(
+            "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+            &[],
+        )
+        .await?;
+    let last_system_oid: u32 = last_system_oid_row.get("datlastsysoid");
+
+    // 2. Query for ALL schemas, including system ones, and also get extension info.
+    //    We need all of them initially so that every object can be linked to a schema.
+    let query = r#"
+     SELECT 
+         n.oid,
+         n.nspname AS name,
+         pg_get_userbyid(n.nspowner) AS owner,
+         n.nspacl AS acl,
+         obj_description(n.oid, 'pg_namespace') AS comment,
+         EXISTS (
+             SELECT 1 FROM pg_depend d
+             WHERE d.objid = n.oid AND d.classid = 'pg_namespace'::regclass AND d.deptype = 'e'
+         ) AS is_from_extension
+     FROM pg_namespace n;
+ "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut schemas = Vec::new();
+
+    for row in rows {
+        let oid: u32 = row.get("oid");
+        let name: String = row.get("name");
+
+        let mut is_user_defined = false;
+
+        // 3. Apply pg_dump's filtering logic in Rust.
+        if oid > last_system_oid {
+            // Any schema with a high OID is definitely user-defined.
+            is_user_defined = true;
+        } else {
+            // For low-OID schemas, only include 'public'.
+            // pg_dump has special logic for 'public'. Other pg_% schemas are ignored.
+            if name == "public" {
+                is_user_defined = true;
+            }
+        }
+
+        // Exclude temporary schemas which are session-specific.
+        if name.starts_with("pg_temp_") {
+            is_user_defined = false;
+        }
+
+        // A schema belonging to an extension is generally not dumped on its own.
+        let is_from_extension: bool = row.get("is_from_extension");
+        if is_from_extension {
+            // You might still want to know about it, but you wouldn't generate a
+            // `CREATE SCHEMA` statement for it. We keep the flag for clarity.
+        }
+
+        schemas.push(NamedSchema {
+            oid,
+            name,
+            owner: row.get("owner"),
+            acl: row.get("acl"),
+            comment: row.get("comment"),
+            is_user_defined,
+            is_from_extension,
+        });
+    }
+
+    // --- Apply the filter based on the new flag ---
+    if include_predefined {
+        // If the flag is true, return everything we collected.
+        return Ok(schemas);
+    }
+    // If the flag is false, filter out the predefined schemas.
+    let dumpable_schemas = schemas
+        .into_iter()
+        .filter(|s| !s.is_from_extension)
+        .collect();
+    Ok(dumpable_schemas)
+}
+
+// Introspect extensions
+pub async fn introspect_extensions<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Extension>> {
+    // 1. Get the last system OID to reliably distinguish system objects from user objects.
+    let last_system_oid_row = client
+        .query_one(
+            "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+            &[],
+        )
+        .await?;
+    let last_system_oid: u32 = last_system_oid_row.get("datlastsysoid");
+
+    // 2. The query is now simpler. It fetches ALL extensions and more data fields.
+    let query = r#"
+        SELECT
+            e.oid,
+            e.extname,
+            pg_get_userbyid(e.extowner) AS extowner,
+            e.extrelocatable,
+            e.extversion,
+            n.nspname AS extschema,
+            obj_description(e.oid, 'pg_extension') AS comment
+        FROM pg_catalog.pg_extension e
+        JOIN pg_catalog.pg_namespace n ON e.extnamespace = n.oid;
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut extensions = Vec::new();
+
+    // 3. Process the rows and populate our more complete struct
+    for row in rows {
+        let oid: u32 = row.get("oid");
+
+        extensions.push(Extension {
+            oid,
+            name: row.get("extname"),
+            owner: row.get("extowner"),
+            relocatable: row.get("extrelocatable"),
+            version: row.get("extversion"),
+            schema: row.get("extschema"),
+            comment: row.get("comment"),
+            is_user_defined: oid > last_system_oid,
+        });
+    }
+
+    // --- Apply the filter based on the new flag ---
+    if include_predefined {
+        // If the flag is true, return everything we collected.
+        return Ok(extensions);
+    }
+    let dumpable_extensions = extensions
+        .into_iter()
+        .filter(|e| !e.is_user_defined)
+        .collect();
+    Ok(dumpable_extensions)
 }
 
 async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
@@ -1343,48 +1596,6 @@ where
     Ok(sequences)
 }
 
-async fn introspect_extensions<C: GenericClient>(client: &C) -> Result<Vec<Extension>> {
-    let query = r#"
-        SELECT 
-            e.oid,
-            e.extname AS extension_name,
-            e.extversion AS extension_version,
-            n.nspname AS schema_name,
-            obj_description(e.oid, 'pg_extension') AS comment,
-            e.extname NOT IN (
-                'plpgsql', 'pg_catalog', 'pg_trgm', 'pg_stat_statements',
-                'pgstattuple', 'pg_buffercache', 'pg_prewarm',
-                'pg_visibility', 'pg_freespacemap', 'pgrowlocks'
-            ) AS is_user_extension
-        FROM pg_extension e
-        JOIN pg_namespace n ON e.extnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-            AND n.nspname !~ '^pg_toast'
-            AND n.nspname !~ '^pg_temp'
-            AND e.extname NOT IN ('plpgsql');
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut extensions = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("extension_name");
-        let version: String = row.get("extension_version");
-        let schema: Option<String> = row.get("schema_name");
-        let comment: Option<String> = row.get("comment");
-
-        extensions.push(Extension {
-            name,
-            version,
-            schema,
-            cascade: false, // TODO: Detect CASCADE from extension dependencies
-            comment,
-        });
-    }
-
-    Ok(extensions)
-}
-
 fn parse_trigger_from_definition(
     trigger_definition: &str,
 ) -> (TriggerTiming, Vec<TriggerEvent>, TriggerLevel) {
@@ -2063,45 +2274,6 @@ async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>>
     Ok(enums)
 }
 
-// Missing introspection functions
-
-async fn introspect_named_schemas<C: GenericClient>(client: &C) -> Result<Vec<NamedSchema>> {
-    let query = r#"
-        SELECT 
-            n.nspname AS name,
-            r.rolname AS owner,
-            obj_description(n.oid, 'pg_namespace') AS comment
-        FROM pg_namespace n
-        LEFT JOIN pg_roles r ON n.nspowner = r.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND n.nspname NOT LIKE 'pg_%'
-        AND n.nspowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = n.oid AND d.deptype = 'e'
-        )
-        ORDER BY n.nspname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut schemas = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let owner: Option<String> = row.get("owner");
-        let comment: Option<String> = row.get("comment");
-
-        schemas.push(NamedSchema {
-            name,
-            owner,
-            comment,
-        });
-    }
-
-    Ok(schemas)
-}
-
 async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Publication>> {
     let query = r#"
         SELECT 
@@ -2208,94 +2380,6 @@ async fn _introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<S
     }
 
     Ok(subscriptions)
-}
-
-async fn introspect_roles<C: GenericClient>(client: &C) -> Result<Vec<Role>> {
-    let query = r#"
-        SELECT 
-            r.rolname AS name,
-            r.rolsuper AS superuser,
-            r.rolcreatedb AS createdb,
-            r.rolcreaterole AS createrole,
-            r.rolinherit AS inherit,
-            r.rolcanlogin AS login,
-            r.rolreplication AS replication,
-            r.rolconnlimit AS connection_limit,
-            r.rolvaliduntil::text AS valid_until
-        FROM pg_roles r
-        WHERE r.oid > 10  -- Default roles have OIDs <= 10
-        AND NOT r.rolname LIKE 'pg\\_%'  -- Exclude all pg_* roles (note escaped underscore)
-        AND r.rolname NOT IN (
-            -- Explicitly exclude common default roles that might slip through
-            'postgres',
-            'pg_read_all_data',
-            'pg_write_all_data',
-            'pg_use_reserved_connections',
-            'pg_read_server_files',
-            'pg_write_server_files',
-            'pg_read_all_settings',
-            'pg_database_owner',
-            'pg_execute_server_program',
-            'pg_read_all_stats',
-            'pg_monitor',
-            'pg_checkpoint',
-            'pg_create_subscription',
-            'pg_stat_scan_tables',
-            'pg_signal_backend'
-        )
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = r.oid AND d.deptype = 'e'
-        )
-        ORDER BY r.rolname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut roles = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let superuser: bool = row.get("superuser");
-        let createdb: bool = row.get("createdb");
-        let createrole: bool = row.get("createrole");
-        let inherit: bool = row.get("inherit");
-        let login: bool = row.get("login");
-        let replication: bool = row.get("replication");
-        let connection_limit: Option<i32> = row.get("connection_limit");
-        let valid_until: Option<String> = row.get("valid_until");
-
-        // Get member_of information
-        let member_query = r#"
-            SELECT m.rolname AS member_of
-            FROM pg_auth_members am
-            JOIN pg_roles m ON am.roleid = m.oid
-            JOIN pg_roles r ON am.member = r.oid
-            WHERE r.rolname = $1
-            ORDER BY m.rolname
-        "#;
-        let member_rows = client.query(member_query, &[&name]).await?;
-        let member_of: Vec<String> = member_rows
-            .iter()
-            .map(|row| row.get::<_, String>("member_of"))
-            .collect();
-
-        roles.push(Role {
-            name,
-            superuser,
-            createdb,
-            createrole,
-            inherit,
-            login,
-            replication,
-            connection_limit,
-            password: None, // Password information is not accessible
-            valid_until,
-            member_of,
-        });
-    }
-
-    Ok(roles)
 }
 
 async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tablespace>> {

@@ -3,8 +3,10 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Schema {
-    pub name: Option<String>,
+    pub roles: HashMap<String, Role>,
     pub named_schemas: HashMap<String, NamedSchema>,
+    pub extensions: HashMap<String, Extension>,
+    pub name: Option<String>,
     pub tables: HashMap<String, Table>,
     pub views: HashMap<String, View>,
     pub materialized_views: HashMap<String, MaterializedView>,
@@ -13,7 +15,6 @@ pub struct Schema {
     pub enums: HashMap<String, EnumType>,
     pub domains: HashMap<String, Domain>,
     pub sequences: HashMap<String, Sequence>,
-    pub extensions: HashMap<String, Extension>,
     pub triggers: HashMap<String, Trigger>,
     pub constraint_triggers: HashMap<String, ConstraintTrigger>,
     pub event_triggers: HashMap<String, EventTrigger>,
@@ -24,7 +25,6 @@ pub struct Schema {
     pub range_types: HashMap<String, RangeType>,
     pub publications: HashMap<String, Publication>,
     pub subscriptions: HashMap<String, Subscription>,
-    pub roles: HashMap<String, Role>,
     pub tablespaces: HashMap<String, Tablespace>,
     pub foreign_tables: HashMap<String, ForeignTable>,
     pub foreign_data_wrappers: HashMap<String, ForeignDataWrapper>,
@@ -36,10 +36,46 @@ pub struct Schema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct NamedSchema {
+pub struct Role {
+    pub oid: u32,
     pub name: String,
-    pub owner: Option<String>,
+    pub superuser: bool,
+    pub createdb: bool,
+    pub createrole: bool,
+    pub inherit: bool,
+    pub login: bool,
+    pub replication: bool,
+    pub connection_limit: i32, // pg_roles is not nullable, defaults to -1
+    pub password: Option<String>, // Always None for security reasons
+    pub valid_until: Option<String>,
+    pub member_of: Vec<String>,
+    pub config: Option<Vec<String>>, // For ALTER ROLE ... SET
+    pub is_predefined: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NamedSchema {
+    pub oid: u32,
+    pub name: String,
+    pub owner: String,
+    pub acl: Option<String>,
     pub comment: Option<String>,
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Extension {
+    pub oid: u32,
+    pub name: String,
+    pub owner: String,
+    pub relocatable: bool,
+    pub version: String,
+    pub schema: String, // An extension must have a schema, so it's not an Option
+    pub comment: Option<String>,
+    pub is_user_defined: bool,
+    // We will handle config tables and dependencies in a later step
+    // pub config_tables: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -131,15 +167,6 @@ pub struct Sequence {
     pub cache: i64,
     pub cycle: bool,
     pub owned_by: Option<String>, // Added: OWNED BY column
-    pub comment: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Extension {
-    pub name: String,
-    pub schema: Option<String>,
-    pub version: String,
-    pub cascade: bool, // Added: CASCADE option
     pub comment: Option<String>,
 }
 
@@ -277,21 +304,6 @@ pub struct Subscription {
     pub publication: Vec<String>,
     pub enabled: bool,
     pub slot_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Role {
-    pub name: String,
-    pub superuser: bool,
-    pub createdb: bool,
-    pub createrole: bool,
-    pub inherit: bool,
-    pub login: bool,
-    pub replication: bool,
-    pub connection_limit: Option<i32>,
-    pub password: Option<String>,
-    pub valid_until: Option<String>,
-    pub member_of: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

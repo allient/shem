@@ -88,6 +88,8 @@ cargo test --features test-db
 # 
 cargo test --test integration_tests test_introspect_with_extensions -- --nocapture
 cargo test --test integration_tests test_introspect_simple_extension -- --nocapture
+RUST_LOG=debug bacon test -- -p cli --test generator test_introspect_simple_extension -- --nocapture
+RUST_LOG=debug cargo test -p cli --test generator comprehensive_integration -- --nocapture
 ```
 
 

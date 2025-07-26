@@ -846,11 +846,11 @@ impl SqlGenerator for PostgresSqlGenerator {
             sql.push_str(&format!(" VERSION '{}'", ext.version));
         }
 
-        if let Some(schema) = &ext.schema {
-            sql.push_str(&format!(" SCHEMA {}", schema));
+        if !ext.schema.is_empty() {
+            sql.push_str(&format!(" SCHEMA {}", ext.schema));
         }
 
-        if ext.cascade {
+        if ext.relocatable {
             sql.push_str(" CASCADE");
         }
 
@@ -1674,8 +1674,8 @@ impl SqlGenerator for PostgresSqlGenerator {
         }
 
         // Add connection limit
-        if let Some(limit) = role.connection_limit {
-            sql.push_str(&format!(" CONNECTION LIMIT {}", limit));
+        if role.connection_limit != -1 {
+            sql.push_str(&format!(" CONNECTION LIMIT {}", role.connection_limit));
         }
 
         // Add password

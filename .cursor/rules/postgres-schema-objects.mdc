@@ -1,0 +1,125 @@
+# PostgreSQL Schema Objects in Shem
+
+## ✅ Fully Implemented Objects (25+ types)
+
+### Data Structures
+- **Tables**: Complete support with columns, constraints, indexes, inheritance, partitioning
+- **Views**: Virtual tables with query definitions and check options
+- **Materialized Views**: Stored result sets with refresh options and storage parameters
+- **Sequences**: Auto-incrementing generators with all options (start, increment, cache, cycle)
+
+### Data Types
+- **Enum Types**: Custom enumerated types with values and comments
+- **Composite Types**: User-defined record types with attributes
+- **Domain Types**: Constrained base types with defaults and NOT NULL
+- **Range Types**: Custom range types with subtypes and functions
+- **Base Types**: Fundamental types with internal properties
+- **Array Types**: Array types with element types
+- **Multirange Types**: Discontinuous ranges (PostgreSQL 14+)
+
+### Logic & Functions
+- **Functions**: Complete support with parameters, return types, volatility, behavior settings
+- **Procedures**: Stored procedures (PostgreSQL 11+) with parameters and security settings
+- **Triggers**: Row and statement-level triggers with timing, events, and conditions
+- **Constraint Triggers**: Triggers for constraint enforcement with deferrable options
+- **Event Triggers**: Database-level event triggers with tags and filters
+
+### Security & Access Control
+- **Policies**: Row-level security policies with commands and expressions
+- **Roles**: Database users and roles with privileges and member relationships
+
+### Storage & Performance
+- **Indexes**: All index types (B-tree, Hash, GiST, SP-GiST, GIN, BRIN) with options
+- **Tablespaces**: Physical storage locations with options
+- **Foreign Key Constraints**: Referential integrity constraints with actions
+
+### Extensions & Administration
+- **Extensions**: PostgreSQL extensions with version and schema information
+- **Rules**: Query rewrite rules with conditions and actions
+- **Collations**: Text sorting and comparison rules with providers
+- **Named Schemas**: Schema namespaces with owners and comments
+- **Publications**: Logical replication publications
+
+## 🔶 Partially Implemented Objects
+
+| Object | Status | Missing Features |
+|--------|--------|------------------|
+| **Comments** | Complete | Limited to basic COMMENT ON statements |
+| **Grants/Privileges** | Basic | No introspection of existing grants |
+
+## ❌ Not Yet Implemented Objects
+
+| Object | Priority | Description | Use Cases |
+|--------|----------|-------------|-----------|
+| **Servers** | Medium | Foreign data wrapper servers | External data source connections |
+| **Foreign Tables** | Medium | Tables in external data sources | Distributed data access |
+| **Subscriptions** | Medium | Logical replication subscriptions | Data replication |
+| **Foreign Data Wrappers** | Medium | External data source connectors | Custom data source integration |
+| **Casts** | Medium | Type conversion rules | Custom type conversions |
+| **Operators** | Medium | Custom operators (e.g., `#>`, `+=`) | Custom data type operations |
+| **Operator Classes** | Medium | Index behavior definitions | Custom index types |
+| **Aggregates** | Low | Custom aggregation functions | Statistical and analytical functions |
+| **Languages** | Low | Procedural languages | PL/pgSQL, PL/Python, etc. |
+
+## Advanced PostgreSQL Features Supported
+
+### Data Types
+- **Native Types**: All PostgreSQL built-in types (integer, text, boolean, etc.)
+- **Array Types**: Multi-dimensional arrays with custom element types
+- **JSON Types**: JSON, JSONB with operators and functions
+- **Geometric Types**: Point, line, polygon, circle, etc.
+- **Network Types**: Inet, cidr, macaddr, macaddr8
+- **UUID**: Universally unique identifiers
+- **Range Types**: Built-in and custom range types
+- **Composite Types**: User-defined structured types
+- **Domain Types**: Constrained base types
+
+### Constraints
+- **Primary Keys**: Single and composite primary keys
+- **Foreign Keys**: Referential integrity with cascade options
+- **Unique Constraints**: Single and composite unique constraints
+- **Check Constraints**: Custom validation rules
+- **Exclusion Constraints**: Complex constraint types
+- **NOT NULL**: Column-level nullability constraints
+
+### Indexes
+- **B-tree**: Default balanced tree indexes
+- **Hash**: Hash-based indexes for equality
+- **GiST**: Generalized Search Tree indexes
+- **SP-GiST**: Space-partitioned GiST indexes
+- **GIN**: Generalized Inverted indexes
+- **BRIN**: Block Range INdexes
+- **Partial Indexes**: Indexes with WHERE conditions
+- **Expression Indexes**: Indexes on computed expressions
+- **Operator Classes**: Custom index behavior
+
+### Advanced Features
+- **Partitioning**: Range, list, and hash partitioning
+- **Inheritance**: Table inheritance hierarchies
+- **Row-Level Security**: Fine-grained access control
+- **Generated Columns**: Computed column values
+- **Identity Columns**: Auto-incrementing columns
+- **Foreign Data**: External data source integration
+- **Logical Replication**: Publication and subscription support
+- **Event Triggers**: Database-level event handling
+
+## Implementation Files
+- **Introspection**: [crates/postgres/src/introspection.rs](mdc:crates/postgres/src/introspection.rs)
+- **SQL Generation**: [crates/postgres/src/sql_generator.rs](mdc:crates/postgres/src/sql_generator.rs)
+- **Database Utils**: [crates/postgres/src/db_util.rs](mdc:crates/postgres/src/db_util.rs)
+- **Shared Types**: [crates/shared-types/src/](mdc:crates/shared-types/src/)
+- **Tests**: [crates/postgres/tests/introspection/](mdc:crates/postgres/tests/introspection/)
+
+## Testing Strategy
+- **Introspection Tests**: 25 test files covering all object types
+- **SQL Generation Tests**: 50+ tests for CREATE/DROP/ALTER operations
+- **Round-trip Testing**: Introspect → Generate → Apply should be idempotent
+- **Edge Cases**: Complex object dependencies and constraints
+
+## PostgreSQL Version Compatibility
+- **PostgreSQL 10+**: Basic functionality
+- **PostgreSQL 11+**: Procedures, generated columns
+- **PostgreSQL 12+**: Generated columns improvements
+- **PostgreSQL 13+**: Logical replication improvements
+- **PostgreSQL 14+**: Range type improvements, multirange types
+- **PostgreSQL 15+**: Latest features and optimizations

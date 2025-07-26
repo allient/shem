@@ -1,0 +1,76 @@
+# Shem CLI Commands
+
+## Command Structure
+All CLI commands are defined in [crates/cli/src/main.rs](mdc:crates/cli/src/main.rs) using `clap` derive macros. Individual command implementations are in [crates/cli/src/commands/](mdc:crates/cli/src/commands/).
+
+## Available Commands
+
+### `shem init <path>`
+- **Purpose**: Initialize a new schema project
+- **Implementation**: [crates/cli/src/commands/init.rs](mdc:crates/cli/src/commands/init.rs)
+- **Creates**: `schema/`, `migrations/`, `shem.toml` config file
+- **Usage**: `cargo run --bin shem -- init my_project`
+
+### `shem diff [OPTIONS]`
+- **Purpose**: Generate migrations from schema changes
+- **Implementation**: [crates/cli/src/commands/diff.rs](mdc:crates/cli/src/commands/diff.rs)
+- **Options**: `--schema`, `--output`, `--database-url`, `--name`
+- **Process**: Uses shadow database for safe diffing
+- **Output**: Timestamped migration files in `migrations/`
+
+### `shem migrate [OPTIONS]`
+- **Purpose**: Apply migrations to database
+- **Implementation**: [crates/cli/src/commands/migrate.rs](mdc:crates/cli/src/commands/migrate.rs)
+- **Options**: `--migrations`, `--database-url`, `--dry-run`
+- **Features**: Migration history tracking, dry-run mode
+- **Safety**: Warns about destructive operations
+
+### `shem introspect [OPTIONS]`
+- **Purpose**: Generate schema from existing database
+- **Implementation**: [crates/cli/src/commands/introspect.rs](mdc:crates/cli/src/commands/introspect.rs)
+- **Options**: `--database-url`, `--output`, `--verbose`
+- **Output**: SQL files representing current database state
+- **Use Case**: Reverse-engineering existing databases
+
+### `shem validate [OPTIONS]`
+- **Purpose**: Validate schema files
+- **Implementation**: [crates/cli/src/commands/validate.rs](mdc:crates/cli/src/commands/validate.rs)
+- **Options**: `--schema`
+- **Checks**: SQL syntax, object dependencies, constraints
+
+### `shem inspect [OPTIONS]`
+- **Purpose**: Show schema information
+- **Implementation**: [crates/cli/src/commands/inspect.rs](mdc:crates/cli/src/commands/inspect.rs)
+- **Options**: `--schema`
+- **Output**: Human-readable schema summary
+
+## Configuration
+- **Config File**: `shem.toml` (TOML format)
+- **Config Module**: [crates/cli/src/config.rs](mdc:crates/cli/src/config.rs)
+- **Database URL**: Can be specified in config or command line
+- **Schema Paths**: Glob patterns for schema file discovery
+
+## Development Commands
+```bash
+# Run CLI in development mode
+cargo run --bin shem -- --help
+
+# Test specific command
+cargo run --bin shem -- diff --database-url "postgresql://..."
+
+# Build for production
+cargo build --workspace --release
+
+# Install CLI tool
+cargo install --path crates/cli
+```
+
+## Error Handling
+- All commands return `anyhow::Result<T>`
+- Use `--verbose` flag for detailed error information
+- Database connection errors are handled gracefully
+- Migration conflicts are detected and reported
+description:
+globs:
+alwaysApply: false
+---

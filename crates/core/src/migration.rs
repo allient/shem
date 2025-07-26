@@ -738,8 +738,8 @@ fn generate_alter_sequence(old: &Sequence, new: &Sequence) -> Result<(Vec<String
 fn generate_create_extension(ext: &Extension) -> Result<String> {
     let mut sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\"", ext.name);
 
-    if let Some(schema) = &ext.schema {
-        sql.push_str(&format!(" SCHEMA {}", schema));
+    if !ext.schema.is_empty() {
+        sql.push_str(&format!(" SCHEMA {}", ext.schema));
     }
 
     if !ext.version.is_empty() {
