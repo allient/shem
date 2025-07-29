@@ -134,40 +134,23 @@ async fn main() -> Result<()> {
             database_url,
             name,
         } => {
-            diff::execute(
-                schema,
-                output,
-                database_url.or_else(|| config.database_url.clone()),
-                name,
-                &config,
-            )
-            .await
+            todo!()
         }
         Command::Migrate {
             migrations,
             database_url,
             dry_run,
         } => {
-            migration::execute(
-                migrations,
-                database_url.or_else(|| config.database_url.clone()),
-                dry_run,
-                &config,
-            )
-            .await
+            todo!()
         }
         Command::Validate { schema } => validate::execute(schema.to_str().unwrap(), &config).await,
         Command::Introspect {
             database_url,
             output,
             verbose,
-        } => introspect::execute(
-            database_url.or_else(|| config.database_url.clone()),
-            output,
-            &config,
-            verbose,
-        )
-        .await,
+        } => {
+            todo!()
+        }
         Command::Inspect { schema } => inspect::execute(schema.to_str().unwrap(), &config).await,
     };
 
