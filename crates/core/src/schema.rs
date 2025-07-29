@@ -527,6 +527,9 @@ pub struct Index {
     pub where_clause: Option<String>, // Added: partial index condition
     pub tablespace: Option<String>,   // Added: tablespace assignment
     pub storage_parameters: HashMap<String, String>, // Added: WITH parameters
+    pub table_oid: Option<u32>,       // Added: table OID for reference
+    pub table_name: Option<String>,   // Added: table name for SQL generation
+    pub schema: Option<String>,       // Added: schema name for SQL generation
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

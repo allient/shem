@@ -20,6 +20,9 @@ fn test_create_index() {
         where_clause: Some("email IS NOT NULL".to_string()),
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;
@@ -49,6 +52,9 @@ fn test_create_unique_index() {
         where_clause: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;
@@ -84,6 +90,9 @@ fn test_create_index_multiple_columns() {
         where_clause: None,
         tablespace: Some("fast_space".to_string()),
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;
@@ -122,6 +131,9 @@ fn test_create_index_different_methods() {
             where_clause: None,
             tablespace: None,
             storage_parameters: std::collections::HashMap::new(),
+            table_oid: None,
+            table_name: Some("table_name".to_string()),
+            schema: Some("public".to_string()),
         };
 
         let generator = PostgresSqlGenerator;
@@ -149,6 +161,9 @@ fn test_create_index_with_reserved_keyword() {
         where_clause: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;
@@ -177,6 +192,9 @@ fn test_drop_index() {
         where_clause: None,
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;
@@ -203,6 +221,9 @@ fn test_create_index_partial() {
         where_clause: Some("active = true AND deleted_at IS NULL".to_string()),
         tablespace: None,
         storage_parameters: std::collections::HashMap::new(),
+        table_oid: None,
+        table_name: Some("table_name".to_string()),
+        schema: Some("public".to_string()),
     };
 
     let generator = PostgresSqlGenerator;

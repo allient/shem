@@ -1115,12 +1115,27 @@ impl SqlGenerator for PostgresSqlGenerator {
             sql.push_str("CREATE INDEX ");
         }
 
-        sql.push_str(&Self::force_quote_identifier(&index.name));
+        // Only quote the index name if it's a reserved keyword or contains special characters
+        let index_name = if Self::is_reserved_keyword(&index.name) || index.name.contains('-') {
+            format!("\"{}\"", index.name)
+        } else {
+            index.name.clone()
+        };
+        sql.push_str(&index_name);
         sql.push_str(" ON ");
 
-        // Note: Index doesn't have table name, this would need to be passed separately
-        // For now, we'll use a placeholder
-        sql.push_str("table_name");
+        // Use table information from the index struct
+        let table_name = if let (Some(schema), Some(table)) = (&index.schema, &index.table_name) {
+            if schema == "public" {
+                table.clone()
+            } else {
+                format!("{}.{}", schema, table)
+            }
+        } else {
+            // Fallback to placeholder if table info is not available
+            "table_name".to_string()
+        };
+        sql.push_str(&table_name);
 
         sql.push_str(" USING ");
         sql.push_str(match index.method {
@@ -1137,7 +1152,11 @@ impl SqlGenerator for PostgresSqlGenerator {
             .columns
             .iter()
             .map(|col| {
-                let mut col_def = Self::force_quote_identifier(&col.name);
+                let mut col_def = if Self::is_reserved_keyword(&col.name) || col.name.contains('-') {
+                    format!("\"{}\"", col.name)
+                } else {
+                    col.name.clone()
+                };
                 if let Some(expr) = &col.expression {
                     col_def = format!("({})", expr);
                 }
@@ -1182,9 +1201,15 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_index(&self, index: &Index) -> Result<String> {
+        // Only quote the index name if it's a reserved keyword or contains special characters
+        let index_name = if Self::is_reserved_keyword(&index.name) || index.name.contains('-') {
+            format!("\"{}\"", index.name)
+        } else {
+            index.name.clone()
+        };
         Ok(format!(
             "DROP INDEX IF EXISTS {} CASCADE;",
-            Self::force_quote_identifier(&index.name)
+            index_name
         ))
     }
 

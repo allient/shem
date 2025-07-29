@@ -7,7 +7,6 @@ pub mod domains;
 pub mod enums;
 pub mod event_triggers;
 pub mod extensions;
-pub mod foreign_key_constraints;
 pub mod functions;
 pub mod materialized_views;
 // pub mod multirange_types; // Multirange types are not supported as separate types in the current schema

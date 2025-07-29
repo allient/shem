@@ -1035,6 +1035,9 @@ async fn introspect_all_indexes<C: GenericClient>(
                             .collect()
                     })
                     .unwrap_or_default(),
+                table_oid: Some(table_oid),
+                table_name: None, // Will be populated when assigned to table
+                schema: None,     // Will be populated when assigned to table
             };
             current_index = Some(index);
             indexes_map
@@ -1513,6 +1516,9 @@ async fn introspect_indexes<C: GenericClient>(
                 where_clause,
                 tablespace,
                 storage_parameters: storage_params,
+                table_oid: None, // Will be populated when assigned to table
+                table_name: None, // Will be populated when assigned to table
+                schema: None,     // Will be populated when assigned to table
             });
         } else if let Some(idx) = &mut current_index {
             idx.columns.push(IndexColumn {
