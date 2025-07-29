@@ -33,7 +33,7 @@ async fn test_introspect_basic_enum() -> Result<(), Box<dyn std::error::Error>> 
 
     let enum_obj = enum_type.unwrap();
     assert_eq!(enum_obj.name, "status_enum");
-    assert_eq!(enum_obj.values, vec!["active", "inactive", "pending"], "Enum should have the correct values");
+    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["active", "inactive", "pending"], "Enum should have the correct values");
     assert_eq!(enum_obj.comment, None, "Enum should not have a comment");
 
     // Clean up
@@ -63,8 +63,8 @@ async fn test_introspect_enum_with_schema() -> Result<(), Box<dyn std::error::Er
 
     let enum_obj = enum_type.unwrap();
     assert_eq!(enum_obj.name, "priority_enum");
-    assert_eq!(enum_obj.schema, Some("test_enum_schema".to_string()), "Enum should be in the specified schema");
-    assert_eq!(enum_obj.values, vec!["low", "medium", "high"], "Enum should have the correct values");
+    assert_eq!(enum_obj.schema, "test_enum_schema", "Enum should be in the specified schema");
+    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["low", "medium", "high"], "Enum should have the correct values");
 
     // Clean up
     db.cleanup().await?;
@@ -98,7 +98,7 @@ async fn test_introspect_enum_with_comment() -> Result<(), Box<dyn std::error::E
 
     let enum_obj = enum_type.unwrap();
     assert_eq!(enum_obj.name, "color_enum");
-    assert_eq!(enum_obj.values, vec!["red", "green", "blue"], "Enum should have the correct values");
+    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["red", "green", "blue"], "Enum should have the correct values");
     assert_eq!(
         enum_obj.comment,
         Some("Color options for the application".to_string()),
@@ -138,9 +138,9 @@ async fn test_introspect_multiple_enums() -> Result<(), Box<dyn std::error::Erro
     let size_enum = schema.enums.get("size_enum").unwrap();
 
     assert_eq!(direction_enum.name, "direction_enum");
-    assert_eq!(direction_enum.values, vec!["north", "south", "east", "west"]);
+    assert_eq!(direction_enum.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["north", "south", "east", "west"]);
     assert_eq!(size_enum.name, "size_enum");
-    assert_eq!(size_enum.values, vec!["small", "medium", "large"]);
+    assert_eq!(size_enum.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["small", "medium", "large"]);
 
     // Clean up
     db.cleanup().await?;
@@ -168,7 +168,7 @@ async fn test_introspect_enum_with_single_value() -> Result<(), Box<dyn std::err
 
     let enum_obj = enum_type.unwrap();
     assert_eq!(enum_obj.name, "single_value_enum");
-    assert_eq!(enum_obj.values, vec!["only_value"], "Enum should have the single value");
+    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["only_value"], "Enum should have the single value");
 
     // Clean up
     db.cleanup().await?;

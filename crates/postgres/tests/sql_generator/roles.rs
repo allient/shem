@@ -5,6 +5,7 @@ use postgres::PostgresSqlGenerator;
 #[test]
 fn test_create_role_basic() {
     let role = Role {
+        oid: 0,
         name: "test_user".to_string(),
         superuser: false,
         createdb: false,
@@ -12,10 +13,12 @@ fn test_create_role_basic() {
         inherit: true,
         login: true,
         replication: false,
-        connection_limit: None,
+        connection_limit: -1,
         password: None,
         valid_until: None,
         member_of: vec![],
+        config: None,
+        is_predefined: false,
     };
     let sql = PostgresSqlGenerator.create_role(&role).unwrap();
     assert_eq!(sql, "CREATE ROLE \"test_user\" INHERIT LOGIN;");
@@ -24,6 +27,7 @@ fn test_create_role_basic() {
 #[test]
 fn test_create_role_with_options() {
     let role = Role {
+        oid: 0,
         name: "admin".to_string(),
         superuser: true,
         createdb: true,
@@ -31,10 +35,12 @@ fn test_create_role_with_options() {
         inherit: false,
         login: true,
         replication: true,
-        connection_limit: Some(10),
+        connection_limit: 10,
         password: Some("secret".to_string()),
         valid_until: Some("2025-01-01".to_string()),
         member_of: vec!["group1".to_string(), "group2".to_string()],
+        config: None,
+        is_predefined: false,
     };
     let sql = PostgresSqlGenerator.create_role(&role).unwrap();
     assert!(sql.contains("SUPERUSER"));
@@ -51,6 +57,7 @@ fn test_create_role_with_options() {
 #[test]
 fn test_drop_role() {
     let role = Role {
+        oid: 0,
         name: "test_user".to_string(),
         superuser: false,
         createdb: false,
@@ -58,10 +65,12 @@ fn test_drop_role() {
         inherit: true,
         login: true,
         replication: false,
-        connection_limit: None,
+        connection_limit: -1,
         password: None,
         valid_until: None,
         member_of: vec![],
+        config: None,
+        is_predefined: false,
     };
     let sql = PostgresSqlGenerator.drop_role(&role).unwrap();
     assert_eq!(sql, "DROP ROLE IF EXISTS \"test_user\" CASCADE;");

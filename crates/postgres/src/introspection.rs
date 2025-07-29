@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use shem_core::Result;
 use shem_core::schema::*;
 use tokio_postgres::GenericClient;
-use tracing::debug;
+use tracing::{debug, info};
+
+use crate::get_collations_map;
+use crate::get_qualified_name_map;
+use crate::parse_options;
 
 /// Introspect PostgreSQL database schema
 pub async fn introspect_schema<C>(client: &C) -> Result<Schema>
@@ -40,7 +44,7 @@ where
 
     // Introspect collations
     //Purpose: Define string sorting/rules (e.g., case-insensitive comparison).
-    let collations = introspect_collations(&*client).await?;
+    let collations = introspect_collations(&*client, false).await?;
     for collation in collations {
         schema.collations.insert(collation.name.clone(), collation);
     }
@@ -54,65 +58,32 @@ where
             .insert(tablespace.name.clone(), tablespace);
     }
 
+    // Introspect types
     // Introspect enums
     //Purpose: Define a static set of values (e.g., statuses, categories).
-    let enums = introspect_enums(&*client).await?;
-    for enum_type in enums {
-        schema.enums.insert(enum_type.name.clone(), enum_type);
-    }
-
     // Introspect domains
     // Purpose: Create a custom type with constraints (e.g., positive integers).
-    let domains = introspect_domains(&*client).await?;
-    for domain in domains {
-        schema.domains.insert(domain.name.clone(), domain);
-    }
 
     // Introspect base types
     // Purpose: Fundamental types like INTEGER, TEXT, JSONB.
-    //CREATE TYPE rgb_color AS ENUM ('red', 'green', 'blue');  -- Extends base types
-    let base_types = introspect_base_types(&*client).await?;
-    for base_type in base_types {
-        schema.base_types.insert(base_type.name.clone(), base_type);
-    }
 
     // Introspect composite types
     // Purpose: Combine multiple base types (e.g., address with street, city, state).
-    // CREATE TYPE address AS (street TEXT, city TEXT, zip VARCHAR(10));
-    let composite_types = introspect_composite_types(&*client).await?;
-    for composite_type in composite_types {
-        schema
-            .composite_types
-            .insert(composite_type.name.clone(), composite_type);
-    }
 
     // Introspect range types separately for detailed information
     // Purpose: Represent a range of values (e.g., dates, numbers).
-    let range_types = introspect_range_types(&*client).await?;
-    for range_type in range_types {
-        // Store range types in the types collection with a special prefix
-        schema
-            .range_types
-            .insert(range_type.name.clone(), range_type);
-    }
 
     // Introspect multirange types
     // Purpose: Discontinuous ranges (PostgreSQL 14+).
     // SELECT '[2023-01-01, 2023-01-05), [2023-02-01, 2023-02-03)'::DATEMULTIRANGE;
-    let multirange_types = introspect_multirange_types(&*client).await?;
-    for multirange_type in multirange_types {
-        schema
-            .multirange_types
-            .insert(multirange_type.name.clone(), multirange_type);
-    }
 
     // Introspect array types
     // Purpose: Store arrays of any base/composite type.
-    let array_types = introspect_array_types(&*client).await?;
-    for array_type in array_types {
+    let postgres_types = introspect_types(&*client, false).await?;
+    for postgres_type in postgres_types {
         schema
-            .array_types
-            .insert(array_type.name.clone(), array_type);
+            .types
+            .insert(postgres_type.name.clone(), postgres_type);
     }
 
     // Introspect sequences
@@ -246,6 +217,22 @@ pub async fn introspect_roles<C: GenericClient>(
     let version_row = client.query_one("SHOW server_version_num", &[]).await?;
     let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
 
+    tracing::debug!("PostgreSQL server version: {}", server_version_num);
+
+    // Check if rolsystem column exists in pg_roles
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_roles' 
+            AND column_name = 'rolsystem'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let rolsystem_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!("rolsystem column exists: {}", rolsystem_exists);
+
     // --- Query 1: Fetch all roles and their properties ---
     let mut role_query = String::from(
         r#"
@@ -264,15 +251,19 @@ pub async fn introspect_roles<C: GenericClient>(
     "#,
     );
 
-    // Use `rolsystem` on PG16+ for the most reliable filtering
-    if server_version_num >= 160000 {
+    // Use `rolsystem` if it exists, otherwise fallback to name-based detection
+    if rolsystem_exists {
+        tracing::debug!("Using rolsystem column for predefined role detection");
         role_query.push_str(", r.rolsystem AS is_predefined ");
     } else {
-        // Fallback for older versions
+        // Fallback for older versions or when rolsystem doesn't exist
+        tracing::debug!("Using fallback query for predefined role detection");
         role_query.push_str(", r.rolname LIKE 'pg_%' AS is_predefined ");
     }
 
     role_query.push_str("FROM pg_catalog.pg_roles r ORDER BY r.rolname");
+
+    tracing::debug!("Role query: {}", role_query);
 
     let role_rows = client.query(role_query.as_str(), &[]).await?;
 
@@ -347,14 +338,36 @@ async fn introspect_named_schemas<C: GenericClient>(
     client: &C,
     include_predefined: bool,
 ) -> Result<Vec<NamedSchema>> {
-    // 1. Get the last system OID to reliably distinguish system objects.
-    let last_system_oid_row = client
-        .query_one(
-            "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-            &[],
-        )
-        .await?;
-    let last_system_oid: u32 = last_system_oid_row.get("datlastsysoid");
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!("datlastsysoid column exists: {}", datlastsysoid_exists);
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID: {}", last_system_oid);
 
     // 2. Query for ALL schemas, including system ones, and also get extension info.
     //    We need all of them initially so that every object can be linked to a schema.
@@ -363,7 +376,7 @@ async fn introspect_named_schemas<C: GenericClient>(
          n.oid,
          n.nspname AS name,
          pg_get_userbyid(n.nspowner) AS owner,
-         n.nspacl AS acl,
+         n.nspacl::text AS acl,
          obj_description(n.oid, 'pg_namespace') AS comment,
          EXISTS (
              SELECT 1 FROM pg_depend d
@@ -434,14 +447,39 @@ pub async fn introspect_extensions<C: GenericClient>(
     client: &C,
     include_predefined: bool,
 ) -> Result<Vec<Extension>> {
-    // 1. Get the last system OID to reliably distinguish system objects from user objects.
-    let last_system_oid_row = client
-        .query_one(
-            "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-            &[],
-        )
-        .await?;
-    let last_system_oid: u32 = last_system_oid_row.get("datlastsysoid");
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!(
+        "datlastsysoid column exists (extensions): {}",
+        datlastsysoid_exists
+    );
+
+    // Get the last system OID to reliably distinguish system objects from user objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID (extensions): {}", last_system_oid);
 
     // 2. The query is now simpler. It fetches ALL extensions and more data fields.
     let query = r#"
@@ -483,9 +521,134 @@ pub async fn introspect_extensions<C: GenericClient>(
     }
     let dumpable_extensions = extensions
         .into_iter()
-        .filter(|e| !e.is_user_defined)
+        .filter(|e| e.is_user_defined)
         .collect();
     Ok(dumpable_extensions)
+}
+
+pub async fn introspect_collations<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Collation>> {
+    // 1. Get server version and last system OID for robust filtering
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
+
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    // Get the last system OID to reliably distinguish user-defined from system objects
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older versions: use a reasonable default
+        16384
+    };
+
+    // 2. Build a version-aware query to fetch ALL collations
+    let mut query = String::from(
+        r#"
+        SELECT
+            c.oid,
+            c.collname AS name,
+            n.nspname AS schema_name,
+            pg_get_userbyid(c.collowner) AS owner,
+            c.collcollate AS lc_collate,
+            c.collctype AS lc_ctype,
+            obj_description(c.oid, 'pg_collation') AS comment,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_collation'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+    "#,
+    );
+
+    // Add version-specific columns with fallbacks for older versions
+    if server_version_num >= 100000 {
+        query.push_str(", c.collprovider, c.collversion AS version");
+    } else {
+        query.push_str(", 'c'::char AS collprovider, NULL AS version");
+    }
+    if server_version_num >= 120000 {
+        query.push_str(", c.collisdeterministic AS deterministic");
+    } else {
+        query.push_str(", true AS deterministic");
+    }
+    if server_version_num >= 170000 {
+        // colllocale is new in v17
+        query.push_str(", c.colllocale AS icu_locale");
+    } else if server_version_num >= 150000 {
+        // colliculocale was the old name
+        query.push_str(", c.colliculocale AS icu_locale");
+    } else {
+        query.push_str(", NULL AS icu_locale");
+    }
+    if server_version_num >= 160000 {
+        query.push_str(", c.collicurules AS icu_rules");
+    } else {
+        query.push_str(", NULL AS icu_rules");
+    }
+
+    query.push_str(" FROM pg_collation c JOIN pg_namespace n ON c.collnamespace = n.oid");
+
+    let rows = client.query(query.as_str(), &[]).await?;
+    let mut all_collations = Vec::new();
+
+    for row in rows {
+        let oid: u32 = row.get("oid");
+        let provider_char: i8 = row.get("collprovider"); // 'c', 'i', 'b', 'd'
+
+        let provider_enum = match provider_char as u8 as char {
+            'c' => CollationProvider::Libc,
+            'i' => CollationProvider::Icu,
+            'b' => CollationProvider::Builtin,
+            'd' => CollationProvider::Default,
+            _ => CollationProvider::Libc, // Safe fallback
+        };
+
+        all_collations.push(Collation {
+            oid,
+            name: row.get("name"),
+            owner: row.get("owner"),
+            schema: row.get("schema_name"),
+            provider: provider_enum,
+            deterministic: row.get("deterministic"),
+            lc_collate: row.get("lc_collate"),
+            lc_ctype: row.get("lc_ctype"),
+            icu_locale: row.get("icu_locale"),
+            icu_rules: row.get("icu_rules"),
+            version: row.get("version"),
+            comment: row.get("comment"),
+            is_user_defined: oid > last_system_oid,
+            is_from_extension: row.get("is_from_extension"),
+        });
+    }
+
+    // 3. Apply filtering based on the flag
+    if include_predefined {
+        Ok(all_collations)
+    } else {
+        let dumpable_collations = all_collations
+            .into_iter()
+            .filter(|c| c.is_user_defined && !c.is_from_extension)
+            .collect();
+        Ok(dumpable_collations)
+    }
 }
 
 async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
@@ -1317,187 +1480,6 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
     Ok(procedures)
 }
 
-async fn introspect_composite_types<C: GenericClient>(client: &C) -> Result<Vec<CompositeType>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            t.typname AS name,
-            n.nspname AS schema,
-            att.attname AS attribute_name,
-            pg_catalog.format_type(att.atttypid, att.atttypmod) AS attribute_type,
-            att.attnum,
-            att.attnotnull AS is_not_null,
-            att.attcollation AS collation_oid,
-            att.attstorage AS storage_type,
-            att.attcompression AS compression,
-            pg_get_expr(ad.adbin, ad.adrelid) AS default_expr,
-            col.collname AS collation_name,
-            obj_description(t.oid, 'pg_type') AS type_comment,
-            obj_description(att.attrelid, 'pg_class') AS class_comment,
-            t.typowner AS owner
-        FROM pg_type t
-        JOIN pg_namespace n ON n.oid = t.typnamespace
-        JOIN pg_class c ON c.relname = t.typname AND c.relnamespace = t.typnamespace AND c.relkind = 'c'
-        JOIN pg_attribute att ON att.attrelid = c.oid
-        LEFT JOIN pg_attrdef ad ON ad.adrelid = att.attrelid AND ad.adnum = att.attnum
-        LEFT JOIN pg_collation col ON col.oid = att.attcollation
-        WHERE t.typtype = 'c'
-          AND att.attnum > 0
-          AND NOT att.attisdropped
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND t.typowner > 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM pg_depend dep
-              JOIN pg_extension e ON dep.refobjid = e.oid
-              WHERE dep.objid = t.oid AND dep.deptype = 'e'
-          )
-        ORDER BY n.nspname, t.typname, att.attnum
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-
-    use std::collections::BTreeMap;
-    let mut grouped: BTreeMap<(String, String), (Vec<Column>, Option<String>, u32)> =
-        BTreeMap::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let schema: String = row.get("schema");
-        let attr_name: String = row.get("attribute_name");
-        let attr_type: String = row.get("attribute_type");
-        let is_not_null: bool = row.get("is_not_null");
-        let collation_name: Option<String> = row.get("collation_name");
-        let storage_type: Option<i8> = row.get("storage_type");
-        let compression: Option<i8> = row.get("compression");
-        let default_expr: Option<String> = row.get("default_expr");
-        let type_comment: Option<String> = row.get("type_comment");
-        let class_comment: Option<String> = row.get("class_comment");
-        let owner: u32 = row.get("owner");
-
-        let storage = match storage_type.and_then(|b| std::char::from_u32(b as u32)) {
-            Some('p') => Some(ColumnStorage::Plain),
-            Some('e') => Some(ColumnStorage::External),
-            Some('x') => Some(ColumnStorage::Extended),
-            Some('m') => Some(ColumnStorage::Main),
-            _ => None,
-        };
-
-        // More robust compression handling
-        let compression = compression
-            .and_then(|b| std::char::from_u32(b as u32))
-            .map(|c| c.to_string());
-
-        let column = Column {
-            name: attr_name,
-            type_name: attr_type,
-            nullable: !is_not_null,
-            default: default_expr,
-            identity: None,         // Composite types don't have identity columns
-            generated: None,        // Composite types don't have generated columns
-            comment: class_comment, // Could be enhanced to get column comments if needed
-            collation: collation_name,
-            storage,
-            compression,
-        };
-
-        let entry = grouped.entry((schema.clone(), name.clone())).or_insert((
-            Vec::new(),
-            type_comment,
-            owner,
-        ));
-        entry.0.push(column);
-    }
-
-    let mut types = Vec::new();
-    for ((schema, name), (attrs, comment, _owner)) in grouped {
-        types.push(CompositeType {
-            name,
-            schema: Some(schema),
-            values: vec![], // Composite types don't have enum values
-            comment,
-            attributes: attrs,
-            definition: None, // Could be computed if needed
-        });
-    }
-
-    Ok(types)
-}
-
-async fn introspect_domains<C: GenericClient>(client: &C) -> Result<Vec<Domain>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            t.typname AS domain_name,
-            n.nspname AS domain_schema,
-            bt.typname AS base_type,
-            pg_catalog.format_type(t.typbasetype, t.typtypmod) AS formatted_base_type,
-            pg_get_expr(t.typdefaultbin, 0) AS domain_default,
-            c.conname AS constraint_name,
-            pg_get_constraintdef(c.oid) AS check_clause,
-            c.convalidated AS is_valid,
-            t.typnotnull AS is_not_null,
-            t.typowner AS owner,
-            obj_description(t.oid, 'pg_type') AS domain_comment,
-            t.typtypmod AS type_modifier
-        FROM pg_type t
-        JOIN pg_namespace n ON t.typnamespace = n.oid
-        JOIN pg_type bt ON t.typbasetype = bt.oid
-        LEFT JOIN pg_constraint c ON c.contypid = t.oid AND c.contype = 'c'
-        WHERE t.typtype = 'd'
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND t.typowner > 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM pg_depend dep
-              JOIN pg_extension e ON dep.refobjid = e.oid
-              WHERE dep.objid = t.oid AND dep.deptype = 'e'
-          )
-        ORDER BY n.nspname, t.typname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut domain_map = std::collections::HashMap::<(String, String), Domain>::new();
-
-    for row in rows {
-        let name: String = row.get("domain_name");
-        let schema: String = row.get("domain_schema");
-        let formatted_base_type: String = row.get("formatted_base_type");
-        let default: Option<String> = row.get("domain_default");
-        let check_clause: Option<String> = row.get("check_clause");
-        let is_valid: Option<bool> = row.get("is_valid");
-        let not_null: bool = row.get("is_not_null");
-        let comment: Option<String> = row.get("domain_comment");
-
-        let key = (schema.clone(), name.clone());
-
-        let domain = domain_map.entry(key.clone()).or_insert(Domain {
-            name: name.clone(),
-            schema: Some(schema),
-            base_type: formatted_base_type,
-            constraints: vec![],
-            default,
-            not_null,
-            comment,
-        });
-
-        if let Some(check) = check_clause {
-            let constraint_name: Option<String> = row.get("constraint_name");
-            domain.constraints.push(DomainConstraint {
-                name: constraint_name,
-                check,
-                not_valid: is_valid == Some(false),
-            });
-        }
-    }
-
-    Ok(domain_map.into_values().collect())
-}
-
 async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequence>>
 where
     C: GenericClient + Sync,
@@ -1949,64 +1931,6 @@ async fn introspect_event_triggers<C: GenericClient + Sync>(
     Ok(event_triggers)
 }
 
-async fn introspect_collations<C: GenericClient>(client: &C) -> Result<Vec<Collation>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            c.collname AS collation_name,
-            n.nspname AS schema_name,
-            c.collcollate AS lc_collate,
-            c.collctype AS lc_ctype,
-            c.collprovider::text AS provider,
-            c.collisdeterministic AS deterministic,
-            c.collowner AS owner
-        FROM pg_collation c
-        JOIN pg_namespace n ON c.collnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND NOT EXISTS (
-              SELECT 1 FROM pg_depend d
-              JOIN pg_extension e ON d.refobjid = e.oid
-              WHERE d.objid = c.oid AND d.deptype = 'e'
-          )
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut collations = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("collation_name");
-        let schema: Option<String> = row.get("schema_name");
-        let lc_collate: Option<String> = row.get("lc_collate");
-        let lc_ctype: Option<String> = row.get("lc_ctype");
-        let provider: String = row.get("provider");
-        let deterministic: bool = row.get("deterministic");
-
-        let provider_enum = match provider.as_str() {
-            "libc" => CollationProvider::Libc,
-            "icu" => CollationProvider::Icu,
-            "builtin" => CollationProvider::Builtin,
-            _ => CollationProvider::Libc, // fallback
-        };
-
-        // Use lc_collate as the primary locale, fallback to lc_ctype if needed
-        let locale = lc_collate.clone().or(lc_ctype.clone());
-
-        collations.push(Collation {
-            name,
-            schema,
-            locale,
-            lc_collate,
-            lc_ctype,
-            provider: provider_enum,
-            deterministic,
-        });
-    }
-
-    Ok(collations)
-}
-
 async fn introspect_rules<C: GenericClient>(client: &C) -> Result<Vec<Rule>>
 where
     C: GenericClient + Sync,
@@ -2165,115 +2089,6 @@ async fn introspect_constraint_triggers<C: GenericClient>(
     Ok(constraint_triggers)
 }
 
-async fn introspect_range_types<C: GenericClient>(client: &C) -> Result<Vec<RangeType>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-    SELECT 
-        t.typname AS type_name,
-        n.nspname AS schema_name,
-        r.rngsubtype AS subtype_oid,
-        r.rngsubopc AS subtype_opclass_oid,
-        r.rngcollation AS collation_oid,
-        p1.proname AS canonical_function,
-        p2.proname AS subtype_diff_function,
-        t.typowner AS owner,
-        obj_description(t.oid, 'pg_type') AS comment,
-        pg_catalog.format_type(r.rngsubtype, NULL) AS subtype_name,  -- <-- Corrected here
-        opc.opcname AS subtype_opclass_name,
-        coll.collname AS collation_name
-    FROM pg_type t
-    JOIN pg_namespace n ON t.typnamespace = n.oid
-    JOIN pg_range r ON t.oid = r.rngtypid
-    LEFT JOIN pg_proc p1 ON p1.oid = r.rngcanonical
-    LEFT JOIN pg_proc p2 ON p2.oid = r.rngsubdiff
-    LEFT JOIN pg_opclass opc ON opc.oid = r.rngsubopc
-    LEFT JOIN pg_collation coll ON coll.oid = r.rngcollation
-    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-    AND t.typowner > 1
-    AND NOT EXISTS (
-        SELECT 1 FROM pg_depend d
-        JOIN pg_extension e ON d.refobjid = e.oid
-        WHERE d.objid = t.oid AND d.deptype = 'e'
-    )
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut range_types = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("type_name");
-        let schema: Option<String> = row.get("schema_name");
-        let canonical = row.get::<_, Option<String>>("canonical_function");
-        let subtype_diff = row.get::<_, Option<String>>("subtype_diff_function");
-        let comment = row.get::<_, Option<String>>("comment");
-        let subtype = row
-            .get::<_, Option<String>>("subtype_name")
-            .unwrap_or_else(|| "unknown".to_string());
-        let subtype_opclass = row.get::<_, Option<String>>("subtype_opclass_name");
-        let collation = row.get::<_, Option<String>>("collation_name");
-
-        range_types.push(RangeType {
-            name,
-            schema,
-            subtype,
-            subtype_opclass,
-            collation,
-            canonical,
-            subtype_diff,
-            comment,
-            multirange_type_name: None, // TODO: Add when needed
-        });
-    }
-
-    Ok(range_types)
-}
-
-async fn introspect_enums<C: GenericClient>(client: &C) -> Result<Vec<EnumType>> {
-    let query = r#"
-        SELECT
-            t.typname                                            AS name,
-            n.nspname                                            AS schema,
-            array_agg(e.enumlabel ORDER BY e.enumsortorder)      AS values,
-            obj_description(t.oid, 'pg_type')                    AS comment          -- NEW
-        FROM pg_type       t
-        JOIN pg_enum       e ON e.enumtypid   = t.oid
-        JOIN pg_namespace  n ON n.oid         = t.typnamespace
-        WHERE t.typtype = 'e'
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        -- exclude enums that belong to installed extensions
-        AND NOT EXISTS (
-                SELECT 1
-                FROM pg_depend    d
-                JOIN pg_extension x ON x.oid = d.refobjid
-                WHERE d.objid = t.oid
-                AND d.deptype = 'e'
-        )
-        GROUP BY t.typname, n.nspname, t.oid             -- t.oid needed for comment
-        ORDER  BY n.nspname, t.typname;
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut enums = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let schema: Option<String> = row.get("schema");
-        let values: Vec<String> = row.get("values");
-        let comment: Option<String> = row.get("comment");
-
-        enums.push(EnumType {
-            name,
-            schema,
-            values,
-            comment,
-        });
-    }
-
-    Ok(enums)
-}
-
 async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Publication>> {
     let query = r#"
         SELECT 
@@ -2382,22 +2197,22 @@ async fn _introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<S
     Ok(subscriptions)
 }
 
-async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tablespace>> {
+pub async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tablespace>> {
+    // The query is now more robust and complete.
     let query = r#"
         SELECT 
+            t.oid,
             t.spcname AS name,
+            pg_get_userbyid(t.spcowner) AS owner,
             pg_tablespace_location(t.oid) AS location,
-            r.rolname AS owner,
             t.spcoptions AS options,
+            t.spcacl AS acl,
             obj_description(t.oid, 'pg_tablespace') AS comment
         FROM pg_tablespace t
-        LEFT JOIN pg_roles r ON t.spcowner = r.oid
         WHERE t.spcname NOT IN ('pg_default', 'pg_global')
-        AND t.spcowner > 1
         AND NOT EXISTS (
             SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
+            WHERE d.objid = t.oid AND d.classid = 'pg_tablespace'::regclass AND d.deptype = 'e'
         )
         ORDER BY t.spcname
     "#;
@@ -2406,22 +2221,17 @@ async fn introspect_tablespaces<C: GenericClient>(client: &C) -> Result<Vec<Tabl
     let mut tablespaces = Vec::new();
 
     for row in rows {
-        let name: String = row.get("name");
-        let location: String = row.get("location");
-        let owner: String = row.get("owner");
-        let options: Option<Vec<String>> = row.get("options");
-        let comment: Option<String> = row.get("comment");
-        let options_map = options
-            .as_deref()
-            .map(parse_server_options)
-            .unwrap_or_default();
+        // The `options` column is of type text[], so we get it as Vec<String>.
+        let options_vec: Option<Vec<String>> = row.get("options");
 
         tablespaces.push(Tablespace {
-            name,
-            location,
-            owner,
-            options: options_map,
-            comment,
+            oid: row.get("oid"),
+            name: row.get("name"),
+            location: row.get("location"),
+            owner: row.get("owner"),
+            options: options_vec.map_or_else(HashMap::new, |opts| parse_options(&opts)),
+            acl: row.get("acl"),
+            comment: row.get("comment"),
         });
     }
 
@@ -2711,182 +2521,310 @@ fn parse_server_options(options: &[String]) -> std::collections::HashMap<String,
     options_map
 }
 
-async fn introspect_base_types<C: GenericClient>(client: &C) -> Result<Vec<BaseType>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            t.typname AS name,
-            n.nspname AS schema,
-            t.typlen AS internal_length,
-            t.typbyval AS is_passed_by_value,
-            t.typalign::text AS alignment,
-            t.typstorage::text AS storage,
-            t.typcategory::text AS category,
-            t.typispreferred AS preferred,
-            t.typdefault AS default_value,
-            t.typrelid AS element_oid,
-            t.typdelim::text AS delimiter,
-            false AS collatable,
-            obj_description(t.oid, 'pg_type') AS comment
+pub async fn introspect_types<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Type>> {
+    // 1. Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!(
+        "datlastsysoid column exists (types): {}",
+        datlastsysoid_exists
+    );
+
+    // Get the last system OID to reliably distinguish system objects from user objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID (types): {}", last_system_oid);
+
+    // --- QUERY 1: Fetch all types from pg_type with all common and base-type properties ---
+    let types_query = r#"
+        SELECT
+            t.oid, t.typname AS name, n.nspname AS schema_name, pg_get_userbyid(t.typowner) AS owner,
+            t.typtype, t.typacl AS acl, obj_description(t.oid, 'pg_type') AS comment,
+            t.typarray AS array_type_oid,
+            -- Base type properties
+            t.typlen AS internal_length, t.typbyval AS is_passed_by_value, t.typalign, t.typstorage,
+            t.typcategory, t.typispreferred, pg_get_expr(t.typdefaultbin, 0) AS default_value,
+            t.typelem AS element_type_oid, t.typdelim AS delimiter, (t.typcollation <> 0) AS is_collatable,
+            t.typinput::regproc::text AS input_fn, t.typoutput::regproc::text AS output_fn,
+            t.typreceive::regproc::text AS receive_fn, t.typsend::regproc::text AS send_fn,
+            t.typmodin::regproc::text AS typmod_in_fn, t.typmodout::regproc::text AS typmod_out_fn,
+            t.typanalyze::regproc::text AS analyze_fn,
+            -- Domain properties
+            pg_catalog.format_type(t.typbasetype, t.typtypmod) AS base_type,
+            t.typnotnull AS not_null,
+            CASE WHEN t.typcollation <> bt.typcollation THEN t.typcollation ELSE 0 END AS collation_oid,
+            -- Composite type properties
+            t.typrelid as class_oid,
+            -- Extension dependency
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = t.oid AND d.classid = 'pg_type'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_type t
         JOIN pg_namespace n ON t.typnamespace = n.oid
-        WHERE t.typtype = 'b'  -- base types only
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.typowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
-        )
-        ORDER BY n.nspname, t.typname
+        LEFT JOIN pg_type bt ON t.typbasetype = bt.oid;
     "#;
+    let type_rows = client.query(types_query, &[]).await?;
 
-    let rows = client.query(query, &[]).await?;
-    let mut base_types = Vec::new();
+    // --- QUERY 2: Fetch all composite type attributes at once ---
+    let attributes_query = r#"
+        SELECT
+            a.attrelid AS class_oid,
+            a.attname AS name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name,
+            CASE WHEN a.attcollation <> t.typcollation THEN a.attcollation ELSE 0 END AS collation_oid
+        FROM pg_attribute a
+        JOIN pg_type t ON a.atttypid = t.oid
+        WHERE a.attnum > 0 AND NOT a.attisdropped
+          AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = a.attrelid AND c.relkind = 'c')
+        ORDER BY a.attrelid, a.attnum;
+    "#;
+    let attribute_rows = client.query(attributes_query, &[]).await?;
 
-    for row in rows {
+    // --- QUERY 3: Fetch all enum labels at once ---
+    let enums_query =
+        "SELECT oid, enumtypid, enumlabel FROM pg_enum ORDER BY enumtypid, enumsortorder";
+    let enum_rows = client.query(enums_query, &[]).await?;
+
+    // --- QUERY 4: Fetch all range type details at once ---
+    let ranges_query = r#"
+        SELECT
+            r.rngtypid AS oid,
+            pg_catalog.format_type(r.rngsubtype, NULL) AS subtype,
+            r.rngsubopc AS subtype_opclass_oid,
+            r.rngcollation AS collation_oid,
+            r.rngcanonical::regproc::text AS canonical_fn,
+            r.rngsubdiff::regproc::text AS subtype_diff_fn,
+            r.rngmultitypid as multirange_type_oid
+        FROM pg_range r;
+    "#;
+    let range_rows = client.query(ranges_query, &[]).await?;
+
+    // --- QUERY 5: Fetch all domain constraints ---
+    let domain_constraints_query = "SELECT oid, conname, contypid, pg_get_constraintdef(oid) AS definition, NOT convalidated AS not_valid FROM pg_constraint WHERE contypid != 0 AND contype = 'c'";
+    let domain_constraint_rows = client.query(domain_constraints_query, &[]).await?;
+
+    // --- Helper Data: Fetch collations and opclasses for name resolution ---
+    let collations_map =
+        get_qualified_name_map(client, "pg_collation", "collname", "collnamespace").await?;
+    let opclasses_map =
+        get_qualified_name_map(client, "pg_opclass", "opcname", "opcnamespace").await?;
+
+    // --- Process and Assemble in Rust ---
+    let mut types_map: HashMap<u32, Type> = HashMap::new();
+
+    for row in type_rows {
+        let oid: u32 = row.get("oid");
         let name: String = row.get("name");
-        let schema: Option<String> = row.get("schema");
-        let internal_length: i16 = row.get("internal_length");
-        let is_passed_by_value: bool = row.get("is_passed_by_value");
-        let alignment: String = row.get("alignment");
-        let storage: String = row.get("storage");
-        let category: Option<String> = row.get("category");
-        let preferred: bool = row.get("preferred");
-        let default_value: Option<String> = row.get("default_value");
-        let element_oid: Option<u32> = row.get("element_oid");
-        let delimiter: String = row.get("delimiter");
-        let collatable: bool = row.get("collatable");
-        let comment: Option<String> = row.get("comment");
 
-        // Get element type name if available
-        let element = if let Some(oid) = element_oid {
-            let element_query = "SELECT typname FROM pg_type WHERE oid = $1";
-            if let Ok(element_rows) = client.query(element_query, &[&oid]).await {
-                element_rows.first().map(|row| row.get("typname"))
-            } else {
-                None
-            }
-        } else {
-            None
+        let info = TypeInfo {
+            oid,
+            name: name.clone(),
+            schema: row.get("schema_name"),
+            owner: row.get("owner"),
+            acl: row.get("acl"),
+            comment: row.get("comment"),
+            is_user_defined: oid > last_system_oid,
+            is_from_extension: row.get("is_from_extension"),
+            array_type_oid: row.get::<_, u32>("array_type_oid").checked_sub(0),
         };
 
-        base_types.push(BaseType {
-            name,
-            schema,
-            internal_length: Some(internal_length as i32),
-            is_passed_by_value,
-            alignment,
-            storage,
-            category,
-            preferred,
-            default: default_value,
-            element,
-            delimiter: Some(delimiter),
-            collatable,
-            comment,
-        });
+        let type_char: i8 = row.get("typtype");
+        let new_type = match type_char as u8 as char {
+            'b' => {
+                let receive_fn: Option<String> = row.get("receive_fn");
+                let send_fn: Option<String> = row.get("send_fn");
+                Type::Base(BaseType {
+                    info,
+                    internal_length: row.get("internal_length"),
+                    is_passed_by_value: row.get("is_passed_by_value"),
+                    alignment: row.get::<_, i8>("typalign") as u8 as char,
+                    storage: row.get::<_, i8>("typstorage") as u8 as char,
+                    category: row.get::<_, i8>("typcategory") as u8 as char,
+                    is_preferred: row.get("is_preferred"),
+                    default_value: row.get("default_value"),
+                    element_type_oid: row.get::<_, u32>("element_type_oid").checked_sub(0),
+                    delimiter: row.get::<_, i8>("delimiter") as u8 as char,
+                    is_collatable: row.get("is_collatable"),
+                    input_fn: row.get("input_fn"),
+                    output_fn: row.get("output_fn"),
+                    receive_fn: if receive_fn.as_deref() == Some("-") {
+                        None
+                    } else {
+                        receive_fn
+                    },
+                    send_fn: if send_fn.as_deref() == Some("-") {
+                        None
+                    } else {
+                        send_fn
+                    },
+                    typmod_in_fn: row.get("typmod_in_fn"),
+                    typmod_out_fn: row.get("typmod_out_fn"),
+                    analyze_fn: row.get("analyze_fn"),
+                })
+            }
+            'c' => Type::Composite(CompositeType {
+                info,
+                attributes: Vec::new(), // Will be filled in below
+                class_oid: row.get("class_oid"),
+            }),
+            'd' => {
+                let collation_oid: u32 = row.get("collation_oid");
+                Type::Domain(Domain {
+                    info,
+                    base_type: row.get("base_type"),
+                    collation: if collation_oid > 0 {
+                        collations_map.get(&collation_oid).cloned()
+                    } else {
+                        None
+                    },
+                    not_null: row.get("not_null"),
+                    default: row.get("default"),
+                    constraints: Vec::new(), // Will be filled in below
+                })
+            }
+            'e' => Type::Enum(EnumType {
+                info,
+                values: Vec::new(), // Will be filled in below
+            }),
+            'r' => Type::Range(RangeType {
+                info,
+                subtype: String::new(), // Will be filled in below
+                subtype_opclass: String::new(),
+                collation: None,
+                canonical_fn: None,
+                subtype_diff_fn: None,
+                multirange_type_oid: None,
+            }),
+            'p' => Type::Pseudo(PseudoType { info }),
+            _ => continue, // Ignore other types like internal array types handled by `typarray`
+        };
+        types_map.insert(oid, new_type);
     }
 
-    Ok(base_types)
-}
-
-async fn introspect_array_types<C: GenericClient>(client: &C) -> Result<Vec<ArrayType>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            t.typname AS name,
-            n.nspname AS schema,
-            et.typname AS element_type,
-            en.nspname AS element_schema,
-            obj_description(t.oid, 'pg_type') AS comment
-        FROM pg_type t
-        JOIN pg_namespace n ON t.typnamespace = n.oid
-        JOIN pg_type et ON t.typelem = et.oid
-        JOIN pg_namespace en ON et.typnamespace = en.oid
-        WHERE t.typtype = 'b'  -- base types
-        AND t.typelem != 0     -- has element type (is array)
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.typowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
-        )
-        ORDER BY n.nspname, t.typname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut array_types = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let schema: Option<String> = row.get("schema");
-        let element_type: String = row.get("element_type");
-        let element_schema: Option<String> = row.get("element_schema");
-        let comment: Option<String> = row.get("comment");
-
-        array_types.push(ArrayType {
-            name,
-            schema,
-            element_type,
-            element_schema,
-            comment,
-        });
+    // Populate composite attributes
+    for row in attribute_rows {
+        let class_oid: u32 = row.get("class_oid");
+        if let Some(Type::Composite(c)) = types_map.values_mut().find(|t| match t {
+            Type::Composite(c) => c.class_oid == class_oid,
+            _ => false,
+        }) {
+            let collation_oid: u32 = row.get("collation_oid");
+            c.attributes.push(Attribute {
+                name: row.get("name"),
+                type_name: row.get("type_name"),
+                collation: if collation_oid > 0 {
+                    collations_map.get(&collation_oid).cloned()
+                } else {
+                    None
+                },
+            });
+        }
     }
 
-    Ok(array_types)
-}
-
-async fn introspect_multirange_types<C: GenericClient>(client: &C) -> Result<Vec<MultirangeType>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            mrt.typname AS name,
-            n.nspname AS schema,
-            rt.typname AS range_type,
-            rn.nspname AS range_schema,
-            obj_description(mrt.oid, 'pg_type') AS comment
-        FROM pg_range r
-        JOIN pg_type rt ON r.rngtypid = rt.oid
-        JOIN pg_namespace rn ON rt.typnamespace = rn.oid
-        JOIN pg_type mrt ON r.rngmultitypid = mrt.oid
-        JOIN pg_namespace n ON mrt.typnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = mrt.oid AND d.deptype = 'e'
-        )
-        ORDER BY n.nspname, mrt.typname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut multirange_types = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("name");
-        let schema: Option<String> = row.get("schema");
-        let range_type: String = row.get("range_type");
-        let range_schema: Option<String> = row.get("range_schema");
-        let comment: Option<String> = row.get("comment");
-
-        multirange_types.push(MultirangeType {
-            name,
-            schema,
-            range_type,
-            range_schema,
-            comment,
-        });
+    // Populate enum values
+    for row in enum_rows {
+        let type_oid: u32 = row.get("enumtypid");
+        if let Some(Type::Enum(e)) = types_map.get_mut(&type_oid) {
+            e.values.push(EnumValue {
+                oid: row.get("oid"),
+                label: row.get("label"),
+            });
+        }
     }
 
-    Ok(multirange_types)
+    // Populate range details
+    for row in range_rows {
+        let oid: u32 = row.get("oid");
+        if let Some(Type::Range(r)) = types_map.get_mut(&oid) {
+            let subtype_opclass_oid: u32 = row.get("subtype_opclass_oid");
+            let collation_oid: u32 = row.get("collation_oid");
+            let canonical_fn: Option<String> = row.get("canonical_fn");
+            let subtype_diff_fn: Option<String> = row.get("subtype_diff_fn");
+
+            r.subtype = row.get("subtype");
+            r.subtype_opclass = opclasses_map
+                .get(&subtype_opclass_oid)
+                .cloned()
+                .unwrap_or_default();
+            r.collation = if collation_oid > 0 {
+                collations_map.get(&collation_oid).cloned()
+            } else {
+                None
+            };
+            r.canonical_fn = if canonical_fn.as_deref() == Some("-") {
+                None
+            } else {
+                canonical_fn
+            };
+            r.subtype_diff_fn = if subtype_diff_fn.as_deref() == Some("-") {
+                None
+            } else {
+                subtype_diff_fn
+            };
+            r.multirange_type_oid = row.get::<_, u32>("multirange_type_oid").checked_sub(0);
+        }
+    }
+
+    // Populate domain constraints
+    for row in domain_constraint_rows {
+        let domain_oid: u32 = row.get("contypid");
+        if let Some(Type::Domain(d)) = types_map.get_mut(&domain_oid) {
+            d.constraints.push(DomainConstraint {
+                oid: row.get("oid"),
+                name: row.get("name"),
+                definition: row.get("definition"),
+                not_valid: row.get("not_valid"),
+            });
+        }
+    }
+
+    // --- Final Filtering ---
+    let all_types: Vec<Type> = types_map.into_values().collect();
+    if include_predefined {
+        Ok(all_types)
+    } else {
+        let dumpable_types = all_types
+            .into_iter()
+            .filter(|t| match t {
+                Type::Base(t) => {
+                    t.info.is_user_defined
+                        && !t.info.is_from_extension
+                        && t.info.element_type_oid.is_none()
+                }
+                Type::Composite(t) => t.info.is_user_defined && !t.info.is_from_extension,
+                Type::Domain(t) => t.info.is_user_defined && !t.info.is_from_extension,
+                Type::Enum(t) => t.info.is_user_defined && !t.info.is_from_extension,
+                Type::Range(t) => t.info.is_user_defined && !t.info.is_from_extension,
+                Type::Pseudo(_) => false, // Never dump pseudo-types
+            })
+            .collect();
+        Ok(dumpable_types)
+    }
 }
 
 fn parse_rule_definition(definition: &str) -> (Option<String>, String) {

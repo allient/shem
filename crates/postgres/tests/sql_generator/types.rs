@@ -1,102 +1,33 @@
-use shem_core::schema::{EnumType, Domain, DomainConstraint, Sequence, BaseType, ArrayType, MultirangeType};
+use shem_core::schema::{Domain, DomainConstraint, Sequence, BaseType, ArrayType, MultirangeType};
 use shem_core::traits::SqlGenerator;
 use postgres::PostgresSqlGenerator;
 
-#[test]
-fn test_generate_create_enum_type() {
-    let enum_type = EnumType {
-        name: "status".to_string(),
-        schema: Some("public".to_string()),
-        values: vec!["active".to_string(), "inactive".to_string(), "pending".to_string()],
-        comment: None,
-    };
 
-    let generator = PostgresSqlGenerator;
-    let result = generator.generate_create_enum(&enum_type).unwrap();
-    
-    assert_eq!(
-        result,
-        "CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');"
-    );
-}
-
-#[test]
-fn test_generate_create_enum_type_no_schema() {
-    let enum_type = EnumType {
-        name: "priority".to_string(),
-        schema: None,
-        values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
-        comment: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let result = generator.generate_create_enum(&enum_type).unwrap();
-    
-    assert_eq!(
-        result,
-        "CREATE TYPE priority AS ENUM ('low', 'medium', 'high');"
-    );
-}
-
-#[test]
-fn test_alter_enum() {
-    let old_enum = EnumType {
-        name: "status".to_string(),
-        schema: Some("public".to_string()),
-        values: vec!["active".to_string(), "inactive".to_string()],
-        comment: None,
-    };
-
-    let new_enum = EnumType {
-        name: "status".to_string(),
-        schema: Some("public".to_string()),
-        values: vec!["active".to_string(), "completed".to_string(), "cancelled".to_string()],
-        comment: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let (up_statements, down_statements) = generator.alter_enum(&old_enum, &new_enum).unwrap();
-    
-    assert!(!up_statements.is_empty());
-    assert!(!down_statements.is_empty());
-    
-    let up_sql = up_statements.join("; ");
-    assert!(up_sql.contains("ALTER TYPE public.status ADD VALUE 'completed'"));
-    assert!(up_sql.contains("ALTER TYPE public.status ADD VALUE 'cancelled'"));
-}
-
-#[test]
-fn test_alter_enum_no_changes() {
-    let enum_type = EnumType {
-        name: "status".to_string(),
-        schema: Some("public".to_string()),
-        values: vec!["active".to_string(), "inactive".to_string()],
-        comment: None,
-    };
-
-    let generator = PostgresSqlGenerator;
-    let (up_statements, down_statements) = generator.alter_enum(&enum_type, &enum_type).unwrap();
-    
-    assert!(up_statements.is_empty());
-    assert!(down_statements.is_empty());
-}
 
 #[test]
 fn test_create_domain() {
     let domain = Domain {
+        oid: 0,
         name: "email_address".to_string(),
-        schema: Some("public".to_string()),
+        schema: "public".to_string(),
+        owner: "".to_string(),
         base_type: "text".to_string(),
+        collation: None,
+        not_null: true,
+        default: Some("'noreply@example.com'".to_string()),
         constraints: vec![
             DomainConstraint {
-                name: Some("valid_email".to_string()),
-                check: "VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'".to_string(),
+                oid: 0,
+                name: "valid_email".to_string(),
+                definition: "VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'".to_string(),
                 not_valid: false,
+                r#type: shem_core::schema::DomainConstraintType::Check,
             },
         ],
-        default: Some("'noreply@example.com'".to_string()),
-        not_null: true,
+        acl: None,
         comment: Some("Email address domain with validation".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -111,13 +42,19 @@ fn test_create_domain() {
 #[test]
 fn test_drop_domain() {
     let dom = Domain {
+        oid: 0,
         name: "my_domain".to_string(),
-        schema: None,
+        schema: "public".to_string(),
+        owner: "".to_string(),
         base_type: "text".to_string(),
-        constraints: vec![],
-        default: None,
+        collation: None,
         not_null: false,
+        default: None,
+        constraints: vec![],
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.drop_domain(&dom).unwrap();

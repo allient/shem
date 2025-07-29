@@ -5,11 +5,14 @@ use postgres::PostgresSqlGenerator;
 #[test]
 fn test_create_extension() {
     let extension = Extension {
+        oid: 0,
         name: "uuid-ossp".to_string(),
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "1.1".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -21,11 +24,14 @@ fn test_create_extension() {
 #[test]
 fn test_create_extension_no_version() {
     let extension = Extension {
+        oid: 0,
         name: "pgcrypto".to_string(),
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -37,27 +43,33 @@ fn test_create_extension_no_version() {
 #[test]
 fn test_create_extension_with_schema() {
     let extension = Extension {
+        oid: 0,
         name: "postgis".to_string(),
-        schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "3.1.4".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
     let result = generator.create_extension(&extension).unwrap();
     
-    assert_eq!(result, "CREATE EXTENSION IF NOT EXISTS postgis VERSION '3.1.4' SCHEMA public;");
+    assert_eq!(result, "CREATE EXTENSION IF NOT EXISTS postgis VERSION '3.1.4';");
 }
 
 #[test]
 fn test_create_extension_with_reserved_keyword() {
     let extension = Extension {
+        oid: 0,
         name: "order".to_string(), // Reserved keyword
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "1.0".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -69,11 +81,14 @@ fn test_create_extension_with_reserved_keyword() {
 #[test]
 fn test_create_extension_with_hyphen() {
     let extension = Extension {
+        oid: 0,
         name: "uuid-ossp".to_string(),
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "1.1".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -85,11 +100,14 @@ fn test_create_extension_with_hyphen() {
 #[test]
 fn test_drop_extension() {
     let extension = Extension {
+        oid: 0,
         name: "my_extension".to_string(),
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -101,11 +119,14 @@ fn test_drop_extension() {
 #[test]
 fn test_drop_extension_with_schema() {
     let extension = Extension {
+        oid: 0,
         name: "my_extension".to_string(),
-        schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -117,11 +138,14 @@ fn test_drop_extension_with_schema() {
 #[test]
 fn test_drop_extension_with_reserved_keyword() {
     let extension = Extension {
+        oid: 0,
         name: "order".to_string(), // Reserved keyword
-        schema: None,
+        owner: "postgres".to_string(),
+        relocatable: false,
         version: "".to_string(),
-        cascade: false,
+        schema: "public".to_string(),
         comment: None,
+        is_user_defined: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -146,11 +170,14 @@ fn test_create_extension_common_extensions() {
 
     for (name, version) in common_extensions {
         let extension = Extension {
+            oid: 0,
             name: name.to_string(),
-            schema: None,
+            owner: "postgres".to_string(),
+            relocatable: false,
             version: version.to_string(),
-            cascade: false,
+            schema: "public".to_string(),
             comment: None,
+            is_user_defined: false,
         };
 
         let generator = PostgresSqlGenerator;

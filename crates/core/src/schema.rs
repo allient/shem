@@ -6,14 +6,13 @@ pub struct Schema {
     pub roles: HashMap<String, Role>,
     pub named_schemas: HashMap<String, NamedSchema>,
     pub extensions: HashMap<String, Extension>,
+    pub types: HashMap<String, Type>,
     pub name: Option<String>,
     pub tables: HashMap<String, Table>,
     pub views: HashMap<String, View>,
     pub materialized_views: HashMap<String, MaterializedView>,
     pub functions: HashMap<String, Function>,
     pub procedures: HashMap<String, Procedure>,
-    pub enums: HashMap<String, EnumType>,
-    pub domains: HashMap<String, Domain>,
     pub sequences: HashMap<String, Sequence>,
     pub triggers: HashMap<String, Trigger>,
     pub constraint_triggers: HashMap<String, ConstraintTrigger>,
@@ -22,19 +21,51 @@ pub struct Schema {
     pub servers: HashMap<String, Server>,
     pub collations: HashMap<String, Collation>,
     pub rules: HashMap<String, Rule>,
-    pub range_types: HashMap<String, RangeType>,
     pub publications: HashMap<String, Publication>,
     pub subscriptions: HashMap<String, Subscription>,
     pub tablespaces: HashMap<String, Tablespace>,
     pub foreign_tables: HashMap<String, ForeignTable>,
     pub foreign_data_wrappers: HashMap<String, ForeignDataWrapper>,
     pub foreign_key_constraints: HashMap<String, ForeignKeyConstraint>,
-    pub composite_types: HashMap<String, CompositeType>,
-    pub base_types: HashMap<String, BaseType>,
-    pub array_types: HashMap<String, ArrayType>,
-    pub multirange_types: HashMap<String, MultirangeType>,
 }
 
+impl Schema {
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            named_schemas: HashMap::new(),
+            tables: HashMap::new(),
+            views: HashMap::new(),
+            materialized_views: HashMap::new(),
+            functions: HashMap::new(),
+            procedures: HashMap::new(),
+            sequences: HashMap::new(),
+            extensions: HashMap::new(),
+            triggers: HashMap::new(),
+            constraint_triggers: HashMap::new(),
+            event_triggers: HashMap::new(),
+            policies: HashMap::new(),
+            servers: HashMap::new(),
+            collations: HashMap::new(),
+            rules: HashMap::new(),
+            publications: HashMap::new(),
+            subscriptions: HashMap::new(),
+            roles: HashMap::new(),
+            tablespaces: HashMap::new(),
+            foreign_tables: HashMap::new(),
+            foreign_data_wrappers: HashMap::new(),
+            foreign_key_constraints: HashMap::new(),
+            types: HashMap::new(),
+        }
+    }
+
+    pub fn with_name(name: String) -> Self {
+        Self {
+            name: Some(name),
+            ..Self::new()
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Role {
     pub oid: u32,
@@ -145,17 +176,6 @@ pub struct Procedure {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Domain {
-    pub name: String,
-    pub schema: Option<String>,
-    pub base_type: String,
-    pub constraints: Vec<DomainConstraint>, // Enhanced: structured constraints
-    pub default: Option<String>,            // Added: default value
-    pub not_null: bool,                     // Added: NOT NULL constraint
-    pub comment: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sequence {
     pub name: String,
     pub schema: Option<String>,
@@ -236,15 +256,30 @@ pub struct EventTrigger {
     pub condition: Option<String>, // Added: WHEN condition
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CollationProvider {
+    Libc,
+    Icu,
+    Builtin,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collation {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
-    pub locale: Option<String>,
-    pub lc_collate: Option<String>,  // Enhanced: separate LC_COLLATE
-    pub lc_ctype: Option<String>,    // Enhanced: separate LC_CTYPE
-    pub provider: CollationProvider, // Enhanced: structured provider
-    pub deterministic: bool,         // Added: deterministic flag
+    pub owner: String,
+    pub schema: String,
+    pub provider: CollationProvider,
+    pub deterministic: bool,
+    pub lc_collate: Option<String>,
+    pub lc_ctype: Option<String>,
+    pub icu_locale: Option<String>, // For ICU collations (Postgres 15+)
+    pub icu_rules: Option<String>,  // For ICU collations (Postgres 16+)
+    pub version: Option<String>,    // (Postgres 10+)
+    pub comment: Option<String>,    // We'll add this to the query
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -272,19 +307,6 @@ pub struct ConstraintTrigger {
     pub initially_deferred: bool, // Added: initially deferred
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RangeType {
-    pub name: String,
-    pub schema: Option<String>,
-    pub subtype: String,
-    pub subtype_opclass: Option<String>,
-    pub collation: Option<String>,
-    pub canonical: Option<String>,
-    pub subtype_diff: Option<String>,
-    pub multirange_type_name: Option<String>, // Added: multirange type
-    pub comment: Option<String>,
-}
-
 // New structures for additional PostgreSQL objects
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Publication {
@@ -308,10 +330,12 @@ pub struct Subscription {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Tablespace {
+    pub oid: u32,
     pub name: String,
     pub location: String,
     pub owner: String,
     pub options: HashMap<String, String>,
+    pub acl: Option<String>,
     pub comment: Option<String>,
 }
 
@@ -383,10 +407,9 @@ pub struct ReturnType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DomainConstraint {
-    pub name: Option<String>,
-    pub check: String,
-    pub not_valid: bool, // Added: NOT VALID constraint
+pub enum DomainConstraintType {
+    Check,
+    NotNull,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -506,13 +529,6 @@ pub enum EventTriggerEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum CollationProvider {
-    Libc,
-    Icu,
-    Builtin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum IndexMethod {
     Btree,
     Hash,
@@ -561,39 +577,108 @@ pub struct ForeignKeyConstraint {
     pub initially_deferred: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EnumType {
-    pub name: String,
-    pub schema: Option<String>,
-    pub values: Vec<String>,
-    pub comment: Option<String>,
+// The specific struct for a pseudo-type.
+// It might not even need any fields beyond the common ones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PseudoType {
+    pub info: TypeInfo,
+    // You could add specific flags here if needed, but it's often unnecessary.
+    // For example, is_polymorphic: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CompositeType {
-    pub name: String,
-    pub schema: Option<String>,
-    pub values: Vec<String>,
-    pub comment: Option<String>,
-    pub attributes: Vec<Column>,
-    pub definition: Option<String>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Type {
+    Base(BaseType),
+    Composite(CompositeType),
+    Domain(Domain),
+    Enum(EnumType),
+    Range(RangeType),
+    Pseudo(PseudoType), // For things like 'any', 'void', etc. // Array and Multirange types are properties of other types, not distinct kinds.
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Common information for all types
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeInfo {
+    pub oid: u32,
+    pub name: String,
+    pub schema: String,
+    pub owner: String,
+    pub acl: Option<String>,
+    pub comment: Option<String>,
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
+    pub array_type_oid: Option<u32>,
+}
+
+// Base Type ('b')
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaseType {
-    pub name: String,
-    pub schema: Option<String>,
-    pub internal_length: Option<i32>,
+    pub info: TypeInfo,
+    pub internal_length: i16,
     pub is_passed_by_value: bool,
-    pub alignment: String,
-    pub storage: String,
-    pub category: Option<String>,
-    pub preferred: bool,
+    pub alignment: char,
+    pub storage: char,
+    pub category: char,
+    pub is_preferred: bool,
+    pub default_value: Option<String>,
+    pub element_type_oid: Option<u32>, // 0 if not an array type
+    pub delimiter: char,
+    pub is_collatable: bool,
+    // I/O functions are critical for CREATE TYPE
+    pub input_fn: String,
+    pub output_fn: String,
+    pub receive_fn: Option<String>,
+    pub send_fn: Option<String>,
+    pub typmod_in_fn: Option<String>,
+    pub typmod_out_fn: Option<String>,
+    pub analyze_fn: Option<String>,
+}
+
+// Composite Type ('c')
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompositeType {
+    pub info: TypeInfo,
+    pub attributes: Vec<Attribute>,
+    pub class_oid: u32, // OID of the backing pg_class entry
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Attribute {
+    pub name: String,
+    pub type_name: String,         // Fully formatted type
+    pub collation: Option<String>, // Fully qualified collation name
+}
+
+// Domain Type ('d')
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Domain {
+    pub info: TypeInfo,
+    pub base_type: String,         // Fully formatted base type
+    pub collation: Option<String>, // Fully qualified collation name
+    pub not_null: bool,
     pub default: Option<String>,
-    pub element: Option<String>,
-    pub delimiter: Option<String>,
-    pub collatable: bool,
-    pub comment: Option<String>,
+    pub constraints: Vec<DomainConstraint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DomainConstraint {
+    pub oid: u32,
+    pub name: String,
+    pub definition: String, // The full CHECK (...) text
+    pub not_valid: bool,
+}
+
+// Enum Type ('e')
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnumType {
+    pub info: TypeInfo,
+    pub values: Vec<EnumValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnumValue {
+    pub oid: u32,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -605,55 +690,14 @@ pub struct ArrayType {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MultirangeType {
-    pub name: String,
-    pub schema: Option<String>,
-    pub range_type: String,
-    pub range_schema: Option<String>,
-    pub comment: Option<String>,
-}
-
-impl Schema {
-    pub fn new() -> Self {
-        Self {
-            name: None,
-            named_schemas: HashMap::new(),
-            tables: HashMap::new(),
-            views: HashMap::new(),
-            materialized_views: HashMap::new(),
-            functions: HashMap::new(),
-            procedures: HashMap::new(),
-            enums: HashMap::new(),
-            domains: HashMap::new(),
-            sequences: HashMap::new(),
-            extensions: HashMap::new(),
-            triggers: HashMap::new(),
-            constraint_triggers: HashMap::new(),
-            event_triggers: HashMap::new(),
-            policies: HashMap::new(),
-            servers: HashMap::new(),
-            collations: HashMap::new(),
-            rules: HashMap::new(),
-            range_types: HashMap::new(),
-            publications: HashMap::new(),
-            subscriptions: HashMap::new(),
-            roles: HashMap::new(),
-            tablespaces: HashMap::new(),
-            foreign_tables: HashMap::new(),
-            foreign_data_wrappers: HashMap::new(),
-            foreign_key_constraints: HashMap::new(),
-            composite_types: HashMap::new(),
-            base_types: HashMap::new(),
-            array_types: HashMap::new(),
-            multirange_types: HashMap::new(),
-        }
-    }
-
-    pub fn with_name(name: String) -> Self {
-        Self {
-            name: Some(name),
-            ..Self::new()
-        }
-    }
+// Range Type ('r')
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RangeType {
+    pub info: TypeInfo,
+    pub subtype: String,
+    pub subtype_opclass: String,   // Fully qualified opclass name
+    pub collation: Option<String>, // Fully qualified collation name
+    pub canonical_fn: Option<String>,
+    pub subtype_diff_fn: Option<String>,
+    pub multirange_type_oid: Option<u32>,
 }

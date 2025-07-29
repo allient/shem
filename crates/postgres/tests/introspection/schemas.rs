@@ -67,7 +67,7 @@ async fn test_introspect_schema_with_owner() -> Result<(), Box<dyn std::error::E
     assert_eq!(schema_obj.name, "test_schema_owner");
     assert_eq!(
         schema_obj.owner,
-        Some("postgres".to_string()),
+        "postgres",
         "Schema should have the specified owner"
     );
 

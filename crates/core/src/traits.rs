@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::schema::{
-    Collation, ConstraintTrigger, Domain, EnumType, EventTrigger, Extension, Function, Index,
-    MaterializedView, Policy, Procedure, Publication, Role, Rule, Schema, Sequence, Server, Table, Tablespace, Trigger, View,
-    BaseType, ArrayType, MultirangeType, CompositeType, RangeType, Subscription, ForeignTable, ForeignDataWrapper,
+    Collation, ConstraintTrigger, EventTrigger, Extension, ForeignDataWrapper, ForeignTable,
+    Function, Index, MaterializedView, Policy, Procedure, Publication, Role, Rule, Schema,
+    Sequence, Server, Subscription, Table, Tablespace, Trigger, Type, View,
 };
 use async_trait::async_trait;
 use std::fmt::Debug;
@@ -73,6 +73,12 @@ pub trait Transaction: Send + Sync {
 /// SQL generator trait
 #[async_trait]
 pub trait SqlGenerator: Send + Sync {
+    /// Generate CREATE SQL for any kind of type.
+    fn create_type(&self, t: &Type) -> Result<String>;
+
+    /// Generate DROP SQL for any kind of type.
+    fn drop_type(&self, t: &Type) -> Result<String>;
+
     /// Generate CREATE TABLE SQL
     fn generate_create_table(&self, table: &Table) -> Result<String>;
 
@@ -105,39 +111,6 @@ pub trait SqlGenerator: Send + Sync {
 
     /// Generate DROP PROCEDURE SQL
     fn drop_procedure(&self, proc: &Procedure) -> Result<String>;
-
-    /// Generate CREATE TYPE SQL
-    fn generate_create_enum(&self, enum_type: &EnumType) -> Result<String>;
-
-    /// Generate CREATE BASE TYPE SQL
-    fn create_base_type(&self, base_type: &BaseType) -> Result<String>;
-
-    /// Generate DROP BASE TYPE SQL
-    fn drop_base_type(&self, base_type: &BaseType) -> Result<String>;
-
-    /// Generate CREATE ARRAY TYPE SQL
-    fn create_array_type(&self, array_type: &ArrayType) -> Result<String>;
-
-    /// Generate DROP ARRAY TYPE SQL
-    fn drop_array_type(&self, array_type: &ArrayType) -> Result<String>;
-
-    /// Generate CREATE MULTIRANGE TYPE SQL
-    fn create_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String>;
-
-    /// Generate DROP MULTIRANGE TYPE SQL
-    fn drop_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String>;
-
-    /// Generate CREATE ENUM SQL
-    fn create_enum(&self, enum_type: &EnumType) -> Result<String>;
-
-    /// Generate ALTER ENUM SQL
-    fn alter_enum(&self, old: &EnumType, new: &EnumType) -> Result<(Vec<String>, Vec<String>)>;
-
-    /// Generate CREATE DOMAIN SQL
-    fn create_domain(&self, domain: &Domain) -> Result<String>;
-
-    /// Generate DROP DOMAIN SQL
-    fn drop_domain(&self, domain: &Domain) -> Result<String>;
 
     /// Generate CREATE SEQUENCE SQL
     fn create_sequence(&self, seq: &Sequence) -> Result<String>;
@@ -209,10 +182,20 @@ pub trait SqlGenerator: Send + Sync {
     fn comment_on(&self, object_type: &str, object_name: &str, comment: &str) -> Result<String>;
 
     /// Generate GRANT privileges SQL
-    fn grant_privileges(&self, privileges: &[String], on_object: &str, to_roles: &[String]) -> Result<String>;
+    fn grant_privileges(
+        &self,
+        privileges: &[String],
+        on_object: &str,
+        to_roles: &[String],
+    ) -> Result<String>;
 
     /// Generate REVOKE privileges SQL
-    fn revoke_privileges(&self, privileges: &[String], on_object: &str, from_roles: &[String]) -> Result<String>;
+    fn revoke_privileges(
+        &self,
+        privileges: &[String],
+        on_object: &str,
+        from_roles: &[String],
+    ) -> Result<String>;
 
     /// Generate CREATE ROLE SQL
     fn create_role(&self, role: &Role) -> Result<String>;
@@ -231,18 +214,6 @@ pub trait SqlGenerator: Send + Sync {
 
     /// Generate DROP PUBLICATION SQL
     fn drop_publication(&self, publication: &Publication) -> Result<String>;
-
-    /// Generate CREATE COMPOSITE TYPE SQL
-    fn create_composite_type(&self, composite_type: &CompositeType) -> Result<String>;
-
-    /// Generate DROP COMPOSITE TYPE SQL
-    fn drop_composite_type(&self, composite_type: &CompositeType) -> Result<String>;
-
-    /// Generate CREATE RANGE TYPE SQL
-    fn create_range_type(&self, range_type: &RangeType) -> Result<String>;
-
-    /// Generate DROP RANGE TYPE SQL
-    fn drop_range_type(&self, range_type: &RangeType) -> Result<String>;
 
     /// Generate CREATE SUBSCRIPTION SQL
     fn create_subscription(&self, subscription: &Subscription) -> Result<String>;
@@ -375,10 +346,6 @@ pub trait AsyncSqlGenerator: Send + Sync {
         new: &Table,
     ) -> Result<(Vec<String>, Vec<String>)>;
     async fn generate_drop_table_async(&self, table: &Table) -> Result<String>;
-    async fn generate_create_enum_async(&self, enum_type: &EnumType) -> Result<String>;
-    async fn generate_create_base_type_async(&self, base_type: &BaseType) -> Result<String>;
-    async fn generate_create_array_type_async(&self, array_type: &ArrayType) -> Result<String>;
-    async fn generate_create_multirange_type_async(&self, multirange_type: &MultirangeType) -> Result<String>;
 }
 
 #[async_trait]

@@ -619,7 +619,7 @@ fn generate_create_domain(domain: &Domain) -> Result<String> {
 
     // Add constraints
     for constraint in &domain.constraints {
-        sql.push_str(&format!(" CHECK ({})", constraint.check));
+        sql.push_str(&format!(" CHECK ({})", constraint.definition));
     }
 
     sql.push(';');
@@ -833,8 +833,8 @@ fn generate_create_server(server: &Server) -> Result<String> {
 fn generate_create_enum(enum_type: &EnumType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", enum_type.name);
 
-    if let Some(schema) = &enum_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, enum_type.name);
+    if enum_type.schema != "public" {
+        sql = format!("CREATE TYPE {}.{}", enum_type.schema, enum_type.name);
     }
 
     sql.push_str(" AS ENUM (");
@@ -842,7 +842,7 @@ fn generate_create_enum(enum_type: &EnumType) -> Result<String> {
     let values = enum_type
         .values
         .iter()
-        .map(|v| format!("'{}'", v))
+        .map(|v| format!("'{}'", v.label))
         .collect::<Vec<_>>()
         .join(", ");
 

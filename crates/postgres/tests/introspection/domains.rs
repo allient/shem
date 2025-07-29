@@ -81,7 +81,7 @@ async fn test_introspect_domain_with_schema() -> Result<(), Box<dyn std::error::
     assert_eq!(dom.name, "schema_domain");
     assert_eq!(
         dom.schema,
-        Some("test_domain_schema".to_string()),
+        "test_domain_schema".to_string(),
         "Domain should be in the specified schema"
     );
     assert_eq!(dom.base_type, "text");
@@ -166,8 +166,8 @@ async fn test_introspect_domain_with_constraints() -> Result<(), Box<dyn std::er
 
     let constraint = &dom.constraints[0];
     debug!("Constraint: {:?}", constraint);
-    assert_eq!(constraint.name, Some("test_constraint_domain_check".to_string()));
-    assert_eq!(constraint.check, "CHECK ((VALUE > 0))");
+    assert_eq!(constraint.name, "test_constraint_domain_check".to_string());
+    assert_eq!(constraint.definition, "CHECK ((VALUE > 0))");
     assert!(!constraint.not_valid, "Constraint should be valid");
 
     // Clean up
@@ -208,8 +208,8 @@ async fn test_introspect_domain_with_named_constraints() -> Result<(), Box<dyn s
     );
 
     let constraint = &dom.constraints[0];
-    assert_eq!(constraint.name, Some("test_named_constraint".to_string()));
-    assert_eq!(constraint.check, "CHECK ((length(VALUE) > 0))");
+    assert_eq!(constraint.name, "test_named_constraint".to_string());
+    assert_eq!(constraint.definition, "CHECK ((length(VALUE) > 0))");
     assert!(!constraint.not_valid, "Constraint should be valid");
 
     // Clean up
@@ -538,8 +538,8 @@ async fn test_introspect_domain_all_features() -> Result<(), Box<dyn std::error:
     );
 
     let constraint = &dom.constraints[0];
-    assert_eq!(constraint.name, Some("test_all_features_check".to_string()));
-    assert_eq!(constraint.check, "CHECK ((VALUE >= 0.00))");
+    assert_eq!(constraint.name, "test_all_features_check".to_string());
+    assert_eq!(constraint.definition, "CHECK ((VALUE >= 0.00))");
     assert!(!constraint.not_valid, "Constraint should be valid");
 
     // Clean up
@@ -580,7 +580,7 @@ async fn test_introspect_domain_multiple_constraints() -> Result<(), Box<dyn std
     );
 
     // Verify constraint details
-    let constraints: Vec<&str> = dom.constraints.iter().map(|c| c.check.as_str()).collect();
+    let constraints: Vec<&str> = dom.constraints.iter().map(|c| c.definition.as_str()).collect();
     debug!("Constraints: {:?}", constraints);
     assert!(constraints.contains(&"CHECK ((VALUE > 0))"));
     assert!(constraints.contains(&"CHECK ((VALUE < 1000))"));

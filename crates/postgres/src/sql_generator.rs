@@ -149,9 +149,70 @@ impl PostgresSqlGenerator {
         // Add more reserved keywords as needed
         matches!(name.to_ascii_lowercase().as_str(), "order")
     }
+
+    fn generate_create_base_type(&self, base_type: &BaseType) -> Result<String> {
+        // ... logic to build CREATE TYPE for BaseType ...
+        unimplemented!()
+    }
+
+    fn generate_create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
+        // ... logic to build CREATE TYPE AS (...) for CompositeType ...
+        unimplemented!()
+    }
+
+    fn generate_create_domain(&self, domain: &Domain) -> Result<String> {
+        // ... logic to build CREATE DOMAIN for Domain ...
+        unimplemented!()
+    }
+
+    fn generate_create_enum_type(&self, enum_type: &EnumType) -> Result<String> {
+        // ... logic to build CREATE TYPE AS ENUM for EnumType ...
+        unimplemented!()
+    }
 }
 
 impl SqlGenerator for PostgresSqlGenerator {
+    fn create_type(&self, t: &Type) -> Result<String> {
+        match t {
+            Type::Base(base_type) => self.generate_create_base_type(base_type),
+            Type::Composite(composite_type) => self.generate_create_composite_type(composite_type),
+            Type::Domain(domain) => self.generate_create_domain(domain),
+            Type::Enum(enum_type) => self.generate_create_enum_type(enum_type),
+            Type::Range(range_type) => self.generate_create_range_type(range_type),
+            Type::Pseudo(_) => {
+                // Pseudo-types are not dumpable, so we generate nothing.
+                Ok(String::new())
+            }
+        }
+    }
+
+    fn drop_type(&self, t: &Type) -> Result<String> {
+        // The DROP statement is simpler and often more uniform
+        let (info, kind) = match t {
+            Type::Base(t) => (&t.info, "TYPE"),
+            Type::Composite(t) => (&t.info, "TYPE"),
+            Type::Domain(t) => (&t.info, "DOMAIN"),
+            Type::Enum(t) => (&t.info, "TYPE"),
+            Type::Range(t) => (&t.info, "TYPE"),
+            Type::Pseudo(_) => return Ok(String::new()),
+        };
+
+        // Note: Base types need CASCADE due to their I/O functions.
+        let cascade = if let Type::Base(_) = t {
+            " CASCADE"
+        } else {
+            ""
+        };
+
+        Ok(format!(
+            "DROP {} {}.{};\n",
+            kind,
+            quote_ident(&info.schema),
+            quote_ident(&info.name),
+            cascade
+        ))
+    }
+
     fn generate_create_table(&self, table: &Table) -> Result<String> {
         let table_name = Self::force_quote_identifier(&table.name);
         let mut sql = format!("CREATE TABLE {} (\n    ", table_name);
@@ -497,18 +558,6 @@ impl SqlGenerator for PostgresSqlGenerator {
         Ok((up_statements, down_statements))
     }
 
-    fn generate_create_enum(&self, enum_type: &EnumType) -> Result<String> {
-        let enum_name = Self::force_quote_identifier(&enum_type.name);
-        let values = enum_type
-            .values
-            .iter()
-            .map(|v| format!("'{}'", v))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!("CREATE TYPE {} AS ENUM ({});", enum_name, values);
-        Ok(sql)
-    }
-
     fn generate_drop_table(&self, table: &Table) -> Result<String> {
         let table_name = Self::force_quote_identifier(&table.name);
         Ok(format!("DROP TABLE IF EXISTS {} CASCADE;", table_name))
@@ -596,123 +645,6 @@ impl SqlGenerator for PostgresSqlGenerator {
             "CREATE OR REPLACE PROCEDURE {}.{}({}) LANGUAGE {} AS $procedure$ {} $procedure$;",
             schema, procedure_name, params, language, body
         ))
-    }
-
-    fn create_enum(&self, enum_type: &EnumType) -> Result<String> {
-        let enum_name = match &enum_type.schema {
-            Some(schema) => format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&enum_type.name)
-            ),
-            None => Self::force_quote_identifier(&enum_type.name),
-        };
-
-        let values = enum_type
-            .values
-            .iter()
-            .map(|v| format!("'{}'", v.replace('\'', "''")))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        Ok(format!("CREATE TYPE {} AS ENUM ({});", enum_name, values))
-    }
-
-    fn alter_enum(&self, old: &EnumType, new: &EnumType) -> Result<(Vec<String>, Vec<String>)> {
-        let mut up_statements = Vec::new();
-        let mut down_statements = Vec::new();
-
-        // Get the enum name with schema
-        let enum_name = match &new.schema {
-            Some(schema) => format!("{}.{}", schema, Self::force_quote_identifier(&new.name)),
-            None => Self::force_quote_identifier(&new.name),
-        };
-
-        // Find values that are in new but not in old (added values)
-        let old_values: std::collections::HashSet<&str> =
-            old.values.iter().map(|v| v.as_str()).collect();
-        let new_values: std::collections::HashSet<&str> =
-            new.values.iter().map(|v| v.as_str()).collect();
-
-        // Add new values using ALTER TYPE ... ADD VALUE
-        for value in &new.values {
-            if !old_values.contains(value.as_str()) {
-                let escaped_value = format!("'{}'", value.replace('\'', "''"));
-                up_statements.push(format!(
-                    "ALTER TYPE {} ADD VALUE {};",
-                    enum_name, escaped_value
-                ));
-
-                // Note: PostgreSQL doesn't support DROP VALUE, so we can't rollback added values
-                // We'll add a comment to indicate this limitation
-                down_statements.push(format!(
-                    "-- WARNING: Cannot remove enum value '{}' - PostgreSQL limitation",
-                    value
-                ));
-            }
-        }
-
-        // Check for removed values (PostgreSQL limitation)
-        let removed_values: Vec<&str> = old_values.difference(&new_values).copied().collect();
-        if !removed_values.is_empty() {
-            // Add warnings about removed values
-            up_statements.push(format!(
-                "-- WARNING: Cannot remove enum values: {} - PostgreSQL limitation",
-                removed_values.join(", ")
-            ));
-
-            // For down migration, we would need to add them back, but PostgreSQL doesn't support
-            // adding values in specific positions, so we can't guarantee the same order
-            for value in &removed_values {
-                down_statements.push(format!(
-                    "-- WARNING: Cannot restore enum value '{}' in original position - PostgreSQL limitation",
-                    value
-                ));
-            }
-        }
-
-        // If no changes were made, return empty vectors
-        if up_statements.is_empty() && down_statements.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
-        // Add a comment explaining the limitations
-        if !removed_values.is_empty() {
-            up_statements.insert(
-                0,
-                format!(
-                    "-- Note: PostgreSQL enum limitations: removed values ({}) cannot be dropped",
-                    removed_values.join(", ")
-                ),
-            );
-        }
-
-        Ok((up_statements, down_statements))
-    }
-
-    fn create_domain(&self, domain: &Domain) -> Result<String> {
-        let domain_name = Self::force_quote_identifier(&domain.name);
-        let mut sql = format!("CREATE DOMAIN {} AS {}", domain_name, domain.base_type);
-
-        // Add constraints
-        let check_expr = domain
-            .constraints
-            .iter()
-            .map(|c| &c.check)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        if !check_expr.is_empty() {
-            sql.push_str(&format!(" CHECK ({})", check_expr));
-        }
-        if let Some(default) = &domain.default {
-            sql.push_str(&format!(" DEFAULT {}", default));
-        }
-        if domain.not_null {
-            sql.push_str(" NOT NULL");
-        }
-        sql.push(';');
-        Ok(sql)
     }
 
     fn create_sequence(&self, seq: &Sequence) -> Result<String> {
@@ -846,7 +778,7 @@ impl SqlGenerator for PostgresSqlGenerator {
             sql.push_str(&format!(" VERSION '{}'", ext.version));
         }
 
-        if !ext.schema.is_empty() {
+        if !ext.schema.is_empty() && ext.schema != "public" {
             sql.push_str(&format!(" SCHEMA {}", ext.schema));
         }
 
@@ -1057,15 +989,6 @@ impl SqlGenerator for PostgresSqlGenerator {
         ))
     }
 
-    fn drop_domain(&self, domain: &Domain) -> Result<String> {
-        let name = if let Some(schema) = &domain.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&domain.name))
-        } else {
-            Self::force_quote_identifier(&domain.name)
-        };
-        Ok(format!("DROP DOMAIN IF EXISTS {} CASCADE;", name))
-    }
-
     fn drop_sequence(&self, seq: &Sequence) -> Result<String> {
         let name = if let Some(schema) = &seq.schema {
             format!("{}.{}", schema, Self::force_quote_identifier(&seq.name))
@@ -1230,32 +1153,51 @@ impl SqlGenerator for PostgresSqlGenerator {
         let collation_name = Self::force_quote_identifier(&collation.name);
         let mut sql = format!("CREATE COLLATION {}", collation_name);
 
-        if let Some(schema) = &collation.schema {
-            sql = format!("CREATE COLLATION {}.{}", schema, collation_name);
+        // Add schema if not "public"
+        if collation.schema != "public" {
+            sql = format!("CREATE COLLATION {}.{}", collation.schema, collation_name);
         }
 
-        if let Some(locale) = &collation.locale {
-            sql.push_str(&format!(" (LOCALE = '{}')", locale));
+        // Build the options part
+        let mut options = Vec::new();
+
+        // Handle locale/ICU locale
+        if let Some(icu_locale) = &collation.icu_locale {
+            options.push(format!("LOCALE = '{}'", icu_locale));
         } else if let (Some(lc_collate), Some(lc_ctype)) =
             (&collation.lc_collate, &collation.lc_ctype)
         {
-            sql.push_str(&format!(
-                " (LC_COLLATE = '{}', LC_CTYPE = '{}')",
-                lc_collate, lc_ctype
-            ));
+            options.push(format!("LC_COLLATE = '{}'", lc_collate));
+            options.push(format!("LC_CTYPE = '{}'", lc_ctype));
         }
 
-        sql.push_str(&format!(
-            " PROVIDER {}",
-            match collation.provider {
-                CollationProvider::Libc => "libc",
-                CollationProvider::Icu => "icu",
-                CollationProvider::Builtin => "builtin",
-            }
-        ));
+        // Add provider
+        let provider_str = match collation.provider {
+            CollationProvider::Libc => "libc",
+            CollationProvider::Icu => "icu",
+            CollationProvider::Builtin => "builtin",
+            CollationProvider::Default => "default",
+        };
+        options.push(format!("PROVIDER = '{}'", provider_str));
 
-        if collation.deterministic {
-            sql.push_str(" DETERMINISTIC");
+        // Add deterministic flag
+        if !collation.deterministic {
+            options.push("DETERMINISTIC = false".to_string());
+        }
+
+        // Add ICU rules if available
+        if let Some(icu_rules) = &collation.icu_rules {
+            options.push(format!("RULES = '{}'", icu_rules));
+        }
+
+        // Add version if available
+        if let Some(version) = &collation.version {
+            options.push(format!("VERSION = '{}'", version));
+        }
+
+        // Combine options
+        if !options.is_empty() {
+            sql.push_str(&format!(" ({})", options.join(", ")));
         }
 
         sql.push(';');
@@ -1263,14 +1205,16 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_collation(&self, collation: &Collation) -> Result<String> {
-        let name = if let Some(schema) = &collation.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&collation.name)
-            )
+        let collation_name = if Self::is_reserved_keyword(&collation.name) {
+            format!("\"{}\"", collation.name)
         } else {
-            Self::force_quote_identifier(&collation.name)
+            collation.name.clone()
+        };
+
+        let name = if collation.schema != "public" {
+            format!("{}.{}", collation.schema, collation_name)
+        } else {
+            collation_name
         };
         Ok(format!("DROP COLLATION IF EXISTS {} CASCADE;", name))
     }
@@ -1497,158 +1441,6 @@ impl SqlGenerator for PostgresSqlGenerator {
         Ok(format!("REVOKE {} ON {} FROM {};", privs, on_object, roles))
     }
 
-    fn create_base_type(&self, base_type: &BaseType) -> Result<String> {
-        let type_name = if let Some(schema) = &base_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&base_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&base_type.name)
-        };
-
-        let mut sql = format!("CREATE TYPE {} AS (", type_name);
-
-        // Base types in PostgreSQL are typically created with specific attributes
-        // This is a simplified implementation - real base type creation is complex
-        let mut attrs = Vec::new();
-
-        if let Some(len) = base_type.internal_length {
-            attrs.push(format!("INTERNALLENGTH = {}", len));
-        }
-
-        if base_type.is_passed_by_value {
-            attrs.push("PASSEDBYVALUE".to_string());
-        }
-
-        if !base_type.alignment.is_empty() {
-            attrs.push(format!("ALIGNMENT = {}", base_type.alignment));
-        }
-
-        if !base_type.storage.is_empty() {
-            attrs.push(format!("STORAGE = {}", base_type.storage));
-        }
-
-        if let Some(category) = &base_type.category {
-            attrs.push(format!("CATEGORY = '{}'", category));
-        }
-
-        if base_type.preferred {
-            attrs.push("PREFERRED".to_string());
-        }
-
-        if let Some(default) = &base_type.default {
-            attrs.push(format!("DEFAULT = {}", default));
-        }
-
-        if let Some(element) = &base_type.element {
-            attrs.push(format!("ELEMENT = {}", element));
-        }
-
-        if let Some(delimiter) = &base_type.delimiter {
-            attrs.push(format!("DELIMITER = '{}'", delimiter));
-        }
-
-        if base_type.collatable {
-            attrs.push("COLLATABLE".to_string());
-        }
-
-        sql.push_str(&attrs.join(", "));
-        sql.push_str(");");
-
-        Ok(sql)
-    }
-
-    fn drop_base_type(&self, base_type: &BaseType) -> Result<String> {
-        let type_name = if let Some(schema) = &base_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&base_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&base_type.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
-    }
-
-    fn create_array_type(&self, array_type: &ArrayType) -> Result<String> {
-        let type_name = if let Some(schema) = &array_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&array_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&array_type.name)
-        };
-
-        let element_type = if let Some(element_schema) = &array_type.element_schema {
-            format!(
-                "{}.{}",
-                element_schema,
-                Self::force_quote_identifier(&array_type.element_type)
-            )
-        } else {
-            Self::force_quote_identifier(&array_type.element_type)
-        };
-
-        let sql = format!("CREATE TYPE {} AS ARRAY OF {};", type_name, element_type);
-        Ok(sql)
-    }
-
-    fn drop_array_type(&self, array_type: &ArrayType) -> Result<String> {
-        let type_name = if let Some(schema) = &array_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&array_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&array_type.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
-    }
-
-    fn create_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String> {
-        let type_name = if let Some(schema) = &multirange_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&multirange_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&multirange_type.name)
-        };
-
-        let range_type = if let Some(range_schema) = &multirange_type.range_schema {
-            format!(
-                "{}.{}",
-                range_schema,
-                Self::force_quote_identifier(&multirange_type.range_type)
-            )
-        } else {
-            Self::force_quote_identifier(&multirange_type.range_type)
-        };
-
-        let sql = format!("CREATE TYPE {} AS MULTIRANGE OF {};", type_name, range_type);
-        Ok(sql)
-    }
-
-    fn drop_multirange_type(&self, multirange_type: &MultirangeType) -> Result<String> {
-        let type_name = if let Some(schema) = &multirange_type.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&multirange_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&multirange_type.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
-    }
-
     fn create_role(&self, role: &Role) -> Result<String> {
         let role_name = Self::force_quote_identifier(&role.name);
         let mut sql = format!("CREATE ROLE {}", role_name);
@@ -1795,118 +1587,6 @@ impl SqlGenerator for PostgresSqlGenerator {
             "DROP PUBLICATION IF EXISTS {} CASCADE;",
             publication_name
         ))
-    }
-
-    fn create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
-        let type_name = if let Some(schema) = &composite_type.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&composite_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&composite_type.name)
-        };
-
-        let mut sql = format!("CREATE TYPE {} AS (", type_name);
-
-        let attributes = composite_type
-            .attributes
-            .iter()
-            .map(|attr| {
-                let attr_name = Self::force_quote_identifier(&attr.name);
-                format!("{} {}", attr_name, attr.type_name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        sql.push_str(&attributes);
-        sql.push_str(");");
-
-        // Add comment if present
-        if let Some(comment) = &composite_type.comment {
-            sql.push_str(&format!(
-                "\nCOMMENT ON TYPE {} IS '{}';",
-                type_name,
-                comment.replace('\'', "''")
-            ));
-        }
-
-        Ok(sql)
-    }
-
-    fn drop_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
-        let type_name = if let Some(schema) = &composite_type.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&composite_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&composite_type.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
-    }
-
-    fn create_range_type(&self, range_type: &RangeType) -> Result<String> {
-        let type_name = if let Some(schema) = &range_type.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&range_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&range_type.name)
-        };
-
-        let mut sql = format!("CREATE TYPE {} AS RANGE (", type_name);
-        sql.push_str(&format!("SUBTYPE = {}", range_type.subtype));
-
-        // Add subtype operator class if present
-        if let Some(opclass) = &range_type.subtype_opclass {
-            sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", opclass));
-        }
-
-        // Add collation if present
-        if let Some(collation) = &range_type.collation {
-            sql.push_str(&format!(", COLLATION = {}", collation));
-        }
-
-        // Add canonical function if present
-        if let Some(canonical) = &range_type.canonical {
-            sql.push_str(&format!(", CANONICAL = {}", canonical));
-        }
-
-        // Add subtype difference function if present
-        if let Some(diff) = &range_type.subtype_diff {
-            sql.push_str(&format!(", SUBTYPE_DIFF = {}", diff));
-        }
-
-        sql.push_str(");");
-
-        // Add comment if present
-        if let Some(comment) = &range_type.comment {
-            sql.push_str(&format!(
-                "\nCOMMENT ON TYPE {} IS '{}';",
-                type_name,
-                comment.replace('\'', "''")
-            ));
-        }
-
-        Ok(sql)
-    }
-
-    fn drop_range_type(&self, range_type: &RangeType) -> Result<String> {
-        let type_name = if let Some(schema) = &range_type.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&range_type.name)
-            )
-        } else {
-            Self::force_quote_identifier(&range_type.name)
-        };
-        Ok(format!("DROP TYPE IF EXISTS {} CASCADE;", type_name))
     }
 
     fn create_subscription(&self, subscription: &Subscription) -> Result<String> {

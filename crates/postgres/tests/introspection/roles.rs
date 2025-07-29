@@ -74,8 +74,8 @@ async fn test_introspect_basic_role() -> Result<(), Box<dyn std::error::Error>> 
                 "Role should not have replication"
             );
             assert_eq!(
-                role_obj.connection_limit, None,
-                "Role should not have connection limit"
+                role_obj.connection_limit, -1,
+                "Role should have default connection limit of -1"
             );
             assert_eq!(role_obj.password, None, "Role should not have password");
             assert_eq!(
@@ -186,7 +186,7 @@ async fn test_introspect_role_with_connection_limit() -> Result<(), Box<dyn std:
             assert_eq!(role_obj.login, true, "Role should have login privilege");
             assert_eq!(
                 role_obj.connection_limit,
-                Some(5),
+                5,
                 "Role should have connection limit of 5"
             );
 

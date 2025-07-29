@@ -14,7 +14,7 @@ use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
         CheckOption, Collation, CollationProvider, Column, CompositeType, Constraint,
-        ConstraintKind, ConstraintTrigger, Domain, EnumType, EventTrigger, EventTriggerEvent,
+        ConstraintKind, ConstraintTrigger, Domain, EnumType, EnumValue, EventTrigger, EventTriggerEvent,
         Extension, Function, GeneratedColumn, Identity, MaterializedView, NamedSchema,
         ParallelSafety, Parameter, ParameterMode, Policy, PolicyCommand, Procedure, RangeType,
         ReferentialAction, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table, Trigger, TriggerEvent,
@@ -95,11 +95,11 @@ impl<'a> SchemaObject<'a> {
     fn get_schema(&self) -> Option<String> {
         match self {
             SchemaObject::Extension(ext) => Some(ext.schema.clone()),
-            SchemaObject::Collation(coll) => coll.schema.clone(),
-            SchemaObject::Enum(t) => t.schema.clone(),
+            SchemaObject::Collation(coll) => Some(coll.schema.clone()),
+            SchemaObject::Enum(t) => Some(t.schema.clone()),
             SchemaObject::CompositeType(t) => t.schema.clone(),
             SchemaObject::RangeType(t) => t.schema.clone(),
-            SchemaObject::Domain(d) => d.schema.clone(),
+            SchemaObject::Domain(d) => Some(d.schema.clone()),
             SchemaObject::Sequence(s) => s.schema.clone(),
             SchemaObject::Table(t) => t.schema.clone(),
             SchemaObject::View(v) => v.schema.clone(),
@@ -357,10 +357,18 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateEnum(create) => {
                     let enum_type = EnumType {
+                        oid: 0,
                         name: create.name,
-                        schema: create.schema,
-                        values: create.values,
+                        owner: "".to_string(),
+                        schema: create.schema.unwrap_or_else(|| "public".to_string()),
+                        values: create.values.iter().map(|v| EnumValue {
+                            oid: 0,
+                            label: v.clone(),
+                        }).collect(),
+                        acl: None,
                         comment: None,
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.enums.insert(enum_type.name.clone(), enum_type);
                 }
@@ -370,13 +378,19 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateDomain(create) => {
                     let domain = Domain {
+                        oid: 0,
                         name: create.name,
-                        schema: create.schema,
+                        schema: create.schema.expect("Domain must have a schema"),
+                        owner: "".to_string(),
                         base_type: format!("{:?}", create.data_type),
-                        constraints: vec![], // TODO: Parse domain constraints
-                        default: None,
+                        collation: None,
                         not_null: false,
+                        default: None,
+                        constraints: vec![], // TODO: Parse domain constraints
+                        acl: None,
                         comment: None,
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.domains.insert(domain.name.clone(), domain);
                 }
@@ -1525,8 +1539,8 @@ fn generate_create_schema(schema: &NamedSchema) -> Result<String> {
 fn generate_create_enum(type_def: &EnumType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", type_def.name);
 
-    if let Some(schema) = &type_def.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, type_def.name);
+    if type_def.schema != "public" {
+        sql = format!("CREATE TYPE {}.{}", type_def.schema, type_def.name);
     }
 
     sql.push_str(" AS ENUM (");
@@ -1534,7 +1548,7 @@ fn generate_create_enum(type_def: &EnumType) -> Result<String> {
     let values_str = type_def
         .values
         .iter()
-        .map(|v| format!("'{}'", v))
+        .map(|v| format!("'{}'", v.label))
         .collect::<Vec<_>>()
         .join(", ");
     sql.push_str(&values_str);
@@ -1565,24 +1579,22 @@ fn _generate_create_type(type_def: &CompositeType) -> Result<String> {
 }
 
 fn generate_create_domain(domain: &Domain) -> Result<String> {
-    let mut sql = format!("CREATE DOMAIN {}", domain.name);
-
-    if let Some(schema) = &domain.schema {
-        sql = format!("CREATE DOMAIN {}.{}", schema, domain.name);
-    }
+    let mut sql = format!("CREATE DOMAIN {}.{}", domain.schema, domain.name);
 
     sql.push_str(&format!(" AS {}", domain.base_type));
 
     for constraint in &domain.constraints {
-        // Remove "CHECK" prefix if it exists in the constraint expression
-        let check_expr = if constraint.check.starts_with("CHECK (") {
-            &constraint.check[7..constraint.check.len() - 1] // Remove "CHECK (" and ")"
-        } else if constraint.check.starts_with("CHECK ") {
-            &constraint.check[6..] // Remove "CHECK "
-        } else {
-            &constraint.check
-        };
-        sql.push_str(&format!(" CHECK ({})", check_expr));
+        if constraint.r#type == shem_core::schema::DomainConstraintType::Check {
+            // Remove "CHECK" prefix if it exists in the constraint expression
+            let check_expr = if constraint.definition.starts_with("CHECK (") {
+                &constraint.definition[7..constraint.definition.len() - 1] // Remove "CHECK (" and ")"
+            } else if constraint.definition.starts_with("CHECK ") {
+                &constraint.definition[6..] // Remove "CHECK "
+            } else {
+                &constraint.definition
+            };
+            sql.push_str(&format!(" CHECK ({})", check_expr));
+        }
     }
 
     Ok(sql)
@@ -1976,16 +1988,16 @@ fn generate_create_event_trigger(trigger: &EventTrigger) -> Result<String> {
 
 fn generate_create_collation(collation: &Collation) -> Result<String> {
     let mut sql = format!("CREATE COLLATION {}", collation.name);
-    if let Some(schema) = &collation.schema {
-        sql = format!("CREATE COLLATION {}.{}", schema, collation.name);
+    if collation.schema != "public" {
+        sql = format!("CREATE COLLATION {}.{}", collation.schema, collation.name);
     }
     let mut options = Vec::new();
 
-    // Always include locale if available (either from locale or lc_collate field)
-    if let Some(locale) = &collation.locale {
-        options.push(format!("LOCALE = '{}'", locale));
+    // Handle locale/ICU locale
+    if let Some(icu_locale) = &collation.icu_locale {
+        options.push(format!("LOCALE = '{}'", icu_locale));
     } else if let Some(lc_collate) = &collation.lc_collate {
-        options.push(format!("LOCALE = '{}'", lc_collate));
+        options.push(format!("LC_COLLATE = '{}'", lc_collate));
     } else {
         // If no locale is available, we need to provide a default or skip this collation
         // For now, let's use a default locale to avoid the error
@@ -1993,12 +2005,13 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
     }
 
     if let Some(lc_ctype) = &collation.lc_ctype {
-        options.push(format!("CTYPE = '{}'", lc_ctype));
+        options.push(format!("LC_CTYPE = '{}'", lc_ctype));
     }
     match collation.provider {
         CollationProvider::Libc => options.push("PROVIDER = 'libc'".to_string()),
         CollationProvider::Icu => options.push("PROVIDER = 'icu'".to_string()),
         CollationProvider::Builtin => options.push("PROVIDER = 'builtin'".to_string()),
+        CollationProvider::Default => options.push("PROVIDER = 'default'".to_string()),
     }
     if !collation.deterministic {
         options.push("DETERMINISTIC = false".to_string());

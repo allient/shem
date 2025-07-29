@@ -25,7 +25,6 @@ async fn test_introspect_basic_extension() -> Result<(), Box<dyn std::error::Err
     // Verify the extension was introspected
     let extension = schema.extensions.get("uuid-ossp");
     debug!("Extension: {:?}", extension);
-    println!("Extension: {:?}", extension);
     assert!(
         extension.is_some(),
         "Extension 'uuid-ossp' should be introspected"
@@ -34,10 +33,7 @@ async fn test_introspect_basic_extension() -> Result<(), Box<dyn std::error::Err
     let ext = extension.unwrap();
     assert_eq!(ext.name, "uuid-ossp");
     assert!(!ext.version.is_empty(), "Extension should have a version");
-    assert_eq!(
-        ext.cascade, false,
-        "Extension should not have cascade option"
-    );
+    assert!(!ext.schema.is_empty(), "Extension should have a schema");
 
     // Clean up
     db.cleanup().await?;
@@ -107,7 +103,7 @@ async fn test_introspect_extension_with_schema() -> Result<(), Box<dyn std::erro
     assert_eq!(ext.name, "uuid-ossp");
     assert_eq!(
         ext.schema,
-        Some("test_extensions".to_string()),
+        "test_extensions",
         "Extension should be in the specified schema"
     );
 
@@ -154,7 +150,8 @@ async fn test_introspect_multiple_extensions() -> Result<(), Box<dyn std::error:
 }
 
 #[tokio::test]
-async fn test_introspect_extension_with_comment() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_extension_with_comment() -> Result<(), Box<dyn std::error::Error>>
+{
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -367,7 +364,6 @@ async fn test_introspect_extension_schema_consistency() -> Result<(), Box<dyn st
     assert_eq!(ext1.name, ext2.name);
     assert_eq!(ext1.version, ext2.version);
     assert_eq!(ext1.schema, ext2.schema);
-    assert_eq!(ext1.cascade, ext2.cascade);
     assert_eq!(ext1.comment, ext2.comment);
 
     // Clean up

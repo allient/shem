@@ -7,7 +7,7 @@ use shared_types::{
     TriggerWhen,
 };
 use shem_core::{
-    DatabaseDriver, Schema,
+    DatabaseDriver, Schema, EnumValue,
     migration::{generate_migration, write_migration},
 };
 use std::collections::BTreeMap;
@@ -437,10 +437,18 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateEnum(create) => {
             let enum_type = shem_core::EnumType {
+                oid: 0,
                 name: create.name.clone(),
-                schema: create.schema.clone(),
-                values: create.values.clone(),
+                owner: "".to_string(),
+                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
+                values: create.values.iter().map(|v| EnumValue {
+                    oid: 0,
+                    label: v.clone(),
+                }).collect(),
+                acl: None,
                 comment: None,
+                is_user_defined: true,
+                is_from_extension: false,
             };
             schema.enums.insert(enum_type.name.clone(), enum_type);
         }
@@ -450,13 +458,19 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateDomain(create) => {
             let domain = shem_core::Domain {
+                oid: 0,
                 name: create.name.clone(),
-                schema: create.schema.clone(),
+                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
+                owner: "".to_string(),
                 base_type: format!("{:?}", create.data_type),
-                constraints: vec![], // TODO: Parse domain constraints
-                default: None,
+                collation: None,
                 not_null: false,
+                default: None,
+                constraints: vec![], // TODO: Parse domain constraints
+                acl: None,
                 comment: None,
+                is_user_defined: true,
+                is_from_extension: false,
             };
             schema.domains.insert(domain.name.clone(), domain);
         }

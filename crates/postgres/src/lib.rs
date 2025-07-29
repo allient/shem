@@ -3,9 +3,10 @@ use base64::engine::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use shem_core::traits::{ConnectionMetadata, Feature, SqlGenerator, Transaction};
 use shem_core::{DatabaseConnection, DatabaseDriver, Result, Schema};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_postgres::{Client, Config, NoTls};
+use tokio_postgres::{Client, Config, GenericClient, NoTls};
 
 pub mod db_util;
 pub mod introspection;
@@ -383,3 +384,65 @@ impl Transaction for PostgresTransaction {
     }
 }
 
+/// Parses an array of "key=value" strings into a HashMap.
+fn parse_options(options_array: &[String]) -> HashMap<String, String> {
+    let mut options_map = HashMap::new();
+    for opt in options_array {
+        if let Some((key, value)) = opt.split_once('=') {
+            options_map.insert(key.to_string(), value.to_string());
+        }
+    }
+    options_map
+}
+
+// Helper function to get a map of all collations for name resolution
+async fn get_collations_map<C: GenericClient>(client: &C) -> Result<HashMap<u32, String>> {
+    let rows = client.query(
+        "SELECT c.oid, n.nspname, c.collname FROM pg_collation c JOIN pg_namespace n ON c.collnamespace = n.oid",
+        &[],
+    ).await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let oid: u32 = row.get(0);
+            let schema: String = row.get(1);
+            let name: String = row.get(2);
+            (
+                oid,
+                format!("{}.{}", quote_ident(&schema), quote_ident(&name)),
+            )
+        })
+        .collect())
+}
+
+// Simple utility for quoting identifiers, needed by the helper
+fn quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+// Helper to fetch OID -> "schema"."name" mappings
+async fn get_qualified_name_map<C: GenericClient>(
+    client: &C,
+    table: &str,
+    namecol: &str,
+    nspcol: &str,
+) -> Result<HashMap<u32, String>, Error> {
+    let query = format!(
+        "SELECT t.oid, n.nspname, t.{} FROM pg_catalog.{} t JOIN pg_catalog.pg_namespace n ON t.{} = n.oid",
+        namecol, table, nspcol
+    );
+    let rows = client.query(&query, &[]).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let oid: u32 = row.get(0);
+            let schema: String = row.get(1);
+            let name: String = row.get(2);
+            (
+                oid,
+                format!("{}.{}", quote_ident(&schema), quote_ident(&name)),
+            )
+        })
+        .collect())
+}
