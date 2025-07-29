@@ -5,13 +5,18 @@ use postgres::PostgresSqlGenerator;
 #[test]
 fn test_create_view() {
     let view = View {
+        oid: 0,
         name: "user_summary".to_string(),
-        schema: Some("public".to_string()),
+        schema: "public".to_string(),
+        owner: "".to_string(),
         definition: "SELECT id, name, email FROM users WHERE active = true".to_string(),
+        columns: vec![],
         check_option: CheckOption::Local,
+        options: std::collections::HashMap::new(),
+        acl: None,
         comment: Some("Active users summary view".to_string()),
-        security_barrier: false,
-        columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -25,13 +30,18 @@ fn test_create_view() {
 #[test]
 fn test_drop_view() {
     let view = View {
+        oid: 0,
         name: "my_view".to_string(),
-        schema: None,
+        schema: "public".to_string(),
+        owner: "".to_string(),
         definition: "SELECT * FROM my_table".to_string(),
-        check_option: CheckOption::None,
-        comment: None,
-        security_barrier: false,
         columns: vec![],
+        check_option: CheckOption::None,
+        options: std::collections::HashMap::new(),
+        acl: None,
+        comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.drop_view(&view).unwrap();

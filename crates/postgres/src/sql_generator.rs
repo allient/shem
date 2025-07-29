@@ -672,7 +672,11 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_view(&self, view: &View) -> Result<String> {
-        let view_name = Self::force_quote_identifier(&view.name);
+        let view_name = if view.schema == "public" {
+            Self::_quote_identifier(&view.name)
+        } else {
+            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
+        };
         let mut sql = format!("CREATE VIEW {} AS {}", view_name, view.definition);
         match view.check_option {
             CheckOption::None => {}
@@ -684,7 +688,7 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_materialized_view(&self, view: &MaterializedView) -> Result<String> {
-        let view_name = Self::force_quote_identifier(&view.name);
+        let view_name = Self::_quote_identifier(&view.name);
 
         // Use the populate_with_data field to determine WITH DATA vs WITH NO DATA
         let with_clause = if view.populate_with_data {
@@ -1026,19 +1030,19 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_view(&self, view: &View) -> Result<String> {
-        let name = if let Some(schema) = &view.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&view.name))
+        let name = if view.schema == "public" {
+            Self::_quote_identifier(&view.name)
         } else {
-            Self::force_quote_identifier(&view.name)
+            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
         };
         Ok(format!("DROP VIEW IF EXISTS {} CASCADE;", name))
     }
 
     fn drop_materialized_view(&self, view: &MaterializedView) -> Result<String> {
         let name = if let Some(schema) = &view.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&view.name))
+            format!("{}.{}", schema, Self::_quote_identifier(&view.name))
         } else {
-            Self::force_quote_identifier(&view.name)
+            Self::_quote_identifier(&view.name)
         };
         Ok(format!(
             "DROP MATERIALIZED VIEW IF EXISTS {} CASCADE;",

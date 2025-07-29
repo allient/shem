@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use crate::get_qualified_name_map;
 use crate::parse_options;
+use parser::pg_options_to_map;
 use shem_core::Result;
 use shem_core::schema::*;
-use parser::pg_options_to_map;
+use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 use tracing::debug;
 
@@ -108,7 +108,7 @@ where
 
     // Introspect views
     // Purpose: Virtual table from a query.
-    let views = introspect_views(&*client).await?;
+    let views = introspect_views_unified(&*client).await?;
     for view in views {
         schema.views.insert(view.name.clone(), view);
     }
@@ -693,7 +693,7 @@ pub async fn introspect_all_columns<C: GenericClient>(
     } else {
         query.push_str(", ''::char AS attidentity");
     }
-    
+
     // Check if attgenerated and attgeneratedbin columns exist (PostgreSQL 12+)
     let generated_column_exists_query = r#"
         SELECT 
@@ -713,10 +713,12 @@ pub async fn introspect_all_columns<C: GenericClient>(
     let generated_column_exists_row = client.query_one(generated_column_exists_query, &[]).await?;
     let attgenerated_exists: bool = generated_column_exists_row.get("attgenerated_exists");
     let attgeneratedbin_exists: bool = generated_column_exists_row.get("attgeneratedbin_exists");
-    
+
     if server_version_num >= 120000 && attgenerated_exists {
         if attgeneratedbin_exists {
-            query.push_str(", a.attgenerated, pg_get_expr(a.attgeneratedbin, a.attrelid) as generated_expr");
+            query.push_str(
+                ", a.attgenerated, pg_get_expr(a.attgeneratedbin, a.attrelid) as generated_expr",
+            );
         } else {
             query.push_str(", a.attgenerated, NULL as generated_expr");
         }
@@ -779,8 +781,8 @@ pub async fn introspect_all_columns<C: GenericClient>(
         let generated_char: i8 = row.get("attgenerated");
         let generated_expr: Option<String> = row.get("generated_expr");
         let generated = match generated_char as u8 as char {
-            's' => Some(Generated { 
-                expression: generated_expr.unwrap_or_else(|| "(generated expression)".to_string()) 
+            's' => Some(Generated {
+                expression: generated_expr.unwrap_or_else(|| "(generated expression)".to_string()),
             }),
             _ => None,
         };
@@ -813,7 +815,6 @@ pub async fn introspect_all_columns<C: GenericClient>(
     }
     Ok(map)
 }
-
 
 // Bulk introspection functions for unified table introspection
 async fn introspect_all_constraints<C: GenericClient>(
@@ -891,7 +892,10 @@ async fn introspect_all_constraints<C: GenericClient>(
             initially_deferred,
         };
 
-        constraints_map.entry(table_oid).or_insert_with(Vec::new).push(constraint);
+        constraints_map
+            .entry(table_oid)
+            .or_insert_with(Vec::new)
+            .push(constraint);
     }
 
     Ok(constraints_map)
@@ -976,20 +980,26 @@ async fn introspect_all_indexes<C: GenericClient>(
                 unique: is_unique,
                 where_clause,
                 tablespace: tablespace_oid.map(|oid| oid.to_string()),
-                storage_parameters: storage_parameters.map(|params| {
-                    params.into_iter()
-                        .filter_map(|param| {
-                            if let Some((key, value)) = param.split_once('=') {
-                                Some((key.to_string(), value.to_string()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                }).unwrap_or_default(),
+                storage_parameters: storage_parameters
+                    .map(|params| {
+                        params
+                            .into_iter()
+                            .filter_map(|param| {
+                                if let Some((key, value)) = param.split_once('=') {
+                                    Some((key.to_string(), value.to_string()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             };
             current_index = Some(index);
-            indexes_map.entry(table_oid).or_insert_with(Vec::new).push(current_index.as_ref().unwrap().clone());
+            indexes_map
+                .entry(table_oid)
+                .or_insert_with(Vec::new)
+                .push(current_index.as_ref().unwrap().clone());
         } else {
             // Same index, add column
             if let Some(index) = current_index.as_mut() {
@@ -1025,7 +1035,10 @@ async fn introspect_all_inheritance<C: GenericClient>(
     for row in rows {
         let table_oid: u32 = row.get("table_oid");
         let parent_table: String = row.get("parent_table");
-        inheritance_map.entry(table_oid).or_insert_with(Vec::new).push(parent_table);
+        inheritance_map
+            .entry(table_oid)
+            .or_insert_with(Vec::new)
+            .push(parent_table);
     }
 
     Ok(inheritance_map)
@@ -1034,54 +1047,108 @@ async fn introspect_all_inheritance<C: GenericClient>(
 async fn introspect_all_partition_keys<C: GenericClient>(
     client: &C,
 ) -> Result<HashMap<u32, String>> {
-    // Check if partkey column exists in pg_partitioned_table (PostgreSQL 10+)
-    let partkey_column_exists_query = r#"
+    // First, let's see what columns are actually available in pg_partitioned_table
+    let columns_query = r#"
+        SELECT column_name, data_type 
+        FROM information_schema.columns 
+        WHERE table_schema = 'pg_catalog' 
+        AND table_name = 'pg_partitioned_table'
+        ORDER BY ordinal_position;
+    "#;
+    let columns = client.query(columns_query, &[]).await?;
+    tracing::debug!(
+        "pg_partitioned_table columns: {:?}",
+        columns
+            .iter()
+            .map(|row| {
+                let name: String = row.get("column_name");
+                let data_type: String = row.get("data_type");
+                format!("{}: {}", name, data_type)
+            })
+            .collect::<Vec<_>>()
+    );
+
+    // Check if partattrs column exists in pg_partitioned_table (PostgreSQL 10+)
+    let partattrs_column_exists_query = r#"
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns 
             WHERE table_schema = 'pg_catalog' 
             AND table_name = 'pg_partitioned_table' 
-            AND column_name = 'partkey'
+            AND column_name = 'partattrs'
         ) as column_exists;
     "#;
-    let partkey_column_exists_row = client.query_one(partkey_column_exists_query, &[]).await?;
-    let partkey_exists: bool = partkey_column_exists_row.get("column_exists");
+    let partattrs_column_exists_row = client.query_one(partattrs_column_exists_query, &[]).await?;
+    let partattrs_exists: bool = partattrs_column_exists_row.get("column_exists");
 
-    if !partkey_exists {
+    tracing::debug!("partattrs column exists: {}", partattrs_exists);
+
+    if !partattrs_exists {
         // Return empty map for older PostgreSQL versions that don't support partitioning
+        tracing::debug!("partattrs column does not exist, returning empty map");
         return Ok(HashMap::new());
     }
 
     let query = r#"
         SELECT 
             c.oid as table_oid,
-            pt.partstrat as partition_strategy,
-            array_agg(a.attname ORDER BY array_position(pt.partkey, a.attnum)) as column_names
+            pt.partstrat::text as partition_strategy,
+            array_agg(a.attname ORDER BY array_position(pt.partattrs, a.attnum)) as column_names
         FROM pg_class c
         JOIN pg_partitioned_table pt ON pt.partrelid = c.oid
-        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(pt.partkey)
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(pt.partattrs)
+        JOIN pg_namespace n ON c.relnamespace = n.oid
         WHERE c.relkind = 'p'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
         GROUP BY c.oid, pt.partstrat
         ORDER BY c.oid
     "#;
 
+    // First, let's check if there are any partitioned tables at all
+    let check_query = "SELECT oid, relname FROM pg_class WHERE relkind = 'p'";
+    let check_rows = client.query(check_query, &[]).await?;
+    tracing::debug!(
+        "Found {} partitioned tables: {:?}",
+        check_rows.len(),
+        check_rows
+            .iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let name: String = row.get("relname");
+                format!("{}: {}", oid, name)
+            })
+            .collect::<Vec<_>>()
+    );
+
+    tracing::debug!("Executing partition key query: {}", query);
     let rows = client.query(query, &[]).await?;
     let mut partition_key_map = HashMap::new();
 
+    tracing::debug!("Found {} partition key rows", rows.len());
+
     for row in rows {
         let table_oid: u32 = row.get("table_oid");
-        let partition_strategy: char = row.get("partition_strategy");
+        let partition_strategy: String = row.get("partition_strategy");
         let column_names: Vec<String> = row.get("column_names");
-        
-        let strategy_str = match partition_strategy {
-            'r' => "RANGE",
-            'l' => "LIST", 
-            'h' => "HASH",
-            _ => "UNKNOWN"
+
+        tracing::debug!(
+            "Partition key for table {}: strategy={}, columns={:?}",
+            table_oid,
+            partition_strategy,
+            column_names
+        );
+
+        let strategy_str = match partition_strategy.as_str() {
+            "r" => "RANGE",
+            "l" => "LIST",
+            "h" => "HASH",
+            _ => "UNKNOWN",
         };
-        
+
         let partition_expression = format!("{} ({})", strategy_str, column_names.join(", "));
         partition_key_map.insert(table_oid, partition_expression);
     }
+
+    tracing::debug!("Final partition key map: {:?}", partition_key_map);
 
     Ok(partition_key_map)
 }
@@ -1406,77 +1473,142 @@ async fn introspect_indexes<C: GenericClient>(
     Ok(indexes)
 }
 
-async fn introspect_views<C: GenericClient>(client: &C) -> Result<Vec<View>> {
-    let query = r#"
-        SELECT 
-            v.table_schema,
-            v.table_name,
-            v.view_definition,
-            v.check_option,
-            pgc.relowner as owner,
-            pgc.reloptions as options,
-            obj_description(pgc.oid, 'pg_class') as comment
-        FROM information_schema.views v
-        JOIN pg_class pgc ON pgc.relname = v.table_name
-        JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = v.table_schema
-        WHERE v.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND pgc.relowner > 1  -- exclude system-owned views
-        AND NOT EXISTS (
-            -- Exclude views that are part of extensions
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = pgc.oid AND d.deptype = 'e'
-        )
+// This master function fetches all relations and then filters for views.
+pub async fn introspect_views_unified<C: GenericClient>(client: &C) -> Result<Vec<View>> {
+    // 1. Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
     "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    let rows = client.query(query, &[]).await?;
+    tracing::debug!("datlastsysoid column exists (views): {}", datlastsysoid_exists);
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID (views): {}", last_system_oid);
+
+    // --- QUERY 1: Fetch ALL relations, same as before ---
+    // We add a few view-specific fields.
+    let relations_query = r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relkind, obj_description(c.oid, 'pg_class') AS comment,
+            c.relacl::text AS acl,
+            c.reloptions AS options,
+            -- View-specific properties
+            CASE
+                WHEN 'check_option=local' = ANY(c.reloptions) THEN 'LOCAL'
+                WHEN 'check_option=cascaded' = ANY(c.reloptions) THEN 'CASCADED'
+                ELSE 'NONE'
+            END AS check_option,
+            pg_get_viewdef(c.oid) AS definition,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE c.relkind = 'v'; -- IMPORTANT: Filter for only views ('v')
+    "#;
+    let relation_rows = client.query(relations_query, &[]).await?;
+
+    let all_view_oids: Vec<u32> = relation_rows.iter().map(|row| row.get("oid")).collect();
+
+    // --- BULK QUERY for columns of these views ---
+    let columns_map = introspect_all_columns_for_relations(client, &all_view_oids).await?;
+
+    // --- Assemble the final Vec<View> ---
     let mut views = Vec::new();
+    for row in relation_rows {
+        let oid: u32 = row.get("oid");
 
-    for row in rows {
-        let schema: Option<String> = row.get("table_schema");
-        let name: String = row.get("table_name");
-        let definition: String = row.get("view_definition");
-        let check_option: Option<String> = row.get("check_option");
-        let options: Option<Vec<String>> = row.get("options");
-        let comment: Option<String> = row.get("comment");
+        let is_user_defined = oid > last_system_oid;
+        let is_from_extension: bool = row.get("is_from_extension");
 
-        let check_option_enum = match check_option.as_deref() {
-            Some("LOCAL") => CheckOption::Local,
-            Some("CASCADED") => CheckOption::Cascaded,
-            _ => CheckOption::None,
-        };
+        // Filter for dumpable views
+        if is_user_defined && !is_from_extension {
+            let check_option_str: &str = row.get("check_option");
 
-        // Check for security barrier option
-        let security_barrier = options
-            .as_deref()
-            .map(|opts| opts.iter().any(|opt| opt == "security_barrier=true"))
-            .unwrap_or(false);
-
-        // Get explicit column list if available
-        let columns_query = r#"
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
-            ORDER BY ordinal_position
-        "#;
-        let column_rows = client.query(columns_query, &[&schema, &name]).await?;
-        let columns: Vec<String> = column_rows
-            .iter()
-            .map(|row| row.get::<_, String>("column_name"))
-            .collect();
-
-        views.push(View {
-            name,
-            schema,
-            definition,
-            check_option: check_option_enum,
-            comment,
-            security_barrier,
-            columns,
-        });
+            views.push(View {
+                oid,
+                name: row.get("name"),
+                schema: row.get("schema_name"),
+                owner: row.get("owner"),
+                definition: row.get("definition"),
+                comment: row.get("comment"),
+                acl: row.get("acl"),
+                columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                check_option: match check_option_str {
+                    "LOCAL" => CheckOption::Local,
+                    "CASCADED" => CheckOption::Cascaded,
+                    _ => CheckOption::None,
+                },
+                options: pg_options_to_map(row.get("options")),
+                is_user_defined,
+                is_from_extension,
+            });
+        }
     }
 
     Ok(views)
+}
+
+// --- Helper Functions ---
+// We can reuse the column introspector, slightly generalized
+async fn introspect_all_columns_for_relations<C: GenericClient>(
+    client: &C,
+    relation_oids: &[u32],
+) -> Result<HashMap<u32, Vec<Column>>> {
+    if relation_oids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // This query works for both tables and views
+    let query = "SELECT attrelid, attname, pg_catalog.format_type(atttypid, atttypmod) as type_name FROM pg_attribute WHERE attrelid = ANY($1) AND attnum > 0 AND NOT attisdropped ORDER BY attrelid, attnum";
+    let rows = client.query(query, &[&relation_oids]).await?;
+
+    let mut map: HashMap<u32, Vec<Column>> = HashMap::new();
+    for row in rows {
+        let table_oid: u32 = row.get("attrelid");
+        // For views, many column properties aren't applicable, so we create a simplified Column
+        map.entry(table_oid).or_default().push(Column {
+            name: row.get("attname"),
+            type_name: row.get("type_name"),
+            // Fill with default/None for fields that don't apply to views
+            is_not_null: false,
+            has_default: false,
+            collation: None,
+            storage: ColumnStorage::Plain, // Doesn't matter for views
+            compression: None,
+            identity: None,
+            generated: None,
+            comment: None, // Can be fetched with another bulk query if needed
+            acl: None,
+            is_dropped: false,
+            is_local: true,
+            stats_target: None,
+            fdw_options: HashMap::new(),
+        });
+    }
+    Ok(map)
 }
 
 async fn introspect_materialized_views<C: GenericClient>(
@@ -2734,17 +2866,19 @@ async fn introspect_columns_for_table<C: GenericClient>(
             is_dropped,
             is_local,
             stats_target,
-            fdw_options: fdw_options.map(|opts| {
-                opts.into_iter()
-                    .filter_map(|opt| {
-                        if let Some((key, value)) = opt.split_once('=') {
-                            Some((key.to_string(), value.to_string()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }).unwrap_or_default(),
+            fdw_options: fdw_options
+                .map(|opts| {
+                    opts.into_iter()
+                        .filter_map(|opt| {
+                            if let Some((key, value)) = opt.split_once('=') {
+                                Some((key.to_string(), value.to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
     }
 

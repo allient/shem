@@ -99,7 +99,7 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Domain(d) => Some(d.info.schema.clone()),
             SchemaObject::Sequence(s) => s.schema.clone(),
             SchemaObject::Table(t) => Some(t.schema.clone()),
-            SchemaObject::View(v) => v.schema.clone(),
+            SchemaObject::View(v) => Some(v.schema.clone()),
             SchemaObject::MaterializedView(v) => v.schema.clone(),
             SchemaObject::Function(f) => f.schema.clone(),
             SchemaObject::Procedure(p) => p.schema.clone(),
@@ -540,9 +540,12 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateView(create) => {
                     let view = View {
+                        oid: 0, // Will be assigned during introspection
                         name: create.name,
-                        schema: create.schema,
+                        schema: create.schema.unwrap_or_else(|| "public".to_string()),
+                        owner: "".to_string(),
                         definition: create.query,
+                        columns: Vec::new(),
                         check_option: create
                             .check_option
                             .map(|opt| match opt {
@@ -550,9 +553,11 @@ impl SchemaSerializer for SqlSerializer {
                                 ParserCheckOption::Cascaded => CheckOption::Cascaded,
                             })
                             .unwrap_or(CheckOption::None),
+                        options: std::collections::HashMap::new(),
+                        acl: None,
                         comment: None,
-                        security_barrier: false,
-                        columns: Vec::new(),
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.views.insert(view.name.clone(), view);
                 }
@@ -1690,20 +1695,13 @@ fn generate_create_table(table: &Table) -> Result<String> {
 }
 
 fn generate_create_view(view: &View) -> Result<String> {
-    let mut sql = format!("CREATE VIEW {}", view.name);
+    let sql = format!("CREATE VIEW {}.{} AS {}", view.schema, view.name, view.definition);
 
-    if let Some(schema) = &view.schema {
-        sql = format!("CREATE VIEW {}.{}", schema, view.name);
-    }
-
-    sql.push_str(" AS ");
-    sql.push_str(&view.definition);
-
-    match view.check_option {
-        CheckOption::Local => sql.push_str(" WITH LOCAL CHECK OPTION"),
-        CheckOption::Cascaded => sql.push_str(" WITH CASCADED CHECK OPTION"),
-        CheckOption::None => {}
-    }
+    let sql = match view.check_option {
+        CheckOption::Local => format!("{} WITH LOCAL CHECK OPTION", sql),
+        CheckOption::Cascaded => format!("{} WITH CASCADED CHECK OPTION", sql),
+        CheckOption::None => sql,
+    };
 
     Ok(sql)
 }

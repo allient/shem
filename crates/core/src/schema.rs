@@ -136,15 +136,20 @@ pub struct Table {
     pub is_from_extension: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct View {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
+    pub schema: String,
+    pub owner: String,
     pub definition: String,
+    pub columns: Vec<Column>, // Using the same Column struct as tables
     pub check_option: CheckOption,
+    pub options: HashMap<String, String>, // For security_barrier and other options
+    pub acl: Option<String>,
     pub comment: Option<String>,
-    pub security_barrier: bool, // Added: security barrier views
-    pub columns: Vec<String>,   // Added: explicit column list
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

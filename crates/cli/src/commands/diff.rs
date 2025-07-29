@@ -322,9 +322,12 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateView(create) => {
             let view = shem_core::View {
+                oid: 0, // Will be assigned during introspection
                 name: create.name.clone(),
-                schema: create.schema.clone(),
+                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
+                owner: "".to_string(),
                 definition: create.query.clone(),
+                columns: Vec::new(),
                 check_option: create
                     .check_option
                     .clone()
@@ -333,9 +336,11 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         CheckOption::Cascaded => shem_core::schema::CheckOption::Cascaded,
                     })
                     .unwrap_or(shem_core::schema::CheckOption::None),
+                options: std::collections::HashMap::new(),
+                acl: None,
                 comment: None,
-                security_barrier: false,
-                columns: Vec::new(),
+                is_user_defined: true,
+                is_from_extension: false,
             };
             schema.views.insert(view.name.clone(), view);
         }

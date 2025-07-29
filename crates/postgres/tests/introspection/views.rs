@@ -37,11 +37,10 @@ async fn test_introspect_basic_view() -> Result<(), Box<dyn std::error::Error>> 
     let view = schema.views.get("active_users").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.name, "active_users");
-    assert_eq!(view.schema, Some("public".to_string())); // Public schema
+    assert_eq!(view.schema, "public".to_string()); // Public schema
     assert!(view.definition.contains("SELECT id,\n    name\n   FROM users"));
     assert_eq!(view.check_option, CheckOption::None);
-    assert!(!view.security_barrier);
-    assert_eq!(view.columns, vec!["id", "name"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name"]);
 
     Ok(())
 }
@@ -72,9 +71,9 @@ async fn test_introspect_view_with_schema() -> Result<(), Box<dyn std::error::Er
     let view = schema.views.get("expensive_products").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.name, "expensive_products");
-    assert_eq!(view.schema, Some("test_schema".to_string()));
+    assert_eq!(view.schema, "test_schema".to_string());
     assert!(view.definition.contains("SELECT id,\n    name,\n    price\n   FROM test_schema.products"));
-    assert_eq!(view.columns, vec!["id", "name", "price"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "price"]);
 
     Ok(())
 }
@@ -200,7 +199,7 @@ async fn test_introspect_view_with_security_barrier() -> Result<(), Box<dyn std:
     // Verify the view has security barrier
     let view = schema.views.get("user_data").expect("View should exist");
     debug!("View: {:?}", view);
-    assert!(view.security_barrier);
+    assert!(view.options.get("security_barrier").map(|v| v == "true").unwrap_or(false));
 
     Ok(())
 }
@@ -228,7 +227,7 @@ async fn test_introspect_view_with_column_aliases() -> Result<(), Box<dyn std::e
 
     // Verify the view has correct column names (aliases)
     let view = schema.views.get("customer_names").expect("View should exist");
-    assert_eq!(view.columns, vec!["id", "fname", "lname"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "fname", "lname"]);
     assert!(view.definition.contains("first_name AS fname"));
     assert!(view.definition.contains("last_name AS lname"));
 
@@ -264,7 +263,7 @@ async fn test_introspect_view_with_joins() -> Result<(), Box<dyn std::error::Err
     // Verify the view with joins
     let view = schema.views.get("employee_departments").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["id", "name", "dept_name"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "dept_name"]);
     assert!(view.definition.contains("JOIN departments d ON ((e.dept_id = d.id))"));
 
     Ok(())
@@ -294,7 +293,7 @@ async fn test_introspect_view_with_aggregation() -> Result<(), Box<dyn std::erro
     // Verify the view with aggregation
     let view = schema.views.get("daily_sales").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["date", "sales_count", "total_amount"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["date", "sales_count", "total_amount"]);
     assert!(view.definition.contains("GROUP BY date"));
     assert!(view.definition.contains("count(*) AS sales_count"));
     assert!(view.definition.contains("sum(amount) AS total_amount"));
@@ -326,7 +325,7 @@ async fn test_introspect_view_with_window_function() -> Result<(), Box<dyn std::
     // Verify the view with window function
     let view = schema.views.get("student_rankings").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["student", "subject", "score", "rank"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["student", "subject", "score", "rank"]);
     assert!(view.definition.contains("row_number() OVER"));
 
     Ok(())
@@ -355,7 +354,7 @@ async fn test_introspect_view_with_cte() -> Result<(), Box<dyn std::error::Error
 
     // Verify the view with CTE
     let view = schema.views.get("popular_events").expect("View should exist");
-    assert_eq!(view.columns, vec!["name", "avg_attendees"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["name", "avg_attendees"]);
     assert!(view.definition.contains("WITH event_stats AS"));
 
     Ok(())
@@ -385,7 +384,7 @@ async fn test_introspect_view_with_subquery() -> Result<(), Box<dyn std::error::
     // Verify the view with subquery
     let view = schema.views.get("expensive_products").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["id", "name", "price", "category"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "price", "category"]);
     assert!(view.definition.contains("SELECT avg(products_1.price) AS avg"));
 
     Ok(())
@@ -419,7 +418,7 @@ async fn test_introspect_view_with_union() -> Result<(), Box<dyn std::error::Err
 
     // Verify the view with union
     let view = schema.views.get("all_users").expect("View should exist");
-    assert_eq!(view.columns, vec!["id", "name"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name"]);
     assert!(view.definition.contains("UNION"));
 
     Ok(())
@@ -449,7 +448,7 @@ async fn test_introspect_view_with_case_statement() -> Result<(), Box<dyn std::e
     // Verify the view with case statement
     let view = schema.views.get("grade_letters").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["student", "score", "letter_grade"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["student", "score", "letter_grade"]);
     assert!(view.definition.contains("CASE"));
     assert!(view.definition.contains("WHEN (score >= 90)"));
     assert!(view.definition.contains("letter_grade"));
@@ -481,7 +480,7 @@ async fn test_introspect_view_with_functions() -> Result<(), Box<dyn std::error:
     // Verify the view with functions
     let view = schema.views.get("user_summary").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["id", "upper_name", "birth_year"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "upper_name", "birth_year"]);
     assert!(view.definition.contains("upper(name)"));
     assert!(view.definition.contains("EXTRACT(year FROM created_at)"));
 
@@ -511,7 +510,7 @@ async fn test_introspect_view_with_distinct() -> Result<(), Box<dyn std::error::
 
     // Verify the view with distinct
     let view = schema.views.get("unique_visitors").expect("View should exist");
-    assert_eq!(view.columns, vec!["user_id", "visit_count"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["user_id", "visit_count"]);
     assert!(view.definition.contains("DISTINCT user_id"));
 
     Ok(())
@@ -540,7 +539,7 @@ async fn test_introspect_view_with_limit_offset() -> Result<(), Box<dyn std::err
 
     // Verify the view with limit
     let view = schema.views.get("top_articles").expect("View should exist");
-    assert_eq!(view.columns, vec!["id", "title", "views"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "title", "views"]);
     assert!(view.definition.contains("LIMIT 10"));
     assert!(view.definition.contains("ORDER BY views DESC"));
 
@@ -571,7 +570,7 @@ async fn test_introspect_view_with_complex_expression() -> Result<(), Box<dyn st
     // Verify the view with complex expression
     let view = schema.views.get("calculated_metrics").expect("View should exist");
     debug!("View: {:?}", view);
-    assert_eq!(view.columns, vec!["id", "average", "geometric_mean"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "average", "geometric_mean"]);
     assert!(view.definition.contains("(value1 + value2) / (2)::numeric"));
     assert!(view.definition.contains("sqrt((value1 * value2))"));
 
@@ -616,13 +615,13 @@ async fn test_introspect_multiple_views() -> Result<(), Box<dyn std::error::Erro
 
     // Verify view details
     let high_salary = schema.views.get("high_salary_employees").unwrap();
-    assert_eq!(high_salary.columns, vec!["id", "name", "salary", "department"]);
+    assert_eq!(high_salary.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "salary", "department"]);
 
     let dept_summary = schema.views.get("department_summary").unwrap();
-    assert_eq!(dept_summary.columns, vec!["department", "count", "avg_salary"]);
+    assert_eq!(dept_summary.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["department", "count", "avg_salary"]);
 
     let names = schema.views.get("employee_names").unwrap();
-    assert_eq!(names.columns, vec!["id", "name"]);
+    assert_eq!(names.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name"]);
 
     Ok(())
 }
@@ -694,7 +693,10 @@ async fn test_introspect_view_consistency() -> Result<(), Box<dyn std::error::Er
     assert_eq!(view1.schema, view2.schema);
     assert_eq!(view1.definition, view2.definition);
     assert_eq!(view1.check_option, view2.check_option);
-    assert_eq!(view1.security_barrier, view2.security_barrier);
+    assert_eq!(
+        view1.options.get("security_barrier").map(|v| v == "true").unwrap_or(false),
+        view2.options.get("security_barrier").map(|v| v == "true").unwrap_or(false)
+    );
     assert_eq!(view1.columns, view2.columns);
 
     Ok(())
@@ -724,7 +726,7 @@ async fn test_introspect_view_edge_cases() -> Result<(), Box<dyn std::error::Err
     // Verify the view with quoted identifiers
     let view = schema.views.get("quoted view").expect("View should exist");
     assert_eq!(view.name, "quoted view");
-    assert_eq!(view.columns, vec!["id", "quoted column", "UPPER_CASE"]);
+    assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "quoted column", "UPPER_CASE"]);
     assert!(view.definition.contains("\"quoted column\""));
 
     Ok(())
