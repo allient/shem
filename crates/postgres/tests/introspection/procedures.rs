@@ -2,6 +2,16 @@ use postgres::TestDb;
 use shem_core::DatabaseConnection;
 use tracing::debug;
 
+// Helper function to extract procedures from routines
+fn get_procedures_from_schema(schema: &shem_core::Schema) -> Vec<&shem_core::Procedure> {
+    schema.routines.values()
+        .filter_map(|r| match r {
+            shem_core::schema::Routine::Procedure(p) => Some(p),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn test_introspect_basic_procedure() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
@@ -23,13 +33,12 @@ async fn test_introspect_basic_procedure() -> Result<(), Box<dyn std::error::Err
     let schema = connection.introspect().await?;
 
     // Verify the procedure was introspected
-    let procedures: Vec<_> = schema.procedures.values().collect();
+    let procedures = get_procedures_from_schema(&schema);
     debug!("Procedures: {:?}", procedures);
     let proc = procedures.iter().find(|p| p.name == "test_basic_procedure").expect("Should find procedure");
     assert_eq!(proc.name, "test_basic_procedure");
-    assert_eq!(proc.schema, Some("public".to_string()));
-    assert_eq!(proc.language, "plpgsql");
-    assert_eq!(proc.parameters.len(), 0);
+    assert_eq!(proc.schema, "public");
+    assert!(proc.definition.contains("plpgsql"));
     assert_eq!(proc.comment, None);
     Ok(())
 }
@@ -56,18 +65,14 @@ async fn test_introspect_procedure_with_parameters() -> Result<(), Box<dyn std::
     let schema = connection.introspect().await?;
 
     // Verify the procedure was introspected
-    let procedures: Vec<_> = schema.procedures.values().collect();
+    let procedures = get_procedures_from_schema(&schema);
     debug!("Procedures with params: {:?}", procedures);
     let proc = procedures.iter().find(|p| p.name == "test_procedure_params").expect("Should find procedure");
     assert_eq!(proc.name, "test_procedure_params");
-    assert_eq!(proc.language, "plpgsql");
-    assert_eq!(proc.parameters.len(), 3);
-    assert_eq!(proc.parameters[0].name, "a");
-    assert_eq!(proc.parameters[0].type_name, "integer");
-    assert_eq!(proc.parameters[1].name, "b");
-    assert_eq!(proc.parameters[1].type_name, "text");
-    assert_eq!(proc.parameters[2].name, "c");
-    assert_eq!(proc.parameters[2].type_name, "boolean");
+    assert!(proc.definition.contains("plpgsql"));
+    assert!(proc.definition.contains("IN a integer"));
+    assert!(proc.definition.contains("OUT b text"));
+    assert!(proc.definition.contains("INOUT c boolean"));
     Ok(())
 }
 
@@ -93,14 +98,12 @@ async fn test_introspect_procedure_with_comment() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the procedure was introspected with comment
-    let procedures: Vec<_> = schema.procedures.values().collect();
+    let procedures = get_procedures_from_schema(&schema);
     debug!("Procedures with comment: {:?}", procedures);
     let proc = procedures.iter().find(|p| p.name == "test_procedure_with_comment").expect("Should find procedure");
     assert_eq!(proc.name, "test_procedure_with_comment");
-    assert_eq!(proc.language, "plpgsql");
-    assert_eq!(proc.parameters.len(), 1);
-    assert_eq!(proc.parameters[0].name, "x");
-    assert_eq!(proc.parameters[0].type_name, "integer");
+    assert!(proc.definition.contains("plpgsql"));
+    assert!(proc.definition.contains("x integer"));
     assert_eq!(proc.comment, Some("This is a test procedure with a comment.".to_string()));
     Ok(())
 }
@@ -128,13 +131,12 @@ async fn test_introspect_procedure_security_definer() -> Result<(), Box<dyn std:
     let schema = connection.introspect().await?;
 
     // Verify the procedure was introspected
-    let procedures: Vec<_> = schema.procedures.values().collect();
+    let procedures = get_procedures_from_schema(&schema);
     debug!("Procedures with security definer: {:?}", procedures);
     let proc = procedures.iter().find(|p| p.name == "test_procedure_security_definer").expect("Should find procedure");
     assert_eq!(proc.name, "test_procedure_security_definer");
-    assert_eq!(proc.language, "plpgsql");
-    assert_eq!(proc.parameters.len(), 0);
-    assert_eq!(proc.security_definer, true);
+    assert!(proc.definition.contains("plpgsql"));
+    assert!(proc.definition.contains("SECURITY DEFINER"));
     assert_eq!(proc.comment, Some("Procedure with security definer".to_string()));
     Ok(())
 }
@@ -158,10 +160,10 @@ async fn test_introspect_procedure_sql_language() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the procedure was introspected
-    let procedures: Vec<_> = schema.procedures.values().collect();
+    let procedures = get_procedures_from_schema(&schema);
     debug!("Procedures in SQL: {:?}", procedures);
     let proc = procedures.iter().find(|p| p.name == "test_procedure_sql").expect("Should find procedure");
     assert_eq!(proc.name, "test_procedure_sql");
-    assert_eq!(proc.language, "sql");
+    assert!(proc.definition.contains("sql"));
     Ok(())
 } 

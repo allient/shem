@@ -19,8 +19,8 @@ async fn test_introspect_publication_basic() -> Result<(), Box<dyn std::error::E
     let publication_obj = publication.unwrap();
     assert_eq!(publication_obj.name, "test_pub");
     // Note: puballtables might be false in some PostgreSQL versions even for basic publications
-    // The key indicator is that tables list is empty for basic publications
-    assert!(publication_obj.tables.is_empty(), "Basic publication should have empty tables list");
+    // The key indicator is that no publication tables are associated with basic publications
+    assert!(schema.publication_tables.is_empty(), "Basic publication should have no associated tables");
     assert!(publication_obj.insert, "Basic publication should allow INSERT");
     assert!(publication_obj.update, "Basic publication should allow UPDATE");
     assert!(publication_obj.delete, "Basic publication should allow DELETE");
@@ -57,9 +57,11 @@ async fn test_introspect_publication_with_specific_tables() -> Result<(), Box<dy
     assert!(publication_obj.update, "Publication should allow UPDATE");
     assert!(publication_obj.delete, "Publication should allow DELETE");
     assert!(publication_obj.truncate, "Publication should allow TRUNCATE");
-    assert_eq!(publication_obj.tables.len(), 2, "Publication should have 2 tables");
-    assert!(publication_obj.tables.contains(&"public.test_table1".to_string()));
-    assert!(publication_obj.tables.contains(&"public.test_table2".to_string()));
+    // Check that the publication tables are in the schema
+    let pub_tables: Vec<_> = schema.publication_tables.values().collect();
+    assert_eq!(pub_tables.len(), 2, "Publication should have 2 tables");
+    assert!(pub_tables.iter().any(|pt| pt.table_schema == "public" && pt.table_name == "test_table1"));
+    assert!(pub_tables.iter().any(|pt| pt.table_schema == "public" && pt.table_name == "test_table2"));
 
     // Clean up
     db.cleanup().await?;
@@ -91,8 +93,10 @@ async fn test_introspect_publication_with_limited_operations() -> Result<(), Box
     assert!(publication_obj.update, "Publication should allow UPDATE");
     assert!(!publication_obj.delete, "Publication should not allow DELETE");
     assert!(!publication_obj.truncate, "Publication should not allow TRUNCATE");
-    assert_eq!(publication_obj.tables.len(), 1, "Publication should have 1 table");
-    assert!(publication_obj.tables.contains(&"public.test_table_ops".to_string()));
+    // Check that the publication table is in the schema
+    let pub_tables: Vec<_> = schema.publication_tables.values().collect();
+    assert_eq!(pub_tables.len(), 1, "Publication should have 1 table");
+    assert!(pub_tables.iter().any(|pt| pt.table_schema == "public" && pt.table_name == "test_table_ops"));
 
     // Clean up
     db.cleanup().await?;
@@ -117,13 +121,17 @@ async fn test_introspect_multiple_publications() -> Result<(), Box<dyn std::erro
     // Introspect the database
     let schema = connection.introspect().await?;
 
+
+
     // Verify all publications were introspected
     assert_eq!(schema.publications.len(), 3, "Should have 3 publications");
 
     let pub1 = schema.publications.get("pub1").unwrap();
     assert_eq!(pub1.name, "pub1");
     assert!(!pub1.all_tables);
-    assert_eq!(pub1.tables.len(), 1);
+    // Check that the publication table is in the schema
+    let pub_tables: Vec<_> = schema.publication_tables.values().collect();
+    assert_eq!(pub_tables.len(), 2, "Should have 2 publication tables (one for pub1, one for pub2)");
 
     let pub2 = schema.publications.get("pub2").unwrap();
     assert_eq!(pub2.name, "pub2");
@@ -135,8 +143,11 @@ async fn test_introspect_multiple_publications() -> Result<(), Box<dyn std::erro
 
     let pub3 = schema.publications.get("pub3").unwrap();
     assert_eq!(pub3.name, "pub3");
-    // The reliable indicator for a basic publication is an empty tables list
-    assert!(pub3.tables.is_empty(), "Basic publication should have empty tables list");
+    // Check that pub3 has no associated tables (it's a basic publication)
+    let pub3_tables: Vec<_> = schema.publication_tables.values()
+        .filter(|pt| pt.publication_oid == pub3.oid)
+        .collect();
+    assert!(pub3_tables.is_empty(), "Basic publication should have no associated tables");
     assert!(pub3.insert);
     assert!(pub3.update);
     assert!(pub3.delete);
@@ -169,8 +180,10 @@ async fn test_introspect_publication_with_schema() -> Result<(), Box<dyn std::er
     let publication_obj = publication.unwrap();
     assert_eq!(publication_obj.name, "test_pub_schema_pub");
     assert!(!publication_obj.all_tables);
-    assert_eq!(publication_obj.tables.len(), 1);
-    assert!(publication_obj.tables.contains(&"test_pub_schema.schema_table".to_string()));
+    // Check that the publication table is in the schema
+    let pub_tables: Vec<_> = schema.publication_tables.values().collect();
+    assert_eq!(pub_tables.len(), 1);
+    assert!(pub_tables.iter().any(|pt| pt.table_schema == "test_pub_schema" && pt.table_name == "schema_table"));
 
     // Clean up
     db.cleanup().await?;

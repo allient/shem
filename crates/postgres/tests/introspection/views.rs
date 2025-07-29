@@ -68,7 +68,7 @@ async fn test_introspect_view_with_schema() -> Result<(), Box<dyn std::error::Er
     let schema = connection.introspect().await?;
 
     // Verify the view exists in the schema
-    let view = schema.views.get("expensive_products").expect("View should exist");
+    let view = schema.views.get("test_schema.expensive_products").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.name, "expensive_products");
     assert_eq!(view.schema, "test_schema".to_string());

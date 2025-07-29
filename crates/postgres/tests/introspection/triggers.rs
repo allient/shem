@@ -1,6 +1,5 @@
 use postgres::TestDb;
-use shem_core::{DatabaseConnection, TriggerTiming, TriggerLevel};
-use shem_core::schema::TriggerEvent;
+use shem_core::DatabaseConnection;
 use tracing::debug;
 
 #[tokio::test]
@@ -36,11 +35,12 @@ async fn test_introspect_basic_trigger() -> Result<(), Box<dyn std::error::Error
     debug!("Triggers: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_basic_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_basic_trigger");
-    assert_eq!(trig.table, "test_trigger_table");
-    assert_eq!(trig.timing, TriggerTiming::Before);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Insert)));
-    assert_eq!(trig.function, "test_trigger_func");
-    assert_eq!(trig.for_each, TriggerLevel::Row);
+    assert_eq!(trig.table_name, "test_trigger_table");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("BEFORE INSERT"));
+    assert!(trig.definition.contains("test_trigger_func"));
+    assert!(trig.definition.contains("FOR EACH ROW"));
     Ok(())
 }
 
@@ -77,11 +77,12 @@ async fn test_introspect_trigger_multiple_events() -> Result<(), Box<dyn std::er
     debug!("Triggers multi: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_multi_event_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_multi_event_trigger");
-    assert_eq!(trig.table, "test_trigger_multi");
-    assert_eq!(trig.timing, TriggerTiming::After);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Insert)));
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Update { .. })));
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Delete)));
+    assert_eq!(trig.table_name, "test_trigger_multi");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("AFTER INSERT") && trig.definition.contains("UPDATE") && trig.definition.contains("DELETE"));
+    assert!(trig.definition.contains("test_trigger_multi_func"));
+    assert!(trig.definition.contains("FOR EACH ROW"));
     Ok(())
 }
 
@@ -119,12 +120,13 @@ async fn test_introspect_trigger_with_when_condition() -> Result<(), Box<dyn std
     debug!("Triggers when: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_when_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_when_trigger");
-    assert_eq!(trig.table, "test_trigger_when");
-    assert_eq!(trig.timing, TriggerTiming::After);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Update { .. })));
-    assert_eq!(trig.function, "test_trigger_when_func");
-    assert_eq!(trig.for_each, TriggerLevel::Row);
-    assert!(trig.condition.is_some());
+    assert_eq!(trig.table_name, "test_trigger_when");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("AFTER UPDATE"));
+    assert!(trig.definition.contains("test_trigger_when_func"));
+    assert!(trig.definition.contains("FOR EACH ROW"));
+    assert!(trig.definition.contains("WHEN") && trig.definition.contains("value > 10"));
     Ok(())
 }
 
@@ -161,12 +163,13 @@ async fn test_introspect_trigger_with_arguments() -> Result<(), Box<dyn std::err
     debug!("Triggers args: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_args_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_args_trigger");
-    assert_eq!(trig.table, "test_trigger_args");
-    assert_eq!(trig.timing, TriggerTiming::Before);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Update { .. })));
-    assert_eq!(trig.function, "test_trigger_args_func");
-    assert_eq!(trig.for_each, TriggerLevel::Row);
-    assert_eq!(trig.arguments, vec!["foo".to_string(), "bar".to_string()]);
+    assert_eq!(trig.table_name, "test_trigger_args");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("BEFORE UPDATE"));
+    assert!(trig.definition.contains("test_trigger_args_func"));
+    assert!(trig.definition.contains("FOR EACH ROW"));
+    assert!(trig.definition.contains("'foo', 'bar'"));
     Ok(())
 }
 
@@ -203,11 +206,12 @@ async fn test_introspect_trigger_for_each_statement() -> Result<(), Box<dyn std:
     debug!("Triggers statement: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_stmt_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_stmt_trigger");
-    assert_eq!(trig.table, "test_trigger_stmt");
-    assert_eq!(trig.timing, TriggerTiming::After);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Delete)));
-    assert_eq!(trig.function, "test_trigger_stmt_func");
-    assert_eq!(trig.for_each, TriggerLevel::Statement);
+    assert_eq!(trig.table_name, "test_trigger_stmt");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("AFTER DELETE"));
+    assert!(trig.definition.contains("test_trigger_stmt_func"));
+    assert!(trig.definition.contains("FOR EACH STATEMENT"));
     Ok(())
 }
 
@@ -245,11 +249,12 @@ async fn test_introspect_trigger_with_comment() -> Result<(), Box<dyn std::error
     debug!("Triggers comment: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_comment_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_comment_trigger");
-    assert_eq!(trig.table, "test_trigger_comment");
-    assert_eq!(trig.timing, TriggerTiming::Before);
-    assert!(trig.events.iter().any(|e| matches!(e, TriggerEvent::Insert)));
-    assert_eq!(trig.function, "test_trigger_comment_func");
-    assert_eq!(trig.for_each, TriggerLevel::Row);
+    assert_eq!(trig.table_name, "test_trigger_comment");
+    assert_eq!(trig.schema, "public");
+    assert!(!trig.is_constraint);
+    assert!(trig.definition.contains("BEFORE INSERT"));
+    assert!(trig.definition.contains("test_trigger_comment_func"));
+    assert!(trig.definition.contains("FOR EACH ROW"));
     assert_eq!(trig.comment, Some("This is a test trigger with a comment.".to_string()));
     Ok(())
 }
@@ -290,23 +295,24 @@ async fn test_introspect_constraint_trigger() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the constraint trigger was introspected
-    let constraint_triggers: Vec<_> = schema.constraint_triggers.values().collect();
-    debug!("Constraint triggers: {:?}", constraint_triggers);
+    let triggers: Vec<_> = schema.triggers.values().collect();
+    debug!("Constraint triggers: {:?}", triggers);
 
     // Should find at least one constraint trigger
+    let constraint_triggers: Vec<_> = triggers.iter().filter(|t| t.is_constraint).collect();
     assert!(!constraint_triggers.is_empty(), "Should find constraint triggers");
 
     // Check that we have the expected constraint trigger
-    let constraint_trigger = constraint_triggers.iter().find(|t| t.name == "test_constraint_trigger");
+    let constraint_trigger = triggers.iter().find(|t| t.name == "test_constraint_trigger");
     assert!(constraint_trigger.is_some(), "Should find our constraint trigger");
 
     if let Some(trigger) = constraint_trigger {
         assert_eq!(trigger.name, "test_constraint_trigger");
-        assert_eq!(trigger.table, "test_constraint_trigger_table");
-        assert_eq!(trigger.schema, Some("public".to_string()));
-        assert_eq!(trigger.function, "test_constraint_trigger_func");
-        // The constraint name might be different, so we just check it's not empty
-        assert!(!trigger.constraint_name.is_empty(), "Should have a constraint name");
+        assert_eq!(trigger.table_name, "test_constraint_trigger_table");
+        assert_eq!(trigger.schema, "public");
+        assert!(trigger.is_constraint);
+        assert!(trigger.definition.contains("CREATE CONSTRAINT TRIGGER"));
+        assert!(trigger.definition.contains("test_constraint_trigger_func"));
     }
 
     Ok(())

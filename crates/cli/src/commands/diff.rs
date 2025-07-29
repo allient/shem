@@ -7,7 +7,7 @@ use shared_types::{
     TriggerWhen,
 };
 use shem_core::{
-    DatabaseDriver, EnumValue, Schema, schema::{ReplicaIdentity, IdentityGeneration, Generated, ColumnStorage},
+    DatabaseDriver, EnumValue, Schema, schema::{ReplicaIdentity, IdentityGeneration, Generated, ColumnStorage, ConstraintType, ReferentialAction},
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -287,6 +287,7 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                     TableConstraint::Exclusion { .. } => "EXCLUDE (...)".to_string(),
                 };
                 let constraint = shem_core::Constraint {
+                    oid: 0,
                     name: match constraint {
                         TableConstraint::PrimaryKey { name, .. } => {
                             name.clone().unwrap_or_default()
@@ -298,22 +299,23 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                         TableConstraint::Check { name, .. } => name.clone().unwrap_or_default(),
                         TableConstraint::Exclusion { name, .. } => name.clone().unwrap_or_default(),
                     },
-                    kind: match constraint {
-                        TableConstraint::PrimaryKey { .. } => shem_core::ConstraintKind::PrimaryKey,
-                        TableConstraint::ForeignKey { .. } => {
-                            shem_core::ConstraintKind::ForeignKey {
-                                references: "".to_string(),
-                                on_delete: None,
-                                on_update: None,
-                            }
-                        }
-                        TableConstraint::Unique { .. } => shem_core::ConstraintKind::Unique,
-                        TableConstraint::Check { .. } => shem_core::ConstraintKind::Check,
-                        TableConstraint::Exclusion { .. } => shem_core::ConstraintKind::Exclusion,
-                    },
+                    table_oid: 0,
                     definition,
-                    deferrable: false,
-                    initially_deferred: false,
+                                                                r#type: match constraint {
+                        TableConstraint::PrimaryKey { .. } => shem_core::schema::ConstraintType::PrimaryKey,
+                        TableConstraint::ForeignKey { .. } => shem_core::schema::ConstraintType::ForeignKey,
+                        TableConstraint::Unique { .. } => shem_core::schema::ConstraintType::Unique,
+                        TableConstraint::Check { .. } => shem_core::schema::ConstraintType::Check,
+                        TableConstraint::Exclusion { .. } => shem_core::schema::ConstraintType::Exclusion,
+                    },
+                    foreign_table_oid: None,
+                    foreign_key_columns: Vec::new(),
+                    primary_key_columns: Vec::new(),
+                    on_update: shem_core::schema::ReferentialAction::NoAction,
+                    on_delete: shem_core::schema::ReferentialAction::NoAction,
+                    is_deferrable: false,
+                    is_initially_deferred: false,
+                    is_not_valid: false,
                 };
                 table.constraints.push(constraint);
             }
@@ -611,14 +613,22 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                 TableConstraint::PrimaryKey { columns, name } => {
                                     if !columns.is_empty() {
                                         let c = shem_core::Constraint {
+                                            oid: 0,
                                             name: name.clone().unwrap_or_default(),
-                                            kind: shem_core::ConstraintKind::PrimaryKey,
+                                            table_oid: 0,
                                             definition: format!(
                                                 "PRIMARY KEY ({})",
                                                 columns.join(", ")
                                             ),
-                                            deferrable: false,
-                                            initially_deferred: false,
+                                            r#type: shem_core::schema::ConstraintType::PrimaryKey,
+                                            foreign_table_oid: None,
+                                            foreign_key_columns: Vec::new(),
+                                            primary_key_columns: Vec::new(),
+                                            on_update: shem_core::schema::ReferentialAction::NoAction,
+                                            on_delete: shem_core::schema::ReferentialAction::NoAction,
+                                            is_deferrable: false,
+                                            is_initially_deferred: false,
+                                            is_not_valid: false,
                                         };
                                         table.constraints.push(c);
                                     }
@@ -626,11 +636,19 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                                 TableConstraint::Unique { columns, name } => {
                                     if !columns.is_empty() {
                                         let c = shem_core::Constraint {
+                                            oid: 0,
                                             name: name.clone().unwrap_or_default(),
-                                            kind: shem_core::ConstraintKind::Unique,
+                                            table_oid: 0,
                                             definition: format!("UNIQUE ({})", columns.join(", ")),
-                                            deferrable: false,
-                                            initially_deferred: false,
+                                            r#type: shem_core::schema::ConstraintType::Unique,
+                                            foreign_table_oid: None,
+                                            foreign_key_columns: Vec::new(),
+                                            primary_key_columns: Vec::new(),
+                                            on_update: shem_core::schema::ReferentialAction::NoAction,
+                                            on_delete: shem_core::schema::ReferentialAction::NoAction,
+                                            is_deferrable: false,
+                                            is_initially_deferred: false,
+                                            is_not_valid: false,
                                         };
                                         table.constraints.push(c);
                                     }

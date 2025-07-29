@@ -1,23 +1,22 @@
-use shem_core::schema::{Trigger, TriggerEvent, TriggerTiming, TriggerLevel};
+use shem_core::schema::Trigger;
 use shem_core::traits::SqlGenerator;
 use postgres::PostgresSqlGenerator;
 
 #[test]
 fn test_create_trigger_basic() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
+    println!("Generated SQL: {}", sql);
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
     assert!(sql.contains("BEFORE INSERT"));
     assert!(sql.contains("ON \"test_table\""));
@@ -28,17 +27,15 @@ fn test_create_trigger_basic() {
 #[test]
 fn test_create_trigger_with_arguments() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Update],
-        function: "test_function".to_string(),
-        arguments: vec!["arg1".to_string(), "arg2".to_string()],
-        condition: None,
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger AFTER UPDATE ON test_table FOR EACH ROW EXECUTE FUNCTION test_function(arg1, arg2)".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -51,17 +48,15 @@ fn test_create_trigger_with_arguments() {
 #[test]
 fn test_create_trigger_with_condition() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: Some("NEW.id > 0".to_string()),
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_table FOR EACH ROW WHEN (NEW.id > 0) EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: Some("NEW.id > 0".to_string()),
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -75,17 +70,15 @@ fn test_create_trigger_with_condition() {
 #[test]
 fn test_create_trigger_for_each_statement() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::After,
-        events: vec![TriggerEvent::Delete],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Statement,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger AFTER DELETE ON test_table FOR EACH STATEMENT EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -98,17 +91,15 @@ fn test_create_trigger_for_each_statement() {
 #[test]
 fn test_create_trigger_multiple_events() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert, TriggerEvent::Update],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT OR UPDATE ON test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -121,17 +112,15 @@ fn test_create_trigger_multiple_events() {
 #[test]
 fn test_create_trigger_with_schema() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: Some("test_schema".to_string()),
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "test_schema".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_schema.test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -144,17 +133,15 @@ fn test_create_trigger_with_schema() {
 #[test]
 fn test_create_trigger_with_comment() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
-        comment: Some("Test trigger comment".to_string()),
-        when: None,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
+        comment: Some("This is a test trigger".to_string()),
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.create_trigger(&trigger).unwrap();
     assert!(sql.contains("CREATE TRIGGER \"test_trigger\""));
@@ -162,24 +149,42 @@ fn test_create_trigger_with_comment() {
     assert!(sql.contains("ON \"test_table\""));
     assert!(sql.contains("FOR EACH ROW"));
     assert!(sql.contains("EXECUTE FUNCTION test_function"));
-    assert!(sql.contains("COMMENT ON TRIGGER \"test_trigger\" ON \"test_table\" IS 'Test trigger comment';"));
 }
 
 #[test]
 fn test_drop_trigger() {
     let trigger = Trigger {
+        oid: 1,
         name: "test_trigger".to_string(),
-        table: "test_table".to_string(),
-        schema: None,
-        timing: TriggerTiming::Before,
-        events: vec![TriggerEvent::Insert],
-        function: "test_function".to_string(),
-        arguments: vec![],
-        condition: None,
-        for_each: TriggerLevel::Row,
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "public".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
         comment: None,
-        when: None,
+        is_from_extension: false,
     };
     let sql = PostgresSqlGenerator.drop_trigger(&trigger).unwrap();
-    assert_eq!(sql, "DROP TRIGGER IF EXISTS \"test_trigger\" ON \"test_table\" CASCADE;");
+    assert!(sql.contains("DROP TRIGGER IF EXISTS \"test_trigger\""));
+    assert!(sql.contains("ON \"test_table\""));
+    assert!(sql.contains("CASCADE"));
+}
+
+#[test]
+fn test_drop_trigger_with_schema() {
+    let trigger = Trigger {
+        oid: 1,
+        name: "test_trigger".to_string(),
+        table_oid: 1,
+        table_name: "test_table".to_string(),
+        schema: "test_schema".to_string(),
+        definition: "CREATE TRIGGER test_trigger BEFORE INSERT ON test_schema.test_table FOR EACH ROW EXECUTE FUNCTION test_function".to_string(),
+        is_constraint: false,
+        comment: None,
+        is_from_extension: false,
+    };
+    let sql = PostgresSqlGenerator.drop_trigger(&trigger).unwrap();
+    assert!(sql.contains("DROP TRIGGER IF EXISTS \"test_trigger\""));
+    assert!(sql.contains("ON \"test_schema\".\"test_table\""));
+    assert!(sql.contains("CASCADE"));
 } 

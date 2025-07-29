@@ -13,12 +13,12 @@ use shared_types::{
 use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
-        ArrayType, BaseType, CheckOption, Collation, CollationProvider, Column, CompositeType,
-        Constraint, ConstraintKind, ConstraintTrigger, Domain, EnumType, EnumValue, EventTrigger,
-        EventTriggerEvent, Extension, ForeignKeyConstraint, Function, GeneratedColumn, Identity,
+        BaseType, CheckOption, Collation, CollationProvider, Column, CompositeType,
+        Constraint, ConstraintType, ConstraintTrigger, Domain, EnumType, EnumValue, EventTrigger,
+        EventTriggerEvent, Extension, Function, Identity,
         MaterializedView, NamedSchema, ParallelSafety, Parameter, ParameterMode, Policy,
         PolicyCommand, Procedure, Publication, RangeType, ReferentialAction, ReturnKind,
-        ReturnType, Role, Rule, RuleEvent, Sequence, Server, Subscription, Table, Tablespace,
+        ReturnType, Role, Rule, Sequence, Server, Subscription, Table, Tablespace,
         Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeInfo, View, Volatility,
         ColumnStorage, IdentityGeneration, Generated, ReplicaIdentity,
     },
@@ -54,7 +54,7 @@ enum SchemaObject<'a> {
     Subscription(&'a Subscription),
     Role(&'a Role),
     Tablespace(&'a Tablespace),
-    ForeignKeyConstraint(&'a ForeignKeyConstraint),
+
     BaseType(&'a BaseType),
 }
 
@@ -84,7 +84,7 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Subscription(s) => s.name.clone(),
             SchemaObject::Role(r) => r.name.clone(),
             SchemaObject::Tablespace(t) => t.name.clone(),
-            SchemaObject::ForeignKeyConstraint(fk) => fk.name.clone(),
+
             SchemaObject::BaseType(b) => b.info.name.clone(),
         }
     }
@@ -115,7 +115,7 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Subscription(_) => None, // Subscriptions don't have schemas
             SchemaObject::Role(_) => None,        // Roles don't have schemas
             SchemaObject::Tablespace(_) => None,  // Tablespaces don't have schemas
-            SchemaObject::ForeignKeyConstraint(fk) => fk.schema.clone(),
+
             SchemaObject::BaseType(b) => Some(b.info.schema.clone()),
         }
     }
@@ -304,10 +304,7 @@ impl SchemaSerializer for SqlSerializer {
                     sql.push_str(&generate_create_tablespace(t)?);
                     sql.push_str(";\n\n");
                 }
-                SchemaObject::ForeignKeyConstraint(fk) => {
-                    sql.push_str(&generate_create_foreign_key_constraint(fk)?);
-                    sql.push_str(";\n\n");
-                }
+
                 SchemaObject::BaseType(b) => {
                     sql.push_str(&generate_create_base_type(b)?);
                     sql.push_str(";\n\n");
@@ -458,57 +455,82 @@ impl SchemaSerializer for SqlSerializer {
                             .into_iter()
                             .map(|c| match c {
                                 TableConstraint::PrimaryKey { columns, name } => Constraint {
+                                    oid: 0,
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::PrimaryKey,
+                                    table_oid: 0,
                                     definition: format!("PRIMARY KEY ({})", columns.join(", ")),
-                                    deferrable: false,
-                                    initially_deferred: false,
+                                    r#type: ConstraintType::PrimaryKey,
+                                    foreign_table_oid: None,
+                                    foreign_key_columns: Vec::new(),
+                                    primary_key_columns: Vec::new(),
+                                    on_update: ReferentialAction::NoAction,
+                                    on_delete: ReferentialAction::NoAction,
+                                    is_deferrable: false,
+                                    is_initially_deferred: false,
+                                    is_not_valid: false,
                                 },
                                 TableConstraint::Unique { columns, name } => Constraint {
+                                    oid: 0,
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::Unique,
+                                    table_oid: 0,
                                     definition: format!("UNIQUE ({})", columns.join(", ")),
-                                    deferrable: false,
-                                    initially_deferred: false,
+                                    r#type: ConstraintType::Unique,
+                                    foreign_table_oid: None,
+                                    foreign_key_columns: Vec::new(),
+                                    primary_key_columns: Vec::new(),
+                                    on_update: ReferentialAction::NoAction,
+                                    on_delete: ReferentialAction::NoAction,
+                                    is_deferrable: false,
+                                    is_initially_deferred: false,
+                                    is_not_valid: false,
                                 },
                                 TableConstraint::Check { expression, name } => Constraint {
+                                    oid: 0,
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::Check,
+                                    table_oid: 0,
                                     definition: format!("CHECK ({:?})", expression),
-                                    deferrable: false,
-                                    initially_deferred: false,
+                                    r#type: ConstraintType::Check,
+                                    foreign_table_oid: None,
+                                    foreign_key_columns: Vec::new(),
+                                    primary_key_columns: Vec::new(),
+                                    on_update: ReferentialAction::NoAction,
+                                    on_delete: ReferentialAction::NoAction,
+                                    is_deferrable: false,
+                                    is_initially_deferred: false,
+                                    is_not_valid: false,
                                 },
                                 TableConstraint::ForeignKey {
                                     columns,
                                     references,
                                     name,
                                 } => Constraint {
+                                    oid: 0,
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::ForeignKey {
-                                        references: format!(
-                                            "{}({})",
-                                            references.table,
-                                            references.columns.join(", ")
-                                        ),
-                                        on_delete: None,
-                                        on_update: None,
-                                    },
+                                    table_oid: 0,
                                     definition: format!(
                                         "FOREIGN KEY ({}) REFERENCES {}({})",
                                         columns.join(", "),
                                         references.table,
                                         references.columns.join(", ")
                                     ),
-                                    deferrable: false,
-                                    initially_deferred: false,
+                                    r#type: ConstraintType::ForeignKey,
+                                    foreign_table_oid: None,
+                                    foreign_key_columns: columns.clone(),
+                                    primary_key_columns: references.columns.clone(),
+                                    on_update: ReferentialAction::NoAction,
+                                    on_delete: ReferentialAction::NoAction,
+                                    is_deferrable: false,
+                                    is_initially_deferred: false,
+                                    is_not_valid: false,
                                 },
                                 TableConstraint::Exclusion {
                                     elements,
                                     using,
                                     name,
                                 } => Constraint {
+                                    oid: 0,
                                     name: name.unwrap_or_default(),
-                                    kind: ConstraintKind::Exclusion,
+                                    table_oid: 0,
                                     definition: format!(
                                         "EXCLUDE USING {} ({})",
                                         using,
@@ -521,8 +543,15 @@ impl SchemaSerializer for SqlSerializer {
                                             .collect::<Vec<_>>()
                                             .join(", ")
                                     ),
-                                    deferrable: false,
-                                    initially_deferred: false,
+                                    r#type: ConstraintType::Exclusion,
+                                    foreign_table_oid: None,
+                                    foreign_key_columns: Vec::new(),
+                                    primary_key_columns: Vec::new(),
+                                    on_update: ReferentialAction::NoAction,
+                                    on_delete: ReferentialAction::NoAction,
+                                    is_deferrable: false,
+                                    is_initially_deferred: false,
+                                    is_not_valid: false,
                                 },
                             })
                             .collect(),
@@ -827,10 +856,7 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
     };
     ordered_objects.extend(sorted_tables);
 
-    // 16. Foreign Key Constraints (after tables)
-    for (_, fk) in &schema.foreign_key_constraints {
-        ordered_objects.push(SchemaObject::ForeignKeyConstraint(fk));
-    }
+
 
     // 17. Views
     for (_, view) in &schema.views {
@@ -2281,9 +2307,8 @@ fn generate_create_publication(publication: &Publication) -> Result<String> {
 
     if publication.all_tables {
         sql.push_str(" FOR ALL TABLES");
-    } else if !publication.tables.is_empty() {
-        sql.push_str(&format!(" FOR TABLE {}", publication.tables.join(", ")));
     }
+    // Note: Specific tables are handled separately via PublicationTable objects
 
     let mut operations = Vec::new();
     if publication.insert {
@@ -2387,50 +2412,7 @@ fn generate_create_tablespace(tablespace: &Tablespace) -> Result<String> {
     Ok(sql)
 }
 
-fn generate_create_foreign_key_constraint(fk: &ForeignKeyConstraint) -> Result<String> {
-    let mut sql = format!("ALTER TABLE {}", fk.table);
 
-    if let Some(schema) = &fk.schema {
-        sql = format!("ALTER TABLE {}.{}", schema, fk.table);
-    }
-
-    sql.push_str(&format!(
-        " ADD CONSTRAINT {} FOREIGN KEY ({})",
-        fk.name,
-        fk.columns.join(", ")
-    ));
-
-    sql.push_str(&format!(" REFERENCES {}", fk.references_table));
-    if let Some(ref_schema) = &fk.references_schema {
-        sql = format!("{}.{}", ref_schema, fk.references_table);
-    }
-    sql.push_str(&format!(" ({})", fk.references_columns.join(", ")));
-
-    if let Some(on_delete) = &fk.on_delete {
-        sql.push_str(&format!(
-            " ON DELETE {}",
-            referential_action_to_str(on_delete)
-        ));
-    }
-
-    if let Some(on_update) = &fk.on_update {
-        sql.push_str(&format!(
-            " ON UPDATE {}",
-            referential_action_to_str(on_update)
-        ));
-    }
-
-    if fk.deferrable {
-        sql.push_str(" DEFERRABLE");
-        if fk.initially_deferred {
-            sql.push_str(" INITIALLY DEFERRED");
-        } else {
-            sql.push_str(" INITIALLY IMMEDIATE");
-        }
-    }
-
-    Ok(sql)
-}
 
 fn generate_create_base_type(base_type: &BaseType) -> Result<String> {
     let mut sql = format!("CREATE TYPE {}", base_type.info.name);

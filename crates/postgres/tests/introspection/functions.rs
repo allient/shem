@@ -2,6 +2,16 @@ use postgres::TestDb;
 use shem_core::{DatabaseConnection, Volatility, ParallelSafety, ReturnKind};
 use tracing::debug;
 
+// Helper function to extract functions from routines
+fn get_functions_from_schema(schema: &shem_core::Schema) -> Vec<&shem_core::Function> {
+    schema.routines.values()
+        .filter_map(|r| match r {
+            shem_core::schema::Routine::Function(f) => Some(f),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn test_introspect_function_with_comment() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
@@ -27,19 +37,23 @@ async fn test_introspect_function_with_comment() -> Result<(), Box<dyn std::erro
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected with comment
-    let functions: Vec<_> = schema.functions.values().collect();
-    debug!("Functions: {:?}", functions);
+    let routines: Vec<_> = schema.routines.values().collect();
+    debug!("Routines: {:?}", routines);
     
-    let func = functions.iter().find(|f| f.name == "test_function_with_comment").expect("Should find test function");
+    let func = routines.iter()
+        .filter_map(|r| match r {
+            shem_core::schema::Routine::Function(f) => Some(f),
+            _ => None,
+        })
+        .find(|f| f.name == "test_function_with_comment")
+        .expect("Should find test function");
+    
     assert_eq!(func.name, "test_function_with_comment");
-    assert_eq!(func.schema, Some("public".to_string()));
-    assert_eq!(func.language, "plpgsql");
-    assert_eq!(func.parameters.len(), 2);
-    assert_eq!(func.parameters[0].name, "a");
-    assert_eq!(func.parameters[0].type_name, "integer");
-    assert_eq!(func.parameters[1].name, "b");
-    assert_eq!(func.parameters[1].type_name, "text");
-    assert_eq!(func.returns.type_name, "integer");
+    assert_eq!(func.schema, "public");
+    assert!(func.definition.contains("plpgsql"));
+    assert!(func.definition.contains("a integer"));
+    assert!(func.definition.contains("b text"));
+    assert!(func.definition.contains("RETURNS integer"));
     assert_eq!(func.comment, Some("This is a test function that adds an integer and the length of a text".to_string()));
     
     Ok(())
@@ -65,17 +79,15 @@ async fn test_introspect_function_without_comment() -> Result<(), Box<dyn std::e
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected without comment
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions without comment: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_no_comment").expect("Should find test function");
     assert_eq!(func.name, "test_function_no_comment");
-    assert_eq!(func.schema, Some("public".to_string()));
-    assert_eq!(func.language, "sql");
-    assert_eq!(func.parameters.len(), 1);
-    assert_eq!(func.parameters[0].name, "x");
-    assert_eq!(func.parameters[0].type_name, "integer");
-    assert_eq!(func.returns.type_name, "integer");
+    assert_eq!(func.schema, "public");
+    assert!(func.definition.contains("sql"));
+    assert!(func.definition.contains("x integer"));
+    assert!(func.definition.contains("RETURNS integer"));
     assert_eq!(func.comment, None);
     
     Ok(())
@@ -107,14 +119,13 @@ async fn test_introspect_function_returns_table() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions returning table: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_returns_table").expect("Should find test function");
     assert_eq!(func.name, "test_function_returns_table");
-    assert_eq!(func.language, "sql");
-    assert_eq!(func.parameters.len(), 0);
-    assert!(func.returns.type_name.contains("TABLE"));
+    assert!(func.definition.contains("sql"));
+    assert!(func.definition.contains("RETURNS TABLE"));
     assert_eq!(func.comment, Some("Function that returns a table".to_string()));
     
     Ok(())
@@ -149,20 +160,16 @@ async fn test_introspect_function_with_default_parameters() -> Result<(), Box<dy
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with defaults: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_defaults").expect("Should find test function");
     assert_eq!(func.name, "test_function_defaults");
-    assert_eq!(func.language, "plpgsql");
-    assert_eq!(func.parameters.len(), 3);
-    assert_eq!(func.parameters[0].name, "a");
-    assert_eq!(func.parameters[0].type_name, "integer");
-    assert_eq!(func.parameters[1].name, "b");
-    assert_eq!(func.parameters[1].type_name, "text");
-    assert_eq!(func.parameters[2].name, "c");
-    assert_eq!(func.parameters[2].type_name, "boolean");
-    assert_eq!(func.returns.type_name, "text");
+    assert!(func.definition.contains("plpgsql"));
+    assert!(func.definition.contains("a integer"));
+    assert!(func.definition.contains("b text"));
+    assert!(func.definition.contains("c boolean"));
+    assert!(func.definition.contains("RETURNS text"));
     assert_eq!(func.comment, Some("Function with default parameters".to_string()));
     
     Ok(())
@@ -196,14 +203,13 @@ async fn test_introspect_function_with_complex_return_type() -> Result<(), Box<d
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with complex return: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_complex_return").expect("Should find test function");
     assert_eq!(func.name, "test_function_complex_return");
-    assert_eq!(func.language, "plpgsql");
-    assert_eq!(func.parameters.len(), 0);
-    assert_eq!(func.returns.type_name, "test_complex_type");
+    assert!(func.definition.contains("plpgsql"));
+    assert!(func.definition.contains("RETURNS test_complex_type"));
     assert_eq!(func.comment, Some("Function returning complex type".to_string()));
     
     Ok(())
@@ -233,15 +239,14 @@ async fn test_introspect_function_with_security_definer() -> Result<(), Box<dyn 
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with security definer: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_security_definer").expect("Should find test function");
     assert_eq!(func.name, "test_function_security_definer");
-    assert_eq!(func.language, "sql");
-    assert_eq!(func.parameters.len(), 0);
-    assert_eq!(func.returns.type_name, "integer");
-    assert!(func.security_definer);
+    assert!(func.definition.contains("sql"));
+    assert!(func.definition.contains("SECURITY DEFINER"));
+    assert!(func.definition.contains("RETURNS integer"));
     assert_eq!(func.comment, Some("Function with security definer".to_string()));
     
     Ok(())
@@ -283,15 +288,15 @@ async fn test_introspect_function_with_volatility() -> Result<(), Box<dyn std::e
     let schema = connection.introspect().await?;
 
     // Verify the functions were introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with volatility: {:?}", functions);
     
     let stable_func = functions.iter().find(|f| f.name == "test_function_stable").expect("Should find stable function");
-    assert_eq!(stable_func.volatility, Volatility::Stable);
+    assert!(stable_func.definition.contains("STABLE"));
     assert_eq!(stable_func.comment, Some("Stable function".to_string()));
     
     let immutable_func = functions.iter().find(|f| f.name == "test_function_immutable").expect("Should find immutable function");
-    assert_eq!(immutable_func.volatility, Volatility::Immutable);
+    assert!(immutable_func.definition.contains("IMMUTABLE"));
     assert_eq!(immutable_func.comment, Some("Immutable function".to_string()));
     
     Ok(())
@@ -322,17 +327,15 @@ async fn test_introspect_function_with_cost_and_rows() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with cost and rows: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_cost_rows").expect("Should find test function");
     assert_eq!(func.name, "test_function_cost_rows");
-    assert_eq!(func.language, "sql");
-    assert_eq!(func.parameters.len(), 0);
-    assert_eq!(func.returns.kind, ReturnKind::SetOf);
-    assert_eq!(func.returns.type_name, "integer");
-    assert_eq!(func.cost, Some(100.0));
-    assert_eq!(func.rows, Some(1000.0));
+    assert!(func.definition.contains("sql"));
+    assert!(func.definition.contains("COST 100"));
+    assert!(func.definition.contains("ROWS 1000"));
+    assert!(func.definition.contains("RETURNS SETOF integer"));
     assert_eq!(func.comment, Some("Function with cost and rows hints".to_string()));
     
     Ok(())
@@ -374,15 +377,15 @@ async fn test_introspect_function_with_parallel_safety() -> Result<(), Box<dyn s
     let schema = connection.introspect().await?;
 
     // Verify the functions were introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with parallel safety: {:?}", functions);
     
     let safe_func = functions.iter().find(|f| f.name == "test_function_parallel_safe").expect("Should find parallel safe function");
-    assert_eq!(safe_func.parallel_safety, ParallelSafety::Safe);
+    assert!(safe_func.definition.contains("PARALLEL SAFE"));
     assert_eq!(safe_func.comment, Some("Parallel safe function".to_string()));
     
     let unsafe_func = functions.iter().find(|f| f.name == "test_function_parallel_unsafe").expect("Should find parallel unsafe function");
-    assert_eq!(unsafe_func.parallel_safety, ParallelSafety::Unsafe);
+    assert!(unsafe_func.definition.contains("PARALLEL UNSAFE"));
     assert_eq!(unsafe_func.comment, Some("Parallel unsafe function".to_string()));
     
     Ok(())
@@ -412,15 +415,14 @@ async fn test_introspect_function_with_strict() -> Result<(), Box<dyn std::error
     let schema = connection.introspect().await?;
 
     // Verify the function was introspected correctly
-    let functions: Vec<_> = schema.functions.values().collect();
+    let functions = get_functions_from_schema(&schema);
     debug!("Functions with strict: {:?}", functions);
     
     let func = functions.iter().find(|f| f.name == "test_function_strict").expect("Should find test function");
     assert_eq!(func.name, "test_function_strict");
-    assert_eq!(func.language, "sql");
-    assert_eq!(func.parameters.len(), 1);
-    assert_eq!(func.returns.type_name, "integer");
-    assert!(func.strict);
+    assert!(func.definition.contains("sql"));
+    assert!(func.definition.contains("STRICT"));
+    assert!(func.definition.contains("RETURNS integer"));
     assert_eq!(func.comment, Some("Strict function".to_string()));
     
     Ok(())

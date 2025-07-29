@@ -11,7 +11,7 @@ pub use error::{Error, Result};
 pub use schema::{
     Collation, Column, ColumnStorage, Constraint, ConstraintKind, ConstraintTrigger, Domain,
     DomainConstraint, EnumType, EnumValue, EventTrigger, Extension, ForeignDataWrapper,
-    ForeignKeyConstraint, ForeignTable, Function, Identity, Index, IndexColumn, IndexMethod,
+    ForeignTable, Function, Identity, Index, IndexColumn, IndexMethod,
     MaterializedView, NamedSchema, ParallelSafety, Parameter, PartitionBy, PartitionMethod, Policy,
     Procedure, Publication, RangeType, ReturnKind, ReturnType, Role, Rule, Schema, Sequence,
     Server, Subscription, Table, Tablespace, Trigger, TriggerLevel, TriggerTiming, View,

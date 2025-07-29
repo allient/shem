@@ -110,10 +110,10 @@ async fn test_introspect_table_with_schema() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with correct schema
-    let table = schema.tables.get("schema_table");
+    let table = schema.tables.get("test_table_schema.schema_table");
     assert!(
         table.is_some(),
-        "Table 'schema_table' should be introspected"
+        "Table 'test_table_schema.schema_table' should be introspected"
     );
 
     let tbl = table.unwrap();
@@ -721,8 +721,8 @@ async fn test_introspect_table_schema_consistency() -> Result<(), Box<dyn std::e
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let tbl1 = schema1.tables.get("schema_consistency_table").unwrap();
-    let tbl2 = schema2.tables.get("schema_consistency_table").unwrap();
+    let tbl1 = schema1.tables.get("test_table_schema_consistency.schema_consistency_table").unwrap();
+    let tbl2 = schema2.tables.get("test_table_schema_consistency.schema_consistency_table").unwrap();
 
     // Verify consistency across multiple introspections
     assert_eq!(tbl1.name, tbl2.name);
@@ -893,7 +893,7 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
     let fk_constraints: Vec<_> = child
         .constraints
         .iter()
-        .filter(|c| matches!(c.kind, shem_core::ConstraintKind::ForeignKey { .. }))
+        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::ForeignKey))
         .collect();
 
     assert!(
@@ -903,7 +903,7 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
 
     let fk = fk_constraints[0];
     assert!(
-        matches!(fk.kind, shem_core::ConstraintKind::ForeignKey { .. }),
+        matches!(fk.r#type, shem_core::schema::ConstraintType::ForeignKey),
         "Constraint should be foreign key"
     );
     assert!(
@@ -1162,7 +1162,7 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
     let pk_constraints: Vec<_> = tbl
         .constraints
         .iter()
-        .filter(|c| matches!(c.kind, shem_core::ConstraintKind::PrimaryKey))
+        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::PrimaryKey))
         .collect();
 
     assert!(
@@ -1172,7 +1172,7 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
 
     let pk = pk_constraints[0];
     assert!(
-        matches!(pk.kind, shem_core::ConstraintKind::PrimaryKey),
+        matches!(pk.r#type, shem_core::schema::ConstraintType::PrimaryKey),
         "Constraint should be primary key"
     );
     assert!(
@@ -1225,7 +1225,7 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
     let exclusion_constraints: Vec<_> = tbl
         .constraints
         .iter()
-        .filter(|c| matches!(c.kind, shem_core::ConstraintKind::Exclusion))
+        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::Exclusion))
         .collect();
 
     assert!(
@@ -1235,7 +1235,7 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
 
     let exclusion = exclusion_constraints[0];
     assert!(
-        matches!(exclusion.kind, shem_core::ConstraintKind::Exclusion),
+        matches!(exclusion.r#type, shem_core::schema::ConstraintType::Exclusion),
         "Constraint should be exclusion"
     );
     assert!(

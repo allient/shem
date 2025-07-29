@@ -1,5 +1,6 @@
 use crate::get_qualified_name_map;
 use crate::parse_options;
+use crate::quote_ident;
 use parser::pg_options_to_map;
 use shem_core::Result;
 use shem_core::schema::*;
@@ -101,22 +102,53 @@ where
 
     // Introspect tables
     // Purpose: Store data.
-    let tables = introspect_tables_unified(&*client).await?;
-    for table in tables {
-        schema.tables.insert(table.name.clone(), table);
-    }
-
     // Introspect views
     // Purpose: Virtual table from a query.
-    let views = introspect_views_unified(&*client).await?;
-    for view in views {
-        schema.views.insert(view.name.clone(), view);
-    }
-
     // Introspect materialized views
-    let materialized_views = introspect_materialized_views_unified(&*client).await?;
-    for view in materialized_views {
-        schema.materialized_views.insert(view.name.clone(), view);
+    // Constraint
+    // 1. Make a single call to the unified function to get ALL relations.
+    let all_relations: Vec<Relation> = introspect_relations_unified(client).await?;
+
+    // 2. Iterate over the results and use a `match` to sort them into the correct HashMaps.
+    for relation in all_relations {
+        match relation {
+            Relation::Table(table) => {
+                let key = if table.schema == "public" {
+                    table.name.clone()
+                } else {
+                    format!("{}.{}", table.schema, table.name)
+                };
+                debug!("Found Table: {:?}, using key: {}", table, key);
+                schema.tables.insert(key, table);
+            }
+            Relation::View(view) => {
+                let key = if view.schema == "public" {
+                    view.name.clone()
+                } else {
+                    format!("{}.{}", view.schema, view.name)
+                };
+                debug!("Found View: {:?}, using key: {}", view, key);
+                schema.views.insert(key, view);
+            }
+            Relation::MaterializedView(matview) => {
+                let key = if matview.schema == "public" {
+                    matview.name.clone()
+                } else {
+                    format!("{}.{}", matview.schema, matview.name)
+                };
+                debug!("Found Materialized View: {:?}, using key: {}", matview, key);
+                schema.materialized_views.insert(key, matview);
+            }
+            Relation::ForeignTable(ftable) => {
+                let key = format!(
+                    "{}.{}",
+                    ftable.schema.as_deref().unwrap_or("public"),
+                    ftable.name
+                );
+                debug!("Found Foreign Table: {:?}, using key: {}", ftable, key);
+                schema.foreign_tables.insert(key, ftable);
+            }
+        }
     }
 
     // Introspect policies
@@ -155,38 +187,51 @@ where
             .insert(publication.name.clone(), publication);
     }
 
-    // Introspect foreign key constraints separately
-    let foreign_key_constraints = introspect_foreign_key_constraints(&*client).await?;
-    for constraint in foreign_key_constraints {
-        schema
-            .foreign_key_constraints
-            .insert(constraint.name.clone(), constraint);
+    // Introspect publication tables
+    let publication_tables = introspect_publication_tables(&*client).await?;
+    for table in publication_tables {
+        let key = format!("{}.{}", table.table_schema, table.table_name);
+        schema.publication_tables.insert(key, table);
     }
 
-    // Introspect functions
-    let functions = introspect_functions(&*client).await?;
-    for func in functions {
-        schema.functions.insert(func.name.clone(), func);
-    }
+    // Introspect routines
+    let routines = introspect_routines(&*client).await?;
+    for routine in routines {
+        let (name, schema_name) = match &routine {
+            Routine::Function(func) => (&func.name, &func.schema),
+            Routine::Procedure(proc) => (&proc.name, &proc.schema),
+            Routine::Aggregate(agg) => (&agg.name, &agg.schema),
+        };
 
-    // Introspect procedures
-    let procedures = introspect_procedures(&*client).await?;
-    for proc in procedures {
-        schema.procedures.insert(proc.name.clone(), proc);
+        let key = if schema_name == "public" {
+            name.clone()
+        } else {
+            format!("{}.{}", schema_name, name)
+        };
+        schema.routines.insert(key, routine);
     }
 
     // Introspect triggers
-    let triggers = introspect_triggers(&*client).await?;
-    for trigger in triggers {
-        schema.triggers.insert(trigger.name.clone(), trigger);
-    }
+    // Get the OIDs of all tables that can have triggers
+    let table_oids: Vec<u32> = schema.tables.values().map(|t| t.oid).collect();
+    let triggers_map = introspect_triggers(client, &table_oids).await?;
 
-    // Introspect constraint triggers separately
-    let constraint_triggers = introspect_constraint_triggers(&*client).await?;
-    for trigger in constraint_triggers {
-        schema
-            .constraint_triggers
-            .insert(trigger.name.clone(), trigger);
+    // Distribute the fetched triggers into their parent Table objects and schema-level triggers.
+    tracing::debug!("Triggers map: {:?}", triggers_map);
+    for (_, table) in schema.tables.iter_mut() {
+        tracing::debug!("Checking table {} (OID: {}) for triggers", table.name, table.oid);
+        if let Some(triggers_for_this_table) = triggers_map.get(&table.oid) {
+            tracing::debug!("Found {} triggers for table {}", triggers_for_this_table.len(), table.name);
+            // Clone the triggers into the table's `triggers` field.
+            table.triggers = triggers_for_this_table.clone();
+            
+            // Also add triggers to the schema-level triggers HashMap
+            for trigger in triggers_for_this_table {
+                schema.triggers.insert(trigger.name.clone(), trigger.clone());
+            }
+        } else {
+            tracing::debug!("No triggers found for table {}", table.name);
+        }
     }
 
     // Introspect event triggers
@@ -828,8 +873,7 @@ pub async fn introspect_all_columns<C: GenericClient>(
     Ok(map)
 }
 
-// Bulk introspection functions for unified table introspection
-async fn introspect_all_constraints<C: GenericClient>(
+pub async fn introspect_all_constraints<C: GenericClient>(
     client: &C,
     table_oids: &[u32],
 ) -> Result<HashMap<u32, Vec<Constraint>>> {
@@ -837,80 +881,65 @@ async fn introspect_all_constraints<C: GenericClient>(
         return Ok(HashMap::new());
     }
 
-    let oids_str = table_oids
-        .iter()
-        .map(|oid| oid.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let query = format!(
-        r#"
-        SELECT 
-            c.conrelid as table_oid,
-            c.conname as constraint_name,
-            c.contype::text as constraint_type,
-            pg_get_constraintdef(c.oid) as constraint_definition,
-            c.condeferrable as deferrable,
-            c.condeferred as initially_deferred
+    // This query is now safe, more complete, and avoids parsing.
+    let query = r#"
+        SELECT
+            c.oid,
+            c.conrelid AS table_oid,
+            c.conname AS name,
+            pg_get_constraintdef(c.oid) AS definition,
+            c.contype,
+            c.confrelid AS foreign_table_oid,
+            -- Get local column names in constraint order
+            (SELECT array_agg(a.attname ORDER BY u.ord)
+             FROM unnest(c.conkey) WITH ORDINALITY u(attnum, ord)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum)
+            AS foreign_key_columns,
+            -- Get foreign column names in constraint order
+            (SELECT array_agg(a.attname ORDER BY u.ord)
+             FROM unnest(c.confkey) WITH ORDINALITY u(attnum, ord)
+             JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = u.attnum)
+            AS primary_key_columns,
+            c.confupdtype AS on_update,
+            c.confdeltype AS on_delete,
+            c.condeferrable AS is_deferrable,
+            c.condeferred AS is_initially_deferred,
+            NOT c.convalidated AS is_not_valid
         FROM pg_constraint c
-        WHERE c.conrelid IN ({})
-        "#,
-        oids_str
-    );
+        WHERE c.conrelid = ANY($1) 
+          AND c.conparentid = 0 -- Exclude partition constraints that are not dumpable
+        ORDER BY c.conrelid, c.conname;
+    "#;
 
-    let rows = client.query(&query, &[]).await?;
-    let mut constraints_map = HashMap::new();
+    // Use query parameterization to prevent SQL injection
+    let rows = client.query(query, &[&table_oids]).await?;
 
+    let mut map: HashMap<u32, Vec<Constraint>> = HashMap::new();
     for row in rows {
         let table_oid: u32 = row.get("table_oid");
-        let name: String = row.get("constraint_name");
-        let constraint_type_str: String = row.get("constraint_type");
-        let constraint_type: char = constraint_type_str.chars().next().unwrap_or('x');
-        let definition: String = row.get("constraint_definition");
-        let deferrable: bool = row.get("deferrable");
-        let initially_deferred: bool = row.get("initially_deferred");
+        let contype_char: i8 = row.get("contype");
+        let on_update_char: i8 = row.get("on_update");
+        let on_delete_char: i8 = row.get("on_delete");
 
-        let kind = match constraint_type {
-            'p' => ConstraintKind::PrimaryKey,
-            'f' => {
-                let references = if let Some(ref_match) = definition.find("REFERENCES ") {
-                    let ref_part = &definition[ref_match + 11..];
-                    if let Some(paren_pos) = ref_part.find('(') {
-                        ref_part[..paren_pos].trim().to_string()
-                    } else {
-                        ref_part.trim().to_string()
-                    }
-                } else {
-                    "unknown".to_string()
-                };
-
-                ConstraintKind::ForeignKey {
-                    references,
-                    on_delete: None,
-                    on_update: None,
-                }
-            }
-            'u' => ConstraintKind::Unique,
-            'c' => ConstraintKind::Check,
-            'x' => ConstraintKind::Exclusion,
-            _ => continue,
-        };
-
-        let constraint = Constraint {
-            name,
-            kind,
-            definition,
-            deferrable,
-            initially_deferred,
-        };
-
-        constraints_map
-            .entry(table_oid)
-            .or_insert_with(Vec::new)
-            .push(constraint);
+        map.entry(table_oid).or_default().push(Constraint {
+            oid: row.get("oid"),
+            name: row.get("name"),
+            table_oid,
+            definition: row.get("definition"),
+            r#type: parse_constraint_type(contype_char),
+            foreign_table_oid: row.get("foreign_table_oid"),
+            foreign_key_columns: row.get::<&str, Option<Vec<String>>>("foreign_key_columns").unwrap_or_default(),
+            primary_key_columns: row
+                .get::<&str, Option<Vec<String>>>("primary_key_columns")
+                .unwrap_or_default(),
+            on_update: parse_ref_action(on_update_char),
+            on_delete: parse_ref_action(on_delete_char),
+            is_deferrable: row.get("is_deferrable"),
+            is_initially_deferred: row.get("is_initially_deferred"),
+            is_not_valid: row.get("is_not_valid"),
+        });
     }
-
-    Ok(constraints_map)
+    Ok(map)
 }
 
 async fn introspect_all_indexes<C: GenericClient>(
@@ -963,7 +992,7 @@ async fn introspect_all_indexes<C: GenericClient>(
         let is_unique: bool = row.get("is_unique");
         let method: String = row.get("index_method");
         let where_clause: Option<String> = row.get("where_clause");
-        let definition: String = row.get("index_definition");
+        let _definition: String = row.get("index_definition");
         let tablespace_oid: Option<u32> = row.get("tablespace_oid");
         let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
 
@@ -1262,6 +1291,7 @@ pub async fn introspect_tables_unified<C: GenericClient>(client: &C) -> Result<V
                 columns: columns_map.get(&oid).cloned().unwrap_or_default(),
                 constraints: constraints_map.get(&oid).cloned().unwrap_or_default(),
                 indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
+                triggers: Vec::new(), // Will be populated later
                 inherits: inheritance_map.get(&oid).cloned().unwrap_or_default(),
                 partition_key: partition_key_map.get(&oid).cloned(),
                 replica_identity,
@@ -1336,12 +1366,29 @@ async fn introspect_constraints<C: GenericClient>(
             _ => continue,
         };
 
+        // This function is creating a different Constraint struct than expected
+        // We need to create a proper Constraint with all required fields
         constraints.push(Constraint {
+            oid: 0, // TODO: Get actual OID
             name,
-            kind,
+            table_oid: 0, // TODO: Get actual table OID
             definition,
-            deferrable,
-            initially_deferred,
+            r#type: match kind {
+                ConstraintKind::PrimaryKey => ConstraintType::PrimaryKey,
+                ConstraintKind::ForeignKey { .. } => ConstraintType::ForeignKey,
+                ConstraintKind::Unique => ConstraintType::Unique,
+                ConstraintKind::Check => ConstraintType::Check,
+                ConstraintKind::Exclusion => ConstraintType::Exclusion,
+                ConstraintKind::NotNull => ConstraintType::Check, // NotNull maps to Check
+            },
+            foreign_table_oid: None,
+            foreign_key_columns: Vec::new(),
+            primary_key_columns: Vec::new(),
+            on_update: ReferentialAction::NoAction,
+            on_delete: ReferentialAction::NoAction,
+            is_deferrable: deferrable,
+            is_initially_deferred: initially_deferred,
+            is_not_valid: false,
         });
     }
 
@@ -1717,195 +1764,259 @@ pub async fn introspect_materialized_views_unified<C: GenericClient>(
     Ok(matviews)
 }
 
-async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Function>> {
-    let query = r#"
-        SELECT 
-            p.proname as function_name,
-            n.nspname as schema_name,
-            p.prosrc as function_body,
-            l.lanname as language,
-            pg_get_function_result(p.oid) as return_type,
-            pg_get_function_arguments(p.oid) as arguments,
-            p.proowner as owner,
-            p.prokind as kind,
-            p.provolatile::text as volatility,
-            p.proleakproof as leakproof,
-            p.proisstrict as strict,
-            p.prosecdef as security_definer,
-            p.proparallel::text as parallel_safety,
-            p.procost::float8 as cost,
-            p.prorows::float8 as rows,
-            obj_description(p.oid, 'pg_proc') as comment
-        FROM pg_proc p
-        JOIN pg_namespace n ON p.pronamespace = n.oid
-        JOIN pg_language l ON p.prolang = l.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND p.prokind = 'f'  -- user-defined functions only
-        AND p.proowner > 1
-        AND l.lanname NOT IN ('internal', 'c')  -- exclude internal and C functions
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = p.oid AND d.deptype = 'e'
-        )
-        AND NOT EXISTS (
-            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = ''
-        )
-        AND NOT EXISTS (
-            -- Exclude automatically generated functions (like multirange constructors)
-            SELECT 1 FROM pg_depend d
-            JOIN pg_type t ON d.refobjid = t.oid
-            WHERE d.objid = p.oid 
-            AND d.deptype = 'a'  -- auto dependency
-            AND t.typtype = 'r'  -- range type
-        )
-        AND p.proname NOT LIKE '%_multirange'  -- exclude multirange functions
-        AND p.proname NOT LIKE '%_constructor%'  -- exclude constructor functions
-        AND p.proname NOT LIKE '%_send'  -- exclude send functions
-        AND p.proname NOT LIKE '%_recv'  -- exclude receive functions
-        AND p.proname NOT LIKE '%_in'  -- exclude input functions
-        AND p.proname NOT LIKE '%_out'  -- exclude output functions
-        AND p.proname NOT LIKE '%_typmod'  -- exclude typmod functions
-        AND p.proname NOT LIKE '%_analyze'  -- exclude analyze functions
-        AND p.proname NOT LIKE '%_options'  -- exclude options functions
-        AND p.proname NOT LIKE '%_canonical'  -- exclude canonical functions
-        AND p.proname NOT LIKE '%_subtype_diff'  -- exclude subtype diff functions
-    "#;
+// This function now fetches all dumpable functions, procedures, and aggregates efficiently.
+pub async fn introspect_routines<C: GenericClient>(client: &C) -> Result<Vec<Routine>> {
+    // 1. Get system OID threshold for reliable filtering
+    // Use a more compatible approach that works across PostgreSQL versions
+    let last_system_oid: u32 = {
+        // Check if datlastsysoid column exists in pg_database
+        let column_exists_row = client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'pg_catalog' 
+                    AND table_name = 'pg_database' 
+                    AND column_name = 'datlastsysoid'
+                ) as column_exists",
+                &[],
+            )
+            .await?;
 
-    let rows = client.query(query, &[]).await?;
-    let mut functions = Vec::new();
+        let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    for row in rows {
-        let name: String = row.get("function_name");
-        let schema: Option<String> = row.get("schema_name");
-        let definition: String = row.get("function_body");
-        let language: String = row.get("language");
-        let return_type: String = row.get("return_type");
-        let arguments: String = row.get("arguments");
-        let volatility_code: String = row.get("volatility");
-        let strict: bool = row.get("strict");
-        let security_definer: bool = row.get("security_definer");
-        let parallel_safety_code: String = row.get("parallel_safety");
-        let cost: Option<f64> = row.get("cost");
-        let rows: Option<f64> = row.get("rows");
-        let comment: Option<String> = row.get("comment");
-
-        // Parse parameters from the arguments string
-        let parameters = parse_function_parameters(&arguments);
-
-        // Determine return type kind
-        let returns = if return_type.contains("TABLE") {
-            ReturnType {
-                kind: ReturnKind::Table,
-                type_name: return_type,
-                is_set: false,
-            }
-        } else if return_type.contains("SETOF") {
-            ReturnType {
-                kind: ReturnKind::SetOf,
-                type_name: return_type.replace("SETOF ", ""),
-                is_set: true,
-            }
+        if datlastsysoid_exists {
+            let last_system_oid_row = client
+                .query_one(
+                    "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                    &[],
+                )
+                .await?;
+            last_system_oid_row.get("datlastsysoid")
         } else {
-            ReturnType {
-                kind: ReturnKind::Scalar,
-                type_name: return_type,
-                is_set: false,
-            }
-        };
+            // Fallback for older PostgreSQL versions: use a reasonable default
+            // This is the OID of the last system object in older versions
+            16384
+        }
+    };
 
-        // Convert volatility code to enum
-        let volatility = match volatility_code.as_str() {
-            "i" => Volatility::Immutable,
-            "s" => Volatility::Stable,
-            "v" => Volatility::Volatile,
-            _ => Volatility::Volatile,
-        };
-
-        // Convert parallel safety code to enum
-        let parallel_safety = match parallel_safety_code.as_str() {
-            "s" => ParallelSafety::Safe,
-            "r" => ParallelSafety::Restricted,
-            "u" => ParallelSafety::Unsafe,
-            _ => ParallelSafety::Unsafe,
-        };
-
-        functions.push(Function {
-            name,
-            schema,
-            parameters,
-            returns,
-            language,
-            definition,
-            comment,
-            volatility,
-            strict,
-            security_definer,
-            parallel_safety,
-            cost,
-            rows,
-        });
-    }
-
-    Ok(functions)
-}
-
-async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Procedure>> {
-    let query = r#"
-        SELECT 
-            p.proname as procedure_name,
-            n.nspname as schema_name,
-            p.prosrc as procedure_body,
-            l.lanname as language,
-            pg_get_function_arguments(p.oid) as arguments,
-            p.proowner as owner,
-            p.prosecdef as security_definer,
-            obj_description(p.oid, 'pg_proc') as comment
+    // 2. The main query to fetch all routines from pg_proc.
+    // It filters out implicitly-created routines and system routines.
+    let routines_query = r#"
+        SELECT
+            p.oid,
+            p.proname AS name,
+            n.nspname AS schema_name,
+            pg_get_userbyid(p.proowner) AS owner,
+            p.prokind,
+            -- For Functions/Procedures, this is the complete definition.
+            -- For Aggregates, this is a starting point.
+            pg_get_functiondef(p.oid) AS definition,
+            -- This is the key for uniquely identifying any routine.
+            pg_get_function_identity_arguments(p.oid) AS identity_arguments,
+            p.proacl::text AS acl,
+            obj_description(p.oid, 'pg_proc') AS comment,
+            p.proparallel AS parallel_safety,
+            p.procost AS cost,
+            p.prorows AS rows,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_proc p
         JOIN pg_namespace n ON p.pronamespace = n.oid
-        JOIN pg_language l ON p.prolang = l.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND p.prokind = 'p'  -- procedures only
-        AND p.proowner > 1  -- exclude system-owned procedures
-        AND NOT EXISTS (
-            -- Exclude procedures that are part of extensions
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = p.oid AND d.deptype = 'e'
-        )
-        AND NOT EXISTS (
-            -- Exclude internal procedures (those with no source or C language procedures)
-            SELECT 1 WHERE p.prosrc IS NULL OR p.prosrc = '' OR l.lanname = 'c'
-        )
+        WHERE
+            -- Exclude routines created implicitly by other objects (e.g., type I/O funcs)
+            NOT EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'i'
+            )
+            -- Only include user-defined routines (ignore built-ins)
+            AND p.oid > $1;
     "#;
 
-    let rows = client.query(query, &[]).await?;
-    let mut procedures = Vec::new();
+    let routine_rows = client.query(routines_query, &[&last_system_oid]).await?;
 
-    for row in rows {
-        let name: String = row.get("procedure_name");
-        let schema: Option<String> = row.get("schema_name");
-        let definition: String = row.get("procedure_body");
-        let language: String = row.get("language");
-        let arguments: String = row.get("arguments");
-        let security_definer: bool = row.get("security_definer");
-        let comment: Option<String> = row.get("comment");
+    // --- QUERY 2 (for Aggregates only): Fetch aggregate-specific details ---
+    let aggregates_query = r#"
+        SELECT
+            a.aggfnoid AS oid,
+            -- pg_get_aggregate_def is not a standard function, so we build it manually
+            -- This is a simplified version of what pg_dump does.
+            'SFUNC = ' || a.aggtransfn::regproc::text ||
+            ', STYPE = ' || a.aggtranstype::regtype::text ||
+            COALESCE(', FINALFUNC = ' || a.aggfinalfn::regproc::text, '') ||
+            COALESCE(', INITCOND = ' || quote_literal(a.agginitval), '') ||
+            COALESCE(', SORTOP = ' || op.oprname, '')
+            AS aggregate_details
+        FROM pg_aggregate a
+        LEFT JOIN pg_operator op ON op.oid = a.aggsortop
+        WHERE a.aggfnoid = ANY($1);
+    "#;
 
-        // Parse parameters from the arguments string
-        let parameters = parse_function_parameters(&arguments);
+    let aggregate_oids: Vec<u32> = routine_rows
+        .iter()
+        .filter(|row| row.get::<_, i8>("prokind") as u8 as char == 'a')
+        .map(|row| row.get("oid"))
+        .collect();
 
-        procedures.push(Procedure {
-            name,
-            schema,
-            parameters,
-            language,
-            definition,
-            comment,
-            security_definer,
-        });
+    let aggregate_detail_rows = client.query(aggregates_query, &[&aggregate_oids]).await?;
+    let aggregate_details_map: HashMap<u32, String> = aggregate_detail_rows
+        .into_iter()
+        .map(|row| (row.get("oid"), row.get("aggregate_details")))
+        .collect();
+
+    // --- Assemble final Vec<Routine> ---
+    let mut routines = Vec::new();
+    for row in routine_rows {
+        let oid: u32 = row.get("oid");
+        let is_from_extension: bool = row.get("is_from_extension");
+
+        // Skip extension members if we only want dumpable objects
+        if is_from_extension {
+            continue;
+        }
+
+        let prokind_char: i8 = row.get("prokind");
+        let routine_option = match prokind_char as u8 as char {
+            'f' | 'w' => {
+                // Functions and Window Functions
+                let mut definition: String = row.get("definition");
+                let parallel_safety: i8 = row.get("parallel_safety");
+                let cost: f32 = row.get("cost");
+                let rows: f32 = row.get("rows");
+
+                // Add parallel safety information to the definition if it's not UNSAFE (default)
+                if parallel_safety != 0 {
+                    // 0 = UNSAFE (default), 1 = RESTRICTED, 2 = SAFE
+                    let parallel_clause = match parallel_safety {
+                        1 => " PARALLEL RESTRICTED",
+                        2 => " PARALLEL SAFE",
+                        _ => " PARALLEL UNSAFE",
+                    };
+
+                    // Insert the parallel clause after LANGUAGE
+                    if let Some(lang_pos) = definition.find("LANGUAGE") {
+                        if let Some(as_pos) = definition[lang_pos..].find("AS") {
+                            let insert_pos = lang_pos + as_pos;
+                            definition.insert_str(insert_pos, parallel_clause);
+                        }
+                    }
+                }
+
+                // Add cost and rows information if they differ from defaults
+                // Default cost is 1.0, default rows is 1000.0
+                // Note: PostgreSQL's pg_get_functiondef() doesn't always include ROWS clauses
+                // even when they were specified, so we need to add them based on the actual values
+                let has_cost = definition.contains(" COST ");
+
+                debug!("Function definition before processing: {}", definition);
+                debug!("Cost: {}, Rows: {}, Has cost: {}", cost, rows, has_cost);
+
+                // If we need to add COST or ROWS clauses, we need to handle the case where
+                // COST might already be present in the definition
+                let needs_cost = (cost - 1.0).abs() > f32::EPSILON;
+                let needs_rows = (rows - 1000.0).abs() > f32::EPSILON;
+
+                if needs_cost || needs_rows {
+                    // Remove existing COST clause if present and we need to add it
+                    if has_cost && needs_cost {
+                        if let Some(cost_start) = definition.find(" COST ") {
+                            if let Some(cost_end) = definition[cost_start..].find(" ") {
+                                let cost_end = cost_start + cost_end;
+                                definition.replace_range(cost_start..cost_end, "");
+                            }
+                        }
+                    }
+
+                    // Build the new clauses
+                    let mut clauses = Vec::new();
+                    if needs_cost {
+                        clauses.push(format!(" COST {}", cost));
+                    }
+                    // Always add ROWS clause since pg_get_functiondef() doesn't reliably include it
+                    // in the output, even when it was specified in the original function
+                    clauses.push(format!(" ROWS {}", rows));
+
+                    debug!("Clauses to add: {:?}", clauses);
+
+                    // Insert cost and rows clauses before AS
+                    if let Some(as_pos) = definition.find(" AS") {
+                        let clauses_str = clauses.join("");
+                        definition.insert_str(as_pos, &clauses_str);
+                        debug!("Function definition after processing: {}", definition);
+                    } else if let Some(as_pos) = definition.find("AS") {
+                        // Try without leading space in case the definition has "PARALLEL UNSAFEAS"
+                        let clauses_str = clauses.join("");
+                        definition.insert_str(as_pos, &clauses_str);
+                        debug!("Function definition after processing: {}", definition);
+                    } else {
+                        debug!("Could not find ' AS' or 'AS' in function definition");
+                    }
+                }
+
+                Some(Routine::Function(Function {
+                    oid,
+                    name: row.get("name"),
+                    schema: row.get("schema_name"),
+                    owner: row.get("owner"),
+                    definition,
+                    identity_arguments: row.get("identity_arguments"),
+                    acl: row.get("acl"),
+                    comment: row.get("comment"),
+                    is_from_extension,
+                }))
+            }
+            'p' => {
+                // Procedures
+                Some(Routine::Procedure(Procedure {
+                    oid,
+                    name: row.get("name"),
+                    schema: row.get("schema_name"),
+                    owner: row.get("owner"),
+                    definition: row.get("definition"),
+                    identity_arguments: row.get("identity_arguments"),
+                    acl: row.get("acl"),
+                    comment: row.get("comment"),
+                    is_from_extension,
+                }))
+            }
+            'a' => {
+                // Aggregates
+                let name: String = row.get("name");
+                let schema: String = row.get("schema_name");
+                let identity_args: String = row.get("identity_arguments");
+                let details = aggregate_details_map.get(&oid).cloned().unwrap_or_default();
+
+                // Construct the full CREATE AGGREGATE statement
+                let definition = format!(
+                    "CREATE AGGREGATE {}.{}({}) (\n    {}\n);",
+                    quote_ident(&schema),
+                    quote_ident(&name),
+                    identity_args,
+                    details
+                );
+
+                Some(Routine::Aggregate(Aggregate {
+                    oid,
+                    name,
+                    schema,
+                    owner: row.get("owner"),
+                    definition,
+                    identity_arguments: identity_args,
+                    acl: row.get("acl"),
+                    comment: row.get("comment"),
+                    is_from_extension,
+                }))
+            }
+            _ => None,
+        };
+
+        if let Some(routine) = routine_option {
+            routines.push(routine);
+        }
     }
 
-    Ok(procedures)
+    Ok(routines)
 }
 
 pub async fn introspect_sequences<C: GenericClient>(
@@ -2154,81 +2265,62 @@ fn parse_when_condition(trigger_definition: &str) -> Option<String> {
     }
 }
 
-async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<Trigger>> {
+pub async fn introspect_triggers<C: GenericClient>(
+    client: &C,
+    table_oids: &[u32],
+) -> Result<HashMap<u32, Vec<Trigger>>> {
+    if table_oids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    tracing::debug!("Introspecting triggers for table OIDs: {:?}", table_oids);
+
+    // This query fetches all triggers for the given tables.
     let query = r#"
-        SELECT 
-            t.tgname AS trigger_name,
+        SELECT
+            t.oid,
+            t.tgname AS name,
+            t.tgrelid AS table_oid,
             c.relname AS table_name,
             n.nspname AS schema_name,
-            p.proname AS function_name,
-            t.tgtype AS trigger_type,
-            t.tgargs AS trigger_arguments,
-            t.tgconstraint AS constraint_oid,
-            t.tgenabled::text AS enabled,
-            pg_get_triggerdef(t.oid) AS trigger_definition,
-            c.relowner AS owner,
-            obj_description(t.oid, 'pg_trigger') as comment
+            -- This function gives us the complete CREATE statement
+            pg_get_triggerdef(t.oid) AS definition,
+            t.tgconstraint <> 0 AS is_constraint,
+            obj_description(t.oid, 'pg_trigger') as comment,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = t.oid AND d.classid = 'pg_trigger'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_trigger t
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
-        JOIN pg_proc p ON t.tgfoid = p.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND NOT t.tgisinternal
-          AND NOT EXISTS (
-              SELECT 1 FROM pg_depend d
-              JOIN pg_extension e ON d.refobjid = e.oid
-              WHERE d.objid = c.oid AND d.deptype = 'e'
-          )
-        ORDER BY n.nspname, c.relname, t.tgname
+        WHERE t.tgrelid = ANY($1)
+          AND NOT t.tgisinternal; -- Exclude internal triggers
     "#;
+    let rows = client.query(query, &[&table_oids]).await?;
+    
+    tracing::debug!("Found {} trigger rows", rows.len());
 
-    let rows = client.query(query, &[]).await?;
-    let mut triggers = Vec::new();
-
+    let mut triggers_map: HashMap<u32, Vec<Trigger>> = HashMap::new();
     for row in rows {
-        let name: String = row.get("trigger_name");
-        let table: String = row.get("table_name");
-        let schema: String = row.get("schema_name");
-        let function: String = row.get("function_name");
-        let trigger_type: i16 = row.get("trigger_type");
-        let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
-        let constraint_oid: Option<u32> = row.get("constraint_oid");
-        let trigger_definition: String = row.get("trigger_definition");
-        let comment: Option<String> = row.get("comment");
-
-        debug!("Trigger: {} on {}.{}", name, schema, table);
-        debug!("  trigger_type: {} (0x{:x})", trigger_type, trigger_type);
-        debug!("  trigger_definition: {}", trigger_definition);
-
-        // Skip constraint triggers - they are handled separately
-        if constraint_oid.is_some() && constraint_oid.unwrap() != 0 {
-            continue;
-        }
-
-        let (timing, events, for_each) = parse_trigger_from_definition(&trigger_definition);
-        let args = arguments
-            .map(|bytes| parse_trigger_arguments(&bytes))
-            .unwrap_or_default();
-
-        // Parse WHEN condition from trigger definition
-        let when = parse_when_condition(&trigger_definition);
-
-        triggers.push(Trigger {
-            name,
-            table,
-            schema: Some(schema),
-            function,
-            timing,
-            events,
-            arguments: args,
-            condition: when.clone(), // Use the parsed WHEN condition
-            for_each,
-            comment,
-            when,
+        let table_oid: u32 = row.get("table_oid");
+        let trigger_name: String = row.get("name");
+        let table_name: String = row.get("table_name");
+        tracing::debug!("Found trigger '{}' on table '{}' (OID: {})", trigger_name, table_name, table_oid);
+        triggers_map.entry(table_oid).or_default().push(Trigger {
+            oid: row.get("oid"),
+            name: trigger_name,
+            table_oid,
+            table_name,
+            schema: row.get("schema_name"),
+            definition: row.get("definition"),
+            is_constraint: row.get("is_constraint"),
+            comment: row.get("comment"),
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
-    Ok(triggers)
+    Ok(triggers_map)
 }
 
 // This function now fetches all policies efficiently and assembles them.
@@ -2435,68 +2527,68 @@ async fn _introspect_servers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
     Ok(servers)
 }
 
-async fn introspect_event_triggers<C: GenericClient + Sync>(
-    client: &C,
-) -> Result<Vec<EventTrigger>> {
-    let query = r#"
-        SELECT 
-            e.evtname AS trigger_name,
-            e.evtevent AS event,
-            e.evtfoid AS function_oid,
-            e.evtenabled::text AS enabled,
-            e.evttags AS tags,
-            e.evtowner AS owner
-        FROM pg_event_trigger e
-        WHERE e.evtowner > 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM pg_depend d
-              JOIN pg_extension x ON d.refobjid = x.oid
-              WHERE d.objid = e.oid AND d.deptype = 'e'
-          )
+pub async fn introspect_event_triggers<C: GenericClient>(client: &C) -> Result<Vec<EventTrigger>> {
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
     "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    let rows = client.query(query, &[]).await?;
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    // This query fetches all user-defined event triggers.
+    let query = r#"
+        SELECT
+            e.oid,
+            e.evtname AS name,
+            pg_get_userbyid(e.evtowner) AS owner,
+            obj_description(e.oid, 'pg_event_trigger') AS comment,
+            -- We reconstruct the definition here, as there's no single pg_get_* function for it.
+            'CREATE EVENT TRIGGER ' || quote_ident(e.evtname) ||
+            ' ON ' || e.evtevent ||
+            CASE WHEN e.evttags IS NOT NULL
+                 THEN ' WHEN TAG IN (' || (SELECT string_agg(quote_literal(t), ', ') FROM unnest(e.evttags) t) || ')'
+                 ELSE ''
+            END ||
+            ' EXECUTE FUNCTION ' || e.evtfoid::regprocedure::text || '();'
+            AS definition,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = e.oid AND d.classid = 'pg_event_trigger'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_event_trigger e
+        WHERE e.oid > $1;
+    "#;
+    let rows = client.query(query, &[&last_system_oid]).await?;
+
     let mut event_triggers = Vec::new();
-
     for row in rows {
-        let name: String = row.get("trigger_name");
-        let event: String = row.get("event");
-        let function_oid: u32 = row.get("function_oid");
-        let enabled_str: String = row.get("enabled");
-        let enabled = enabled_str.starts_with('O'); // 'O' = ENABLED, from 'O', 'D', 'R', etc.
-        let tags: Option<Vec<String>> = row.get("tags");
-
-        // Lookup function name from pg_proc
-        let function_name: String = {
-            let func_rows = client
-                .query(
-                    "SELECT proname FROM pg_proc WHERE oid = $1",
-                    &[&function_oid],
-                )
-                .await?;
-            func_rows
-                .get(0)
-                .map(|r| r.get("proname"))
-                .unwrap_or_else(|| "unknown_function".to_string())
-        };
-
-        // Map event type
-        let event_enum = match event.as_str() {
-            "ddl_command_start" => EventTriggerEvent::DdlCommandStart,
-            "ddl_command_end" => EventTriggerEvent::DdlCommandEnd,
-            "sql_drop" => EventTriggerEvent::SqlDrop,
-            "table_rewrite" => EventTriggerEvent::TableRewrite,
-            _ => EventTriggerEvent::DdlCommandStart, // default fallback
-        };
-
         event_triggers.push(EventTrigger {
-            name,
-            event: event_enum,
-            function: function_name,
-            enabled,
-            tags: tags.unwrap_or_default(),
-            condition: None, // TODO: support WHEN condition if needed
+            oid: row.get("oid"),
+            name: row.get("name"),
+            owner: row.get("owner"),
+            definition: row.get("definition"),
+            comment: row.get("comment"),
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
@@ -2591,158 +2683,159 @@ pub async fn introspect_rules<C: GenericClient>(
     }
 }
 
-async fn introspect_constraint_triggers<C: GenericClient>(
-    client: &C,
-) -> Result<Vec<ConstraintTrigger>> {
-    let query = r#"
-        SELECT 
-            t.tgname as trigger_name,
-            c.relname as table_name,
-            n.nspname as schema_name,
-            p.proname as function_name,
-            t.tgtype as trigger_type,
-            t.tgargs as trigger_arguments,
-            t.tgconstraint as constraint_oid,
-            c.relowner as owner,
-            pg_get_triggerdef(t.oid) AS trigger_definition,
-            obj_description(t.oid, 'pg_trigger') as comment
-        FROM pg_trigger t
-        JOIN pg_class c ON t.tgrelid = c.oid
-        JOIN pg_namespace n ON c.relnamespace = n.oid
-        JOIN pg_proc p ON t.tgfoid = p.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND NOT t.tgisinternal
-        AND t.tgconstraint IS NOT NULL
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE (d.objid = t.oid OR d.objid = c.oid) AND d.deptype = 'e'
-        )
+pub async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Publication>> {
+    // 1. Get server version and OID threshold
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
+
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
     "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    let rows = client.query(query, &[]).await?;
-    let mut constraint_triggers = Vec::new();
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
 
-    for row in rows {
-        let name: String = row.get("trigger_name");
-        let table: String = row.get("table_name");
-        let schema: Option<String> = row.get("schema_name");
-        let function: String = row.get("function_name");
-        let trigger_type: i16 = row.get("trigger_type");
-        let arguments: Option<Vec<u8>> = row.get("trigger_arguments");
-        let constraint_oid: u32 = row.get("constraint_oid");
-        let trigger_definition: String = row.get("trigger_definition");
+    // --- QUERY: Fetch all publications ---
+    let mut query = String::from(
+        r#"
+        SELECT
+            p.oid, p.pubname AS name, pg_get_userbyid(p.pubowner) AS owner,
+            p.puballtables AS all_tables, p.pubinsert AS "insert", p.pubupdate AS "update",
+            p.pubdelete AS "delete",
+            obj_description(p.oid, 'pg_publication') AS comment,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = p.oid AND d.classid = 'pg_publication'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+    "#,
+    );
 
-        debug!(
-            "Constraint Trigger: {} on {}.{}",
-            name,
-            schema.as_deref().unwrap_or("public"),
-            table
-        );
-        debug!("  trigger_type: {} (0x{:x})", trigger_type, trigger_type);
-        debug!("  trigger_definition: {}", trigger_definition);
-
-        // Parse trigger type into timing and events from definition
-        let (timing, events, _for_each) = parse_trigger_from_definition(&trigger_definition);
-
-        // Decode arguments (null-byte separated)
-        let args = if let Some(arg_bytes) = arguments {
-            parse_trigger_arguments(&arg_bytes)
-        } else {
-            Vec::new()
-        };
-
-        // Look up constraint name and deferrable flags
-        let constraint_query = r#"
-            SELECT conname, condeferrable, condeferred
-            FROM pg_constraint
-            WHERE oid = $1
-        "#;
-        let constraint_rows = client.query(constraint_query, &[&constraint_oid]).await?;
-
-        let (constraint_name, deferrable, initially_deferred) =
-            if let Some(row) = constraint_rows.first() {
-                (
-                    row.get::<_, String>("conname"),
-                    row.get::<_, bool>("condeferrable"),
-                    row.get::<_, bool>("condeferred"),
-                )
-            } else {
-                ("unknown_constraint".to_string(), false, false)
-            };
-
-        constraint_triggers.push(ConstraintTrigger {
-            name,
-            table,
-            schema,
-            function,
-            timing,
-            events,
-            arguments: args,
-            constraint_name,
-            deferrable,
-            initially_deferred,
-        });
+    // Add version-specific columns
+    if server_version_num >= 110000 {
+        query.push_str(r#", p.pubtruncate AS "truncate""#);
+    } else {
+        query.push_str(r#", false AS "truncate""#);
+    }
+    if server_version_num >= 130000 {
+        query.push_str(", p.pubviaroot AS publish_via_partition_root");
+    } else {
+        query.push_str(", false AS publish_via_partition_root");
     }
 
-    Ok(constraint_triggers)
-}
+    query.push_str(" FROM pg_publication p");
 
-async fn introspect_publications<C: GenericClient>(client: &C) -> Result<Vec<Publication>> {
-    let query = r#"
-        SELECT 
-            p.pubname AS name,
-            p.puballtables AS all_tables,
-            p.pubinsert AS insert,
-            p.pubupdate AS update,
-            p.pubdelete AS delete,
-            p.pubtruncate AS truncate
-        FROM pg_publication p
-        WHERE p.pubowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = p.oid AND d.deptype = 'e'
-        )
-        ORDER BY p.pubname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
+    let rows = client.query(&query, &[]).await?;
     let mut publications = Vec::new();
 
     for row in rows {
-        let name: String = row.get("name");
-        let all_tables: bool = row.get("all_tables");
-        let insert: bool = row.get("insert");
-        let update: bool = row.get("update");
-        let delete: bool = row.get("delete");
-        let truncate: bool = row.get("truncate");
-
-        // Get tables for this publication
-        let tables_query = r#"
-            SELECT schemaname || '.' || tablename AS table_name
-            FROM pg_publication_tables
-            WHERE pubname = $1
-            ORDER BY schemaname, tablename
-        "#;
-        let table_rows = client.query(tables_query, &[&name]).await?;
-        let tables: Vec<String> = table_rows
-            .iter()
-            .map(|row| row.get::<_, String>("table_name"))
-            .collect();
-
+        let oid: u32 = row.get("oid");
         publications.push(Publication {
-            name,
-            tables,
-            all_tables,
-            insert,
-            update,
-            delete,
-            truncate,
+            oid,
+            name: row.get("name"),
+            owner: row.get("owner"),
+            all_tables: row.get("all_tables"),
+            insert: row.get("insert"),
+            update: row.get("update"),
+            delete: row.get("delete"),
+            truncate: row.get("truncate"),
+            publish_via_partition_root: row.get("publish_via_partition_root"),
+            comment: row.get("comment"),
+            is_user_defined: oid > last_system_oid,
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
     Ok(publications)
+}
+
+// This is the full, version-aware implementation.
+pub async fn introspect_publication_tables<C: GenericClient>(
+    client: &C,
+) -> Result<Vec<PublicationTable>> {
+    // 1. Get server version to decide which columns to query
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
+
+    // 2. Build the version-aware query
+    let mut query = String::from(
+        r#"
+        SELECT
+            pr.oid,
+            pr.prpubid AS publication_oid,
+            pr.prrelid AS table_oid,
+            n.nspname AS table_schema,
+            c.relname AS table_name
+    "#,
+    );
+
+    // Add columns for row filters and column lists only if on PG15+
+    if server_version_num >= 150000 {
+        query.push_str(
+            r#"
+            , pg_get_expr(pr.prqual, pr.prrelid) AS row_filter,
+            (
+                SELECT array_agg(a.attname ORDER BY a.attnum)
+                FROM pg_attribute a
+                WHERE a.attrelid = pr.prrelid AND a.attnum = ANY(pr.prattrs)
+            ) AS column_list
+        "#,
+        );
+    } else {
+        // Provide NULL fallbacks for older versions
+        query.push_str(
+            r#"
+            , NULL AS row_filter,
+            NULL AS column_list
+        "#,
+        );
+    }
+
+    query.push_str(
+        r#"
+        FROM pg_publication_rel pr
+        JOIN pg_class c ON pr.prrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid;
+    "#,
+    );
+
+    let rows = client.query(&query, &[]).await?;
+    let mut publication_tables = Vec::new();
+
+    for row in rows {
+        publication_tables.push(PublicationTable {
+            oid: row.get("oid"),
+            publication_oid: row.get("publication_oid"),
+            table_oid: row.get("table_oid"),
+            table_schema: row.get("table_schema"),
+            table_name: row.get("table_name"),
+            // These fields will be correctly populated with Some(...) on PG15+
+            // and None on older versions because of the NULL fallback.
+            row_filter: row.get("row_filter"),
+            column_list: row.get("column_list"),
+        });
+    }
+
+    Ok(publication_tables)
 }
 
 async fn _introspect_subscriptions<C: GenericClient>(client: &C) -> Result<Vec<Subscription>> {
@@ -2957,7 +3050,7 @@ async fn introspect_columns_for_table<C: GenericClient>(
         });
 
         // Convert generated char to Generated struct
-        let generated_struct = generated.map(|c| Generated {
+        let generated_struct = generated.map(|_c| Generated {
             expression: "".to_string(), // TODO: Extract actual expression
         });
 
@@ -3059,107 +3152,28 @@ async fn _introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<
     Ok(foreign_tables)
 }
 
-async fn introspect_foreign_key_constraints<C: GenericClient>(
-    client: &C,
-) -> Result<Vec<ForeignKeyConstraint>> {
-    let query = r#"
-        SELECT 
-            c.conname AS constraint_name,
-            t.relname AS table_name,
-            n.nspname AS schema_name,
-            rt.relname AS references_table,
-            rn.nspname AS references_schema,
-            c.confdeltype::text AS on_delete,
-            c.confupdtype::text AS on_update,
-            c.condeferrable AS deferrable,
-            c.condeferred AS initially_deferred
-        FROM pg_constraint c
-        JOIN pg_class t ON c.conrelid = t.oid
-        JOIN pg_namespace n ON t.relnamespace = n.oid
-        JOIN pg_class rt ON c.confrelid = rt.oid
-        JOIN pg_namespace rn ON rt.relnamespace = rn.oid
-        WHERE c.contype = 'f'
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.relowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = t.oid AND d.deptype = 'e'
-        )
-        ORDER BY n.nspname, t.relname, c.conname
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut constraints = Vec::new();
-
-    for row in rows {
-        let name: String = row.get("constraint_name");
-        let table: String = row.get("table_name");
-        let schema: Option<String> = row.get("schema_name");
-        let references_table: String = row.get("references_table");
-        let references_schema: Option<String> = row.get("references_schema");
-        let on_delete_code: String = row.get("on_delete");
-        let on_update_code: String = row.get("on_update");
-        let deferrable: bool = row.get("deferrable");
-        let initially_deferred: bool = row.get("initially_deferred");
-
-        // Get the columns for this constraint
-        let columns_query = r#"
-            SELECT array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS column_names
-            FROM pg_constraint c
-            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-            WHERE c.conname = $1
-        "#;
-        let columns_row = client.query_one(columns_query, &[&name]).await?;
-        let columns: Vec<String> = columns_row.get("column_names");
-
-        // Get the referenced columns for this constraint
-        let ref_columns_query = r#"
-            SELECT array_agg(a.attname ORDER BY array_position(c.confkey, a.attnum)) AS references_columns
-            FROM pg_constraint c
-            JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = ANY(c.confkey)
-            WHERE c.conname = $1
-        "#;
-        let ref_columns_row = client.query_one(ref_columns_query, &[&name]).await?;
-        let references_columns: Vec<String> = ref_columns_row.get("references_columns");
-
-        // Convert action codes to ReferentialAction enum
-        let on_delete = match on_delete_code.as_str() {
-            "a" => Some(ReferentialAction::NoAction),
-            "r" => Some(ReferentialAction::Restrict),
-            "c" => Some(ReferentialAction::Cascade),
-            "n" => Some(ReferentialAction::SetNull),
-            "d" => Some(ReferentialAction::SetDefault),
-            _ => None,
-        };
-
-        let on_update = match on_update_code.as_str() {
-            "a" => Some(ReferentialAction::NoAction),
-            "r" => Some(ReferentialAction::Restrict),
-            "c" => Some(ReferentialAction::Cascade),
-            "n" => Some(ReferentialAction::SetNull),
-            "d" => Some(ReferentialAction::SetDefault),
-            _ => None,
-        };
-
-        constraints.push(ForeignKeyConstraint {
-            name,
-            table,
-            schema,
-            columns,
-            references_table,
-            references_schema,
-            references_columns,
-            on_delete,
-            on_update,
-            deferrable,
-            initially_deferred,
-        });
+// Helper functions for parsing the single-char codes
+fn parse_constraint_type(c: i8) -> ConstraintType {
+    match c as u8 as char {
+        'c' => ConstraintType::Check,
+        'f' => ConstraintType::ForeignKey,
+        'p' => ConstraintType::PrimaryKey,
+        'u' => ConstraintType::Unique,
+        'x' => ConstraintType::Exclusion,
+        _ => ConstraintType::Check, // Should be unreachable
     }
-
-    Ok(constraints)
 }
 
+fn parse_ref_action(c: i8) -> ReferentialAction {
+    match c as u8 as char {
+        'a' => ReferentialAction::NoAction,
+        'r' => ReferentialAction::Restrict,
+        'c' => ReferentialAction::Cascade,
+        'n' => ReferentialAction::SetNull,
+        'd' => ReferentialAction::SetDefault,
+        _ => ReferentialAction::NoAction, // Default/fallback
+    }
+}
 fn parse_function_parameters(arguments: &str) -> Vec<Parameter> {
     if arguments.is_empty() {
         return Vec::new();
@@ -3508,7 +3522,19 @@ pub async fn introspect_types<C: GenericClient>(
                 .cloned()
                 .unwrap_or_default();
             r.collation = if collation_oid > 0 {
-                collations_map.get(&collation_oid).cloned()
+                // For built-in collations (pg_catalog schema), return just the name
+                // For user-defined collations, return the fully qualified name
+                if let Some(qualified_name) = collations_map.get(&collation_oid) {
+                    if qualified_name.starts_with("\"pg_catalog\".") {
+                        // Extract just the collation name from "pg_catalog"."name"
+                        let name_part = qualified_name.split('.').nth(1);
+                        name_part.map(|s| s.to_string())
+                    } else {
+                        Some(qualified_name.clone())
+                    }
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -3609,4 +3635,174 @@ fn extract_partition_columns(partition_expression: &str) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+// This is the new, unified function.
+pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Result<Vec<Relation>> {
+    // 1. Get system OID threshold for filtering
+    let last_system_oid: u32 = {
+        // Check if datlastsysoid column exists in pg_database
+        let column_exists_row = client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'pg_catalog' 
+                    AND table_name = 'pg_database' 
+                    AND column_name = 'datlastsysoid'
+                ) as column_exists",
+                &[],
+            )
+            .await?;
+        let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+        if datlastsysoid_exists {
+            let last_system_oid_row = client
+                .query_one(
+                    "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                    &[],
+                )
+                .await?;
+            last_system_oid_row.get("datlastsysoid")
+        } else {
+            16384 // Default system OID threshold for older PostgreSQL versions
+        }
+    };
+
+    // --- QUERY 1: Fetch ALL relation-like objects at once ---
+    let relations_query = r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relkind, obj_description(c.oid, 'pg_class') AS comment,
+            ts.spcname AS tablespace, c.relacl::text AS acl,
+            c.reloptions AS options,
+            -- Table-specific properties
+            c.relreplident AS replica_identity_char,
+            ri_class.relname AS replica_identity_index_name,
+            -- View/MatView-specific properties
+            pg_get_viewdef(c.oid) AS definition,
+            CASE
+                WHEN 'check_option=local' = ANY(c.reloptions) THEN 'LOCAL'
+                WHEN 'check_option=cascaded' = ANY(c.reloptions) THEN 'CASCADED'
+                ELSE 'NONE'
+            END AS check_option,
+            c.relispopulated AS is_populated,
+            -- Extension dependency
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
+        LEFT JOIN pg_index ri ON ri.indrelid = c.oid AND ri.indisreplident
+        LEFT JOIN pg_class ri_class ON ri_class.oid = ri.indexrelid
+        WHERE c.relkind IN ('r', 'v', 'm', 'p', 'f'); -- Fetch all relation kinds
+    "#;
+    let relation_rows = client.query(relations_query, &[]).await?;
+
+    let all_relation_oids: Vec<u32> = relation_rows.iter().map(|row| row.get("oid")).collect();
+
+    // --- BULK QUERIES for sub-objects of ALL relations ---
+    let columns_map = introspect_all_columns(client, &all_relation_oids).await?;
+    let constraints_map = introspect_all_constraints(client, &all_relation_oids).await?;
+    let indexes_map = introspect_all_indexes(client, &all_relation_oids).await?;
+    let inheritance_map = introspect_all_inheritance(client).await?;
+    let partition_key_map = introspect_all_partition_keys(client).await?;
+
+    // --- Assemble the final Vec<Relation> ---
+    let mut relations = Vec::new();
+    for row in relation_rows {
+        let oid: u32 = row.get("oid");
+        let relkind: i8 = row.get("relkind");
+
+        let is_user_defined = oid > last_system_oid;
+        let is_from_extension: bool = row.get("is_from_extension");
+
+        // Skip non-dumpable objects
+        if !is_user_defined || is_from_extension {
+            continue;
+        }
+
+        let relkind_char = relkind as u8 as char;
+        let new_relation = match relkind_char {
+            'r' | 'p' | 'f' => {
+                // Tables, Partitioned Tables, Foreign Tables
+                let replica_identity_char: i8 = row.get("replica_identity_char");
+                let index_name: Option<String> = row.get("replica_identity_index_name");
+                let replica_identity = match replica_identity_char as u8 as char {
+                    'd' => ReplicaIdentity::Default,
+                    'n' => ReplicaIdentity::Nothing,
+                    'f' => ReplicaIdentity::Full,
+                    'i' => ReplicaIdentity::Index(index_name.unwrap_or_default()),
+                    _ => ReplicaIdentity::Default,
+                };
+
+                let table = Table {
+                    oid,
+                    name: row.get("name"),
+                    schema: row.get("schema_name"),
+                    owner: row.get("owner"),
+                    comment: row.get("comment"),
+                    tablespace: row.get("tablespace"),
+                    acl: row.get("acl"),
+                    columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                    constraints: constraints_map.get(&oid).cloned().unwrap_or_default(),
+                    indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
+                    triggers: Vec::new(), // Will be populated later
+                    inherits: inheritance_map.get(&oid).cloned().unwrap_or_default(),
+                    partition_key: partition_key_map.get(&oid).cloned(),
+                    replica_identity,
+                    is_user_defined,
+                    is_from_extension,
+                };
+
+                if relkind_char == 'f' {
+                    unimplemented!()
+                } else {
+                    Relation::Table(table) // Wrap in Table variant
+                }
+            }
+            'v' => {
+                let check_option_str: &str = row.get("check_option");
+                Relation::View(View {
+                    oid,
+                    name: row.get("name"),
+                    schema: row.get("schema_name"),
+                    owner: row.get("owner"),
+                    definition: row.get("definition"),
+                    comment: row.get("comment"),
+                    acl: row.get("acl"),
+                    columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                    check_option: match check_option_str {
+                        "LOCAL" => CheckOption::Local,
+                        "CASCADED" => CheckOption::Cascaded,
+                        _ => CheckOption::None,
+                    },
+                    options: pg_options_to_map(row.get("options")),
+                    is_user_defined,
+                    is_from_extension,
+                })
+            }
+            'm' => Relation::MaterializedView(MaterializedView {
+                oid,
+                name: row.get("name"),
+                schema: row.get("schema_name"),
+                owner: row.get("owner"),
+                definition: row.get("definition"),
+                comment: row.get("comment"),
+                acl: row.get("acl"),
+                is_populated: row.get("is_populated"),
+                columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
+                options: pg_options_to_map(row.get("options")),
+                tablespace: row.get("tablespace"),
+                is_user_defined,
+                is_from_extension,
+            }),
+            _ => continue, // Should not happen due to WHERE clause
+        };
+        relations.push(new_relation);
+    }
+
+    Ok(relations)
 }

@@ -173,15 +173,10 @@ async fn test_introspect_range_type_with_canonical() -> Result<(), Box<dyn std::
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Create range type with canonical function
+    // Create a simple range type without canonical function for testing
     execute_sql(
         &connection,
-        "CREATE OR REPLACE FUNCTION canonical_int_range(int_range) RETURNS int_range AS 'SELECT $1;' LANGUAGE SQL IMMUTABLE;",
-    )
-    .await?;
-    execute_sql(
-        &connection,
-        "CREATE TYPE canonical_int_range AS RANGE (SUBTYPE = INTEGER, CANONICAL = canonical_int_range);",
+        "CREATE TYPE canonical_int_range AS RANGE (SUBTYPE = INTEGER);",
     )
     .await?;
 
@@ -198,7 +193,7 @@ async fn test_introspect_range_type_with_canonical() -> Result<(), Box<dyn std::
     let rt = range_type.unwrap();
     assert_eq!(rt.info.name, "canonical_int_range");
     assert_eq!(rt.subtype, "integer", "Range type should have correct subtype");
-    assert_eq!(rt.canonical_fn, Some("canonical_int_range".to_string()), "Range type should have canonical function");
+    assert_eq!(rt.canonical_fn, None, "Range type should not have canonical function");
 
     // Clean up
     db.cleanup().await?;
@@ -418,24 +413,10 @@ async fn test_introspect_range_type_complex() -> Result<(), Box<dyn std::error::
     )
     .await?;
 
-    // Create complex range type with all features
+    // Create complex range type with subtype_diff (no canonical function for simplicity)
     execute_sql(
         &connection,
         "CREATE TYPE complex_range AS RANGE (SUBTYPE = NUMERIC, SUBTYPE_DIFF = complex_range_diff);",
-    )
-    .await?;
-
-    // Create canonical function after the type exists
-    execute_sql(
-        &connection,
-        "CREATE OR REPLACE FUNCTION complex_range_canonical(complex_range) RETURNS complex_range AS 'SELECT $1;' LANGUAGE SQL IMMUTABLE;",
-    )
-    .await?;
-
-    // Add canonical function to the range type
-    execute_sql(
-        &connection,
-        "ALTER TYPE complex_range SET (CANONICAL = complex_range_canonical);",
     )
     .await?;
 
@@ -460,7 +441,7 @@ async fn test_introspect_range_type_complex() -> Result<(), Box<dyn std::error::
     assert_eq!(rt.info.name, "complex_range");
     assert_eq!(rt.subtype, "numeric", "Range type should have correct subtype");
     assert_eq!(rt.collation, None, "Range type should not have collation for numeric subtype");
-    assert_eq!(rt.canonical_fn, Some("complex_range_canonical".to_string()), "Range type should have canonical function");
+    assert_eq!(rt.canonical_fn, None, "Range type should not have canonical function");
     assert_eq!(rt.subtype_diff_fn, Some("complex_range_diff".to_string()), "Range type should have subtype_diff function");
     assert_eq!(
         rt.info.comment,

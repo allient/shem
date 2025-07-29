@@ -17,9 +17,8 @@ use shem_core::{
     ForeignTable, Function, Index, IndexMethod, MaterializedView, Policy, Procedure, Publication,
     Role, Rule, Sequence, Server, Subscription, Table, Tablespace, Trigger, View,
     schema::{
-        ArrayType, BaseType, CheckOption, CollationProvider, CompositeType, EventTriggerEvent,
-        IdentityGeneration, ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder,
-        TriggerEvent, TriggerLevel, TriggerTiming, Type,
+        BaseType, CheckOption, CollationProvider, CompositeType,
+        IdentityGeneration, PolicyCommand, RangeType, SortOrder, TriggerEvent, Type,
     },
     traits::SqlGenerator,
 };
@@ -704,59 +703,13 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_function(&self, function: &Function) -> Result<String> {
-        let function_name = Self::force_quote_identifier(&function.name);
-        let schema = function.schema.as_deref().unwrap_or("public");
-        let language = function.language.to_lowercase();
-        let body = function.definition.trim();
-
-        let params = function
-            .parameters
-            .iter()
-            .map(|p| {
-                let mode = match p.mode {
-                    ParameterMode::In => "IN ",
-                    ParameterMode::Out => "OUT ",
-                    ParameterMode::InOut => "INOUT ",
-                    ParameterMode::Variadic => "VARIADIC ",
-                };
-                format!("{}{} {}", mode, p.name, p.type_name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let returns = format!("RETURNS {}", function.returns.type_name);
-
-        Ok(format!(
-            "CREATE OR REPLACE FUNCTION {}.{}({}) {} LANGUAGE {} AS $function$\n{}\n$function$;",
-            schema, function_name, params, returns, language, body
-        ))
+        // The definition field already contains the complete CREATE FUNCTION statement
+        Ok(function.definition.clone())
     }
 
     fn create_procedure(&self, procedure: &Procedure) -> Result<String> {
-        let procedure_name = Self::force_quote_identifier(&procedure.name);
-        let params = procedure
-            .parameters
-            .iter()
-            .map(|p| {
-                let mode = match p.mode {
-                    ParameterMode::In => "IN",
-                    ParameterMode::Out => "OUT",
-                    ParameterMode::InOut => "INOUT",
-                    ParameterMode::Variadic => "VARIADIC",
-                };
-                format!("{} {} {}", mode, p.name, p.type_name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let language = procedure.language.to_lowercase();
-        let body = procedure.definition.trim();
-        let schema = procedure.schema.as_deref().unwrap_or("public");
-
-        Ok(format!(
-            "CREATE OR REPLACE PROCEDURE {}.{}({}) LANGUAGE {} AS $procedure$ {} $procedure$;",
-            schema, procedure_name, params, language, body
-        ))
+        // The definition field already contains the complete CREATE PROCEDURE statement
+        Ok(procedure.definition.clone())
     }
 
     fn create_sequence(&self, seq: &Sequence) -> Result<String> {
@@ -906,54 +859,46 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_trigger(&self, trigger: &Trigger) -> Result<String> {
-        let trigger_name = if Self::is_reserved_keyword(&trigger.name) {
-            format!("\"{}\"", trigger.name)
+        // Parse the trigger definition to extract components and generate proper SQL
+        let definition = &trigger.definition;
+        
+        // Extract the trigger name and table name from the definition
+        // The definition format is typically: "CREATE TRIGGER name timing events ON table FOR EACH level EXECUTE FUNCTION func"
+        
+        // For now, we'll do a simple replacement approach
+        let mut sql = definition.clone();
+        
+        // Replace unquoted identifiers with quoted ones
+        // This is a simplified approach - in a real implementation, you'd want to parse the SQL properly
+        
+        // Replace trigger name
+        let trigger_name_pattern = format!("CREATE TRIGGER {}", trigger.name);
+        let trigger_name_replacement = format!("CREATE TRIGGER \"{}\"", trigger.name);
+        sql = sql.replace(&trigger_name_pattern, &trigger_name_replacement);
+        
+        // Replace table name - handle both with and without schema prefix
+        if trigger.schema == "public" {
+            // For public schema, just quote the table name
+            let table_name_pattern = format!("ON {}", trigger.table_name);
+            let table_name_replacement = format!("ON \"{}\"", trigger.table_name);
+            sql = sql.replace(&table_name_pattern, &table_name_replacement);
         } else {
-            Self::force_quote_identifier(&trigger.name)
-        };
-        let table_name = Self::force_quote_identifier(&trigger.table);
-
-        let events: Vec<&str> = trigger
-            .events
-            .iter()
-            .map(|e| match e {
-                TriggerEvent::Insert => "INSERT",
-                TriggerEvent::Update { .. } => "UPDATE",
-                TriggerEvent::Delete => "DELETE",
-                TriggerEvent::Truncate => "TRUNCATE",
-            })
-            .collect();
-
-        let timing = match trigger.timing {
-            TriggerTiming::Before => "BEFORE",
-            TriggerTiming::After => "AFTER",
-            TriggerTiming::InsteadOf => "INSTEAD OF",
-        };
-
-        let level = match trigger.for_each {
-            TriggerLevel::Row => "FOR EACH ROW",
-            TriggerLevel::Statement => "FOR EACH STATEMENT",
-        };
-
-        let events_str = events.join(" OR ");
-        let function = &trigger.function;
-
-        let args = if !trigger.arguments.is_empty() {
-            format!("({})", trigger.arguments.join(", "))
-        } else {
-            "()".to_string()
-        };
-
-        let when = if let Some(condition) = &trigger.condition {
-            format!(" WHEN ({})", condition)
-        } else {
-            String::new()
-        };
-
-        Ok(format!(
-            "CREATE TRIGGER {} {} {} ON {} {}{} EXECUTE FUNCTION {}{};",
-            trigger_name, timing, events_str, table_name, level, when, function, args
-        ))
+            // For non-public schema, handle both cases:
+            // 1. ON table_name -> ON "schema"."table_name"
+            // 2. ON schema.table_name -> ON "schema"."table_name"
+            
+            // First, try to replace the schema-prefixed version
+            let schema_table_pattern = format!("ON {}.{}", trigger.schema, trigger.table_name);
+            let schema_table_replacement = format!("ON \"{}\".\"{}\"", trigger.schema, trigger.table_name);
+            sql = sql.replace(&schema_table_pattern, &schema_table_replacement);
+            
+            // Then, try to replace the non-schema-prefixed version
+            let table_name_pattern = format!("ON {}", trigger.table_name);
+            let table_name_replacement = format!("ON \"{}\".\"{}\"", trigger.schema, trigger.table_name);
+            sql = sql.replace(&table_name_pattern, &table_name_replacement);
+        }
+        
+        Ok(sql)
     }
 
     fn create_policy(&self, policy: &Policy) -> Result<String> {
@@ -1052,24 +997,17 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_function(&self, func: &Function) -> Result<String> {
-        let name = if let Some(schema) = &func.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&func.name))
-        } else {
+        let name = if func.schema == "public" {
             Self::force_quote_identifier(&func.name)
+        } else {
+            format!("{}.{}", func.schema, Self::force_quote_identifier(&func.name))
         };
 
-        // Build parameter signature for function identification
-        let params = func
-            .parameters
-            .iter()
-            .map(|p| p.type_name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let signature = if params.is_empty() {
+        // Use identity_arguments for function identification
+        let signature = if func.identity_arguments.is_empty() {
             "()".to_string()
         } else {
-            format!("({})", params)
+            format!("({})", func.identity_arguments)
         };
 
         Ok(format!(
@@ -1079,24 +1017,17 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_procedure(&self, proc: &Procedure) -> Result<String> {
-        let name = if let Some(schema) = &proc.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&proc.name))
-        } else {
+        let name = if proc.schema == "public" {
             Self::force_quote_identifier(&proc.name)
+        } else {
+            format!("{}.{}", proc.schema, Self::force_quote_identifier(&proc.name))
         };
 
-        // Build parameter signature for procedure identification
-        let params = proc
-            .parameters
-            .iter()
-            .map(|p| p.type_name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let signature = if params.is_empty() {
+        // Use identity_arguments for procedure identification
+        let signature = if proc.identity_arguments.is_empty() {
             "()".to_string()
         } else {
-            format!("({})", params)
+            format!("({})", proc.identity_arguments)
         };
 
         Ok(format!(
@@ -1135,20 +1066,11 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_trigger(&self, trigger: &Trigger) -> Result<String> {
-        let trigger_name = if let Some(schema) = &trigger.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&trigger.name))
+        let trigger_name = Self::force_quote_identifier(&trigger.name);
+        let table_name = if trigger.schema == "public" {
+            Self::force_quote_identifier(&trigger.table_name)
         } else {
-            Self::force_quote_identifier(&trigger.name)
-        };
-
-        let table_name = if let Some(schema) = &trigger.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&trigger.table)
-            )
-        } else {
-            Self::force_quote_identifier(&trigger.table)
+            format!("{}.{}", Self::force_quote_identifier(&trigger.schema), Self::force_quote_identifier(&trigger.table_name))
         };
 
         Ok(format!(
@@ -1361,37 +1283,8 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_event_trigger(&self, trigger: &EventTrigger) -> Result<String> {
-        let trigger_name = Self::force_quote_identifier(&trigger.name);
-
-        let event_str = match trigger.event {
-            EventTriggerEvent::DdlCommandStart => "DDL_COMMAND_START",
-            EventTriggerEvent::DdlCommandEnd => "DDL_COMMAND_END",
-            EventTriggerEvent::TableRewrite => "TABLE_REWRITE",
-            EventTriggerEvent::SqlDrop => "SQL_DROP",
-        };
-
-        let mut sql = format!("CREATE EVENT TRIGGER {} ON {}", trigger_name, event_str);
-
-        if !trigger.tags.is_empty() {
-            sql.push_str(" WHEN TAG IN (");
-            let tags = trigger
-                .tags
-                .iter()
-                .map(|tag| format!("'{}'", tag))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&tags);
-            sql.push_str(")");
-        }
-
-        sql.push_str(&format!(" EXECUTE FUNCTION {}();", trigger.function));
-
-        if !trigger.enabled {
-            sql.push_str(" DISABLE");
-        }
-
-        sql.push(';');
-        Ok(sql)
+        // The event trigger definition already contains the full CREATE EVENT TRIGGER statement
+        Ok(trigger.definition.clone())
     }
 
     fn drop_event_trigger(&self, trigger: &EventTrigger) -> Result<String> {
@@ -1617,16 +1510,8 @@ impl SqlGenerator for PostgresSqlGenerator {
         // Add FOR ALL TABLES if specified
         if publication.all_tables {
             sql.push_str(" FOR ALL TABLES");
-        } else if !publication.tables.is_empty() {
-            // Add specific tables
-            let tables = publication
-                .tables
-                .iter()
-                .map(|t| Self::force_quote_identifier(t))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" FOR TABLE {}", tables));
         }
+        // Note: Specific tables are handled separately via PublicationTable objects
 
         // Add operation types
         let mut operations = Vec::new();

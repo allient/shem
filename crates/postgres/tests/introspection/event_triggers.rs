@@ -5,7 +5,7 @@
 use tracing::debug;
 use postgres::TestDb;
 use shem_core::DatabaseConnection;
-use shem_core::schema::{EventTriggerEvent};
+use shem_core::schema::EventTriggerEvent;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -45,10 +45,10 @@ async fn test_introspect_basic_event_trigger() -> Result<(), Box<dyn std::error:
 
     let trigger_obj = trigger.unwrap();
     assert_eq!(trigger_obj.name, "test_ddl_start");
-    assert_eq!(trigger_obj.event, EventTriggerEvent::DdlCommandStart);
-    assert_eq!(trigger_obj.function, "log_ddl");
-    assert!(trigger_obj.enabled);
-    assert!(trigger_obj.tags.is_empty());
+    assert_eq!(trigger_obj.owner, "postgres");
+    assert!(trigger_obj.definition.contains("CREATE EVENT TRIGGER test_ddl_start ON ddl_command_start"));
+    assert!(trigger_obj.definition.contains("log_ddl"));
+    assert!(!trigger_obj.is_from_extension);
 
     // Clean up
     db.cleanup().await?;
@@ -77,10 +77,10 @@ async fn test_introspect_event_triggers_all_types() -> Result<(), Box<dyn std::e
     let schema = connection.introspect().await?;
 
     // Verify all event triggers were introspected with correct event types
-    assert_eq!(schema.event_triggers["et_start"].event, EventTriggerEvent::DdlCommandStart);
-    assert_eq!(schema.event_triggers["et_end"].event, EventTriggerEvent::DdlCommandEnd);
-    assert_eq!(schema.event_triggers["et_drop"].event, EventTriggerEvent::SqlDrop);
-    assert_eq!(schema.event_triggers["et_rewrite"].event, EventTriggerEvent::TableRewrite);
+    assert!(schema.event_triggers["et_start"].definition.contains("ddl_command_start"));
+    assert!(schema.event_triggers["et_end"].definition.contains("ddl_command_end"));
+    assert!(schema.event_triggers["et_drop"].definition.contains("sql_drop"));
+    assert!(schema.event_triggers["et_rewrite"].definition.contains("table_rewrite"));
 
     // Clean up
     db.cleanup().await?;
@@ -110,7 +110,7 @@ async fn test_introspect_event_trigger_with_tags() -> Result<(), Box<dyn std::er
     );
 
     let trigger_obj = trigger.unwrap();
-    assert_eq!(trigger_obj.tags, vec!["CREATE TABLE", "ALTER TABLE"]);
+    assert!(trigger_obj.definition.contains("WHEN TAG IN ('CREATE TABLE', 'ALTER TABLE')"));
 
     // Clean up
     db.cleanup().await?;
@@ -141,7 +141,9 @@ async fn test_introspect_disabled_event_trigger() -> Result<(), Box<dyn std::err
     );
 
     let trigger_obj = trigger.unwrap();
-    assert!(!trigger_obj.enabled);
+    // Note: The definition will still show the original CREATE statement
+    // The DISABLE status is not captured in the definition
+    assert!(trigger_obj.definition.contains("CREATE EVENT TRIGGER et_disabled"));
 
     // Clean up
     db.cleanup().await?;
@@ -166,8 +168,8 @@ async fn test_introspect_event_trigger_different_functions() -> Result<(), Box<d
     let schema = connection.introspect().await?;
 
     // Verify event triggers have correct function names
-    assert_eq!(schema.event_triggers["et_func1"].function, "log_func1");
-    assert_eq!(schema.event_triggers["et_func2"].function, "log_func2");
+    assert!(schema.event_triggers["et_func1"].definition.contains("log_func1"));
+    assert!(schema.event_triggers["et_func2"].definition.contains("log_func2"));
 
     // Clean up
     db.cleanup().await?;

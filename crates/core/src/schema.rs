@@ -11,22 +11,21 @@ pub struct Schema {
     pub tables: HashMap<String, Table>,
     pub views: HashMap<String, View>,
     pub materialized_views: HashMap<String, MaterializedView>,
-    pub functions: HashMap<String, Function>,
-    pub procedures: HashMap<String, Procedure>,
+    pub routines: HashMap<String, Routine>,
     pub sequences: HashMap<String, Sequence>,
     pub triggers: HashMap<String, Trigger>,
-    pub constraint_triggers: HashMap<String, ConstraintTrigger>,
     pub event_triggers: HashMap<String, EventTrigger>,
     pub policies: HashMap<String, Policy>,
     pub servers: HashMap<String, Server>,
     pub collations: HashMap<String, Collation>,
     pub rules: HashMap<String, Rule>,
     pub publications: HashMap<String, Publication>,
+    pub publication_tables: HashMap<String, PublicationTable>,
     pub subscriptions: HashMap<String, Subscription>,
     pub tablespaces: HashMap<String, Tablespace>,
     pub foreign_tables: HashMap<String, ForeignTable>,
     pub foreign_data_wrappers: HashMap<String, ForeignDataWrapper>,
-    pub foreign_key_constraints: HashMap<String, ForeignKeyConstraint>,
+    pub constraints: HashMap<String, Constraint>,
 }
 
 impl Schema {
@@ -37,24 +36,23 @@ impl Schema {
             tables: HashMap::new(),
             views: HashMap::new(),
             materialized_views: HashMap::new(),
-            functions: HashMap::new(),
-            procedures: HashMap::new(),
+            routines: HashMap::new(),
             sequences: HashMap::new(),
             extensions: HashMap::new(),
             triggers: HashMap::new(),
-            constraint_triggers: HashMap::new(),
             event_triggers: HashMap::new(),
             policies: HashMap::new(),
             servers: HashMap::new(),
             collations: HashMap::new(),
             rules: HashMap::new(),
             publications: HashMap::new(),
+            publication_tables: HashMap::new(),
             subscriptions: HashMap::new(),
             roles: HashMap::new(),
             tablespaces: HashMap::new(),
             foreign_tables: HashMap::new(),
             foreign_data_wrappers: HashMap::new(),
-            foreign_key_constraints: HashMap::new(),
+            constraints: HashMap::new(),
             types: HashMap::new(),
         }
     }
@@ -66,6 +64,16 @@ impl Schema {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Relation {
+    Table(Table),
+    View(View),
+    MaterializedView(MaterializedView),
+    ForeignTable(ForeignTable),
+    // PartitionedTable can be represented by the `partition_key` field in the Table struct
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Role {
     pub oid: u32,
@@ -126,6 +134,7 @@ pub struct Table {
     pub columns: Vec<Column>,
     pub constraints: Vec<Constraint>,
     pub indexes: Vec<Index>,
+    pub triggers: Vec<Trigger>,
     pub comment: Option<String>,
     pub tablespace: Option<String>,
     pub inherits: Vec<String>,         // List of parent table names
@@ -170,32 +179,60 @@ pub struct MaterializedView {
     pub is_from_extension: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Represents a regular function (prokind = 'f') or a window function (prokind = 'w').
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Function {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
-    pub parameters: Vec<Parameter>,
-    pub returns: ReturnType,
-    pub language: String,
+    pub schema: String,
+    pub owner: String,
+    // The full "CREATE OR REPLACE FUNCTION..." statement from pg_get_functiondef()
     pub definition: String,
+    // A simplified signature for identification and dependency mapping,
+    // e.g., "my_func(integer, text)"
+    pub identity_arguments: String,
+    pub acl: Option<String>,
     pub comment: Option<String>,
-    pub volatility: Volatility, // Added: IMMUTABLE/STABLE/VOLATILE
-    pub strict: bool,           // Added: STRICT/RETURNS NULL ON NULL INPUT
-    pub security_definer: bool, // Added: security context
-    pub parallel_safety: ParallelSafety, // Added: parallel execution safety
-    pub cost: Option<f64>,      // Added: execution cost hint
-    pub rows: Option<f64>,      // Added: rows estimate for set-returning functions
+    pub is_from_extension: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Routine {
+    Function(Function),
+    Procedure(Procedure),
+    Aggregate(Aggregate),
+}
+
+/// Represents a procedure (prokind = 'p').
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Procedure {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
-    pub parameters: Vec<Parameter>,
-    pub language: String,
+    pub schema: String,
+    pub owner: String,
+    /// The full "CREATE OR REPLACE PROCEDURE..." statement from pg_get_functiondef().
     pub definition: String,
+    /// A minimal signature for identification, e.g., "my_proc(integer, text)".
+    pub identity_arguments: String,
+    pub acl: Option<String>,
     pub comment: Option<String>,
-    pub security_definer: bool, // Added: security context
+    pub is_from_extension: bool,
+}
+
+/// Represents an aggregate function (prokind = 'a').
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Aggregate {
+    pub oid: u32,
+    pub name: String,
+    pub schema: String,
+    pub owner: String,
+    /// The full "CREATE AGGREGATE..." statement, which we will construct.
+    pub definition: String,
+    /// The signature for identification, e.g., "my_agg(integer)".
+    pub identity_arguments: String,
+    pub acl: Option<String>,
+    pub comment: Option<String>,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -253,17 +290,16 @@ pub enum TriggerLevel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Trigger {
+    pub oid: u32,
     pub name: String,
-    pub table: String,
-    pub schema: Option<String>,
-    pub timing: TriggerTiming,
-    pub events: Vec<TriggerEvent>,
-    pub function: String,
-    pub arguments: Vec<String>,
-    pub condition: Option<String>, // Added: WHEN condition
-    pub for_each: TriggerLevel,    // Added: FOR EACH ROW/STATEMENT
+    pub table_oid: u32,
+    pub table_name: String,
+    pub schema: String,
+    /// The full, raw "CREATE CONSTRAINT TRIGGER..." or "CREATE TRIGGER..." statement.
+    pub definition: String,
+    pub is_constraint: bool,
     pub comment: Option<String>,
-    pub when: Option<String>,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -292,12 +328,13 @@ pub struct Server {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventTrigger {
+    pub oid: u32,
     pub name: String,
-    pub event: EventTriggerEvent, // Enhanced: structured event types
-    pub function: String,
-    pub enabled: bool,
-    pub tags: Vec<String>,
-    pub condition: Option<String>, // Added: WHEN condition
+    pub owner: String,
+    /// The full, raw "CREATE EVENT TRIGGER..." statement.
+    pub definition: String,
+    pub comment: Option<String>,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -356,13 +393,37 @@ pub struct ConstraintTrigger {
 // New structures for additional PostgreSQL objects
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Publication {
+    pub oid: u32,
     pub name: String,
-    pub tables: Vec<String>,
+    pub owner: String,
     pub all_tables: bool,
     pub insert: bool,
     pub update: bool,
     pub delete: bool,
     pub truncate: bool,
+    pub publish_via_partition_root: bool, // (PG13+)
+    pub comment: Option<String>,
+    // The list of tables is now stored in a separate struct
+    pub is_user_defined: bool, // Though all publications are
+    pub is_from_extension: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PublicationTable {
+    pub oid: u32, // OID of the pg_publication_rel entry
+    pub publication_oid: u32,
+    pub table_oid: u32,
+    pub table_schema: String,
+    pub table_name: String,
+
+    // --- ADDED FOR PG15+ ---
+    /// The row-filter expression, e.g., "created_at > '2023-01-01'".
+    /// This corresponds to the WHERE clause.
+    pub row_filter: Option<String>,
+
+    /// An optional list of columns to be published.
+    /// If None, all columns are published.
+    pub column_list: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -455,15 +516,6 @@ pub struct Column {
     pub is_local: bool,   // True if defined in this table, false if inherited
     pub stats_target: Option<i32>, // Per-column statistics target (-1 is default)
     pub fdw_options: HashMap<String, String>, // Options for a column in a foreign table
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Constraint {
-    pub name: String,
-    pub kind: ConstraintKind,
-    pub definition: String,
-    pub deferrable: bool,         // Added: deferrable constraint
-    pub initially_deferred: bool, // Added: initially deferred
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -620,28 +672,43 @@ pub enum PartitionMethod {
     Hash,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ReferentialAction {
-    NoAction,
-    Restrict,
-    Cascade,
-    SetNull,
-    SetDefault,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Constraint {
+    pub oid: u32,
+    pub name: String,
+    pub table_oid: u32,     // The OID of the table this constraint is on
+    pub definition: String, // The full definition from pg_get_constraintdef()
+    pub r#type: ConstraintType,
+
+    // Fields specific to Foreign Keys
+    pub foreign_table_oid: Option<u32>,
+    pub foreign_key_columns: Vec<String>,
+    pub primary_key_columns: Vec<String>,
+    pub on_update: ReferentialAction,
+    pub on_delete: ReferentialAction,
+
+    // Other properties
+    pub is_deferrable: bool,
+    pub is_initially_deferred: bool,
+    pub is_not_valid: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ForeignKeyConstraint {
-    pub name: String,
-    pub table: String,
-    pub schema: Option<String>,
-    pub columns: Vec<String>,
-    pub references_table: String,
-    pub references_schema: Option<String>,
-    pub references_columns: Vec<String>,
-    pub on_delete: Option<ReferentialAction>,
-    pub on_update: Option<ReferentialAction>,
-    pub deferrable: bool,
-    pub initially_deferred: bool,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConstraintType {
+    Check,
+    ForeignKey,
+    PrimaryKey,
+    Unique,
+    Exclusion,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ReferentialAction {
+    NoAction,   // 'a'
+    Restrict,   // 'r'
+    Cascade,    // 'c'
+    SetNull,    // 'n'
+    SetDefault, // 'd'
 }
 
 // The specific struct for a pseudo-type.

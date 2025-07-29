@@ -79,7 +79,7 @@ async fn test_introspect_materialized_view_with_schema() -> Result<(), Box<dyn s
     let schema = connection.introspect().await?;
 
     // Verify the materialized view exists in the schema
-    let view = schema.materialized_views.get("expensive_products").expect("Materialized view should exist");
+    let view = schema.materialized_views.get("test_schema.expensive_products").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.name, "expensive_products");
     assert_eq!(view.schema, "test_schema".to_string());
