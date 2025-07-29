@@ -6,6 +6,7 @@ description = "PostgreSQL driver for database schema management"
 
 [dependencies]
 shem-core = { path = "../core" }
+parser = { path = "../parser" }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tokio-postgres = { workspace = true }

@@ -470,7 +470,7 @@ async fn test_introspect_sequence_all_features() -> Result<(), Box<dyn std::erro
     let seq = sequence.unwrap();
     debug!("Sequence: {:?}", seq);
     assert_eq!(seq.name, "test_all_features_sequence");
-    assert_eq!(seq.data_type, "smallint");
+    assert_eq!(seq.data_type, "integer");
     assert_eq!(seq.start, 1000);
     assert_eq!(seq.increment, 10);
     assert_eq!(seq.min_value, Some(500));

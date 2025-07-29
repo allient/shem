@@ -109,18 +109,31 @@ pub struct Extension {
     // pub config_tables: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ReplicaIdentity {
+    Default,
+    Nothing,
+    Full,
+    Index(String), // The value is the name of the index
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Table {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
+    pub schema: String,
+    pub owner: String,
     pub columns: Vec<Column>,
     pub constraints: Vec<Constraint>,
     pub indexes: Vec<Index>,
     pub comment: Option<String>,
     pub tablespace: Option<String>,
-    pub inherits: Vec<String>,
-    pub partition_by: Option<PartitionBy>,
-    pub storage_parameters: HashMap<String, String>,
+    pub inherits: Vec<String>,         // List of parent table names
+    pub partition_key: Option<String>, // The full "PARTITION BY ..." string
+    pub replica_identity: ReplicaIdentity,
+    pub acl: Option<String>,
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -175,19 +188,36 @@ pub struct Procedure {
     pub security_definer: bool, // Added: security context
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnedBy {
+    pub table_schema: String,
+    pub table_name: String,
+    pub column_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sequence {
+    pub oid: u32,
     pub name: String,
     pub schema: Option<String>,
-    pub data_type: String, // Added: sequence data type (bigint, integer, smallint)
+    pub owner: String,
+    pub data_type: String, // "smallint", "integer", or "bigint"
     pub start: i64,
     pub increment: i64,
     pub min_value: Option<i64>,
     pub max_value: Option<i64>,
     pub cache: i64,
     pub cycle: bool,
-    pub owned_by: Option<String>, // Added: OWNED BY column
+    // Data-related fields
+    pub current_value: Option<i64>, // Can be NULL if sequence hasn't been used
+    pub is_called: bool,            // Has nextval been called since the last setval?
+    // Ownership and permissions
+    pub owned_by: Option<String>, // Format: "schema.table.column"
+    pub acl: Option<String>,
     pub comment: Option<String>,
+    // Filtering flags
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -348,6 +378,33 @@ pub struct ForeignTable {
     pub options: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ColumnStorage {
+    Plain,    // 'p'
+    External, // 'e'
+    Extended, // 'x'
+    Main,     // 'm'
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Identity {
+    pub generation: IdentityGeneration, // ALWAYS or BY DEFAULT
+                                        // Sequence options are part of the associated Sequence object, not stored here.
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IdentityGeneration {
+    Always,    // 'a'
+    ByDefault, // 'd'
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Generated {
+    pub expression: String,
+    // In PostgreSQL, generated columns are currently always STORED.
+    // A 'kind' field could be added if VIRTUAL is supported in the future.
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForeignDataWrapper {
     pub name: String,
@@ -357,18 +414,31 @@ pub struct ForeignDataWrapper {
 }
 
 // Supporting types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
-    pub type_name: String,
-    pub nullable: bool,
-    pub default: Option<String>,
-    pub identity: Option<Identity>,
-    pub generated: Option<GeneratedColumn>,
+    pub type_name: String, // Fully formatted type, e.g., "character varying(255)"
+    pub is_not_null: bool,
+    pub has_default: bool, // Just a flag, the default value itself is a separate object
+
+    // Properties for CREATE TABLE
+    pub collation: Option<String>, // Fully qualified collation name, e.g., "public.my_collation"
+    pub storage: ColumnStorage,
+    pub compression: Option<String>, // e.g., "pglz", "lz4" (PG14+)
+
+    // Special column types
+    pub identity: Option<Identity>,   // For IDENTITY columns (PG10+)
+    pub generated: Option<Generated>, // For GENERATED columns (PG12+)
+
+    // Metadata
     pub comment: Option<String>,
-    pub collation: Option<String>,      // Added: column-level collation
-    pub storage: Option<ColumnStorage>, // Added: storage type
-    pub compression: Option<String>,    // Added: compression method
+    pub acl: Option<String>, // Per-column permissions
+
+    // Internal & advanced properties
+    pub is_dropped: bool, // Important for binary_upgrade and table structure analysis
+    pub is_local: bool,   // True if defined in this table, false if inherited
+    pub stats_target: Option<i32>, // Per-column statistics target (-1 is default)
+    pub fdw_options: HashMap<String, String>, // Options for a column in a foreign table
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -440,17 +510,6 @@ pub struct IndexColumn {
     pub order: SortOrder,
     pub nulls_first: bool,
     pub opclass: Option<String>, // Added: operator class
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Identity {
-    pub always: bool,
-    pub start: i64,
-    pub increment: i64,
-    pub min_value: Option<i64>,
-    pub max_value: Option<i64>,
-    pub cache: Option<i64>, // Made optional
-    pub cycle: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -536,14 +595,6 @@ pub enum IndexMethod {
     Spgist,
     Gin,
     Brin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ColumnStorage {
-    Plain,
-    External,
-    Extended,
-    Main,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -5,8 +5,10 @@ use postgres::PostgresSqlGenerator;
 #[test]
 fn test_create_sequence_basic() {
     let sequence = Sequence {
+        oid: 12345,
         name: "my_seq".to_string(),
         schema: None,
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -14,8 +16,13 @@ fn test_create_sequence_basic() {
         max_value: Some(2147483647),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -34,8 +41,10 @@ fn test_create_sequence_basic() {
 #[test]
 fn test_create_sequence_with_owned_by() {
     let sequence = Sequence {
+        oid: 12346,
         name: "user_id_seq".to_string(),
         schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
         data_type: "bigint".to_string(),
         start: 1000,
         increment: 5,
@@ -43,8 +52,13 @@ fn test_create_sequence_with_owned_by() {
         max_value: Some(9223372036854775807),
         cache: 10,
         cycle: true,
+        current_value: Some(1000),
+        is_called: false,
         owned_by: Some("users.id".to_string()),
+        acl: None,
         comment: Some("User ID sequence".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -64,8 +78,10 @@ fn test_create_sequence_with_owned_by() {
 #[test]
 fn test_create_sequence_no_limits() {
     let sequence = Sequence {
+        oid: 12347,
         name: "unlimited_seq".to_string(),
         schema: None,
+        owner: "postgres".to_string(),
         data_type: "bigint".to_string(),
         start: 1,
         increment: 1,
@@ -73,8 +89,13 @@ fn test_create_sequence_no_limits() {
         max_value: None,
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -93,8 +114,10 @@ fn test_create_sequence_no_limits() {
 #[test]
 fn test_drop_sequence() {
     let sequence = Sequence {
+        oid: 12348,
         name: "my_seq".to_string(),
         schema: None,
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -102,8 +125,13 @@ fn test_drop_sequence() {
         max_value: Some(2147483647),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -115,8 +143,10 @@ fn test_drop_sequence() {
 #[test]
 fn test_drop_sequence_with_schema() {
     let sequence = Sequence {
+        oid: 12349,
         name: "my_seq".to_string(),
         schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -124,8 +154,13 @@ fn test_drop_sequence_with_schema() {
         max_value: Some(2147483647),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -137,8 +172,10 @@ fn test_drop_sequence_with_schema() {
 #[test]
 fn test_alter_sequence_change_all_properties() {
     let old_sequence = Sequence {
+        oid: 12350,
         name: "user_id_seq".to_string(),
         schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -146,13 +183,20 @@ fn test_alter_sequence_change_all_properties() {
         max_value: Some(2147483647),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: Some("users.id".to_string()),
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let new_sequence = Sequence {
+        oid: 12350,
         name: "user_id_seq".to_string(),
         schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
         data_type: "bigint".to_string(),
         start: 1000,
         increment: 2,
@@ -160,8 +204,13 @@ fn test_alter_sequence_change_all_properties() {
         max_value: Some(9223372036854775807),
         cache: 10,
         cycle: true,
+        current_value: Some(1000),
+        is_called: false,
         owned_by: Some("users.id".to_string()),
+        acl: None,
         comment: Some("Updated user ID sequence".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -183,8 +232,10 @@ fn test_alter_sequence_change_all_properties() {
 #[test]
 fn test_alter_sequence_no_changes() {
     let sequence = Sequence {
+        oid: 12351,
         name: "user_id_seq".to_string(),
         schema: Some("public".to_string()),
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -192,8 +243,13 @@ fn test_alter_sequence_no_changes() {
         max_value: Some(2147483647),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: Some("users.id".to_string()),
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -206,8 +262,10 @@ fn test_alter_sequence_no_changes() {
 #[test]
 fn test_alter_sequence_remove_limits() {
     let old_sequence = Sequence {
+        oid: 12352,
         name: "limited_seq".to_string(),
         schema: None,
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -215,13 +273,20 @@ fn test_alter_sequence_remove_limits() {
         max_value: Some(1000),
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let new_sequence = Sequence {
+        oid: 12352,
         name: "limited_seq".to_string(),
         schema: None,
+        owner: "postgres".to_string(),
         data_type: "integer".to_string(),
         start: 1,
         increment: 1,
@@ -229,8 +294,13 @@ fn test_alter_sequence_remove_limits() {
         max_value: None,
         cache: 1,
         cycle: false,
+        current_value: Some(1),
+        is_called: false,
         owned_by: None,
+        acl: None,
         comment: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;

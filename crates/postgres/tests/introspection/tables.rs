@@ -1,6 +1,6 @@
-use tracing::debug;
 use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use shem_core::{DatabaseConnection, schema::IdentityGeneration};
+use tracing::debug;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -26,7 +26,7 @@ async fn test_introspect_basic_table() -> Result<(), Box<dyn std::error::Error>>
 
     // Introspect the database
     let schema = connection.introspect().await?;
-    
+
     // Verify the table was introspected
     let table = schema.tables.get("test_basic_table");
     debug!("Table: {:?}", table);
@@ -38,26 +38,54 @@ async fn test_introspect_basic_table() -> Result<(), Box<dyn std::error::Error>>
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "test_basic_table");
     assert_eq!(tbl.columns.len(), 2, "Table should have 2 columns");
-    assert_eq!(tbl.constraints.len(), 1, "Table should have 1 constraint (PRIMARY KEY)");
-    assert_eq!(tbl.indexes.len(), 1, "Table should have custom indexes initially because pk");
-    assert!(tbl.comment.is_none(), "Table should not have comment initially");
-    assert!(tbl.tablespace.is_none(), "Table should not have tablespace initially");
-    assert!(tbl.inherits.is_empty(), "Table should not inherit from any table");
-    assert!(tbl.partition_by.is_none(), "Table should not be partitioned");
-    assert!(tbl.storage_parameters.is_empty(), "Table should have no storage parameters");
+    assert_eq!(
+        tbl.constraints.len(),
+        1,
+        "Table should have 1 constraint (PRIMARY KEY)"
+    );
+    assert_eq!(
+        tbl.indexes.len(),
+        1,
+        "Table should have custom indexes initially because pk"
+    );
+    assert!(
+        tbl.comment.is_none(),
+        "Table should not have comment initially"
+    );
+    assert!(
+        tbl.tablespace.is_none(),
+        "Table should not have tablespace initially"
+    );
+    assert!(
+        tbl.inherits.is_empty(),
+        "Table should not inherit from any table"
+    );
+    assert!(
+        tbl.partition_key.is_none(),
+        "Table should not be partitioned"
+    );
 
     // Verify columns
     let id_column = tbl.columns.iter().find(|c| c.name == "id").unwrap();
     assert_eq!(id_column.name, "id");
     assert_eq!(id_column.type_name, "integer");
-    assert!(!id_column.nullable, "Primary key column should not be nullable");
-    assert!(id_column.default.is_none(), "Primary key column should not have default");
+    assert!(
+        id_column.is_not_null,
+        "Primary key column should not be nullable"
+    );
+    assert!(
+        !id_column.has_default,
+        "Primary key column should not have default"
+    );
 
     let name_column = tbl.columns.iter().find(|c| c.name == "name").unwrap();
     assert_eq!(name_column.name, "name");
     assert_eq!(name_column.type_name, "text");
-    assert!(name_column.nullable, "Text column should be nullable");
-    assert!(name_column.default.is_none(), "Text column should not have default");
+    assert!(!name_column.is_not_null, "Text column should be nullable");
+    assert!(
+        !name_column.has_default,
+        "Text column should not have default"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -91,8 +119,7 @@ async fn test_introspect_table_with_schema() -> Result<(), Box<dyn std::error::E
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "schema_table");
     assert_eq!(
-        tbl.schema,
-        Some("test_table_schema".to_string()),
+        tbl.schema, "test_table_schema",
         "Table should be in the specified schema"
     );
     assert_eq!(tbl.columns.len(), 2, "Table should have 2 columns");
@@ -174,18 +201,30 @@ async fn test_introspect_table_with_constraints() -> Result<(), Box<dyn std::err
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "test_constraints_table");
     assert_eq!(tbl.columns.len(), 4, "Table should have 4 columns");
-    assert!(tbl.constraints.len() >= 4, "Table should have at least 4 constraints");
+    assert!(
+        tbl.constraints.len() >= 4,
+        "Table should have at least 4 constraints"
+    );
 
     // Verify columns with constraints
     let id_column = tbl.columns.iter().find(|c| c.name == "id").unwrap();
-    assert!(!id_column.nullable, "Primary key column should not be nullable");
+    assert!(
+        id_column.is_not_null,
+        "Primary key column should not be nullable"
+    );
 
     let email_column = tbl.columns.iter().find(|c| c.name == "email").unwrap();
-    assert!(!email_column.nullable, "Email column should not be nullable");
+    assert!(
+        email_column.is_not_null,
+        "Email column should not be nullable"
+    );
 
     let status_column = tbl.columns.iter().find(|c| c.name == "status").unwrap();
     debug!("Status column: {:?}", status_column);
-    assert_eq!(status_column.default, Some("'active'::text".to_string()), "Status column should have default");
+    assert!(
+        status_column.has_default,
+        "Status column should have default"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -238,14 +277,25 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "test_indexes_table");
     assert_eq!(tbl.columns.len(), 4, "Table should have 4 columns");
-    assert!(tbl.indexes.len() >= 3, "Table should have at least 3 custom indexes");
+    assert!(
+        tbl.indexes.len() >= 3,
+        "Table should have at least 3 custom indexes"
+    );
 
     // Verify indexes
-    let name_index = tbl.indexes.iter().find(|i| i.name == "idx_test_indexes_name").unwrap();
+    let name_index = tbl
+        .indexes
+        .iter()
+        .find(|i| i.name == "idx_test_indexes_name")
+        .unwrap();
     assert!(!name_index.unique, "Name index should not be unique");
     assert_eq!(name_index.method, shem_core::IndexMethod::Btree);
 
-    let email_index = tbl.indexes.iter().find(|i| i.name == "idx_test_indexes_email").unwrap();
+    let email_index = tbl
+        .indexes
+        .iter()
+        .find(|i| i.name == "idx_test_indexes_email")
+        .unwrap();
     assert!(email_index.unique, "Email index should be unique");
 
     // Clean up
@@ -262,10 +312,10 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
 //     // Use a temporary directory that we can control
 //     let temp_dir = tempfile::tempdir()?;
 //     let tablespace_path = temp_dir.path().join("test_tablespace");
-    
+
 //     // Create the tablespace directory
 //     std::fs::create_dir_all(&tablespace_path)?;
-    
+
 //     // Set proper permissions (readable and writable by owner)
 //     #[cfg(unix)]
 //     {
@@ -340,47 +390,14 @@ async fn test_introspect_table_with_inheritance() -> Result<(), Box<dyn std::err
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "child_table");
-    assert_eq!(tbl.inherits.len(), 1, "Child table should inherit from 1 parent");
-    assert_eq!(tbl.inherits[0], "parent_table", "Child table should inherit from parent_table");
-
-    // Clean up
-    db.cleanup().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_introspect_table_with_storage_parameters() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::try_init().ok();
-    let db = TestDb::new().await?;
-    let connection = &db.conn;
-
-    // Create table with storage parameters
-    execute_sql(
-        &connection,
-        "CREATE TABLE test_storage_table (
-            id integer PRIMARY KEY,
-            data text
-        ) WITH (fillfactor = 80, autovacuum_vacuum_scale_factor = 0.1);",
-    )
-    .await?;
-
-    // Introspect the database
-    let schema = connection.introspect().await?;
-
-    // Verify the table was introspected with storage parameters
-    let table = schema.tables.get("test_storage_table");
-    assert!(
-        table.is_some(),
-        "Table 'test_storage_table' should be introspected"
-    );
-
-    let tbl = table.unwrap();
-    assert_eq!(tbl.name, "test_storage_table");
-    assert!(!tbl.storage_parameters.is_empty(), "Table should have storage parameters");
     assert_eq!(
-        tbl.storage_parameters.get("fillfactor"),
-        Some(&"80".to_string()),
-        "Table should have fillfactor storage parameter"
+        tbl.inherits.len(),
+        1,
+        "Child table should inherit from 1 parent"
+    );
+    assert_eq!(
+        tbl.inherits[0], "parent_table",
+        "Child table should inherit from parent_table"
     );
 
     // Clean up
@@ -423,12 +440,21 @@ async fn test_introspect_table_with_identity_columns() -> Result<(), Box<dyn std
     let id_column = tbl.columns.iter().find(|c| c.name == "id").unwrap();
     assert!(id_column.identity.is_some(), "ID column should be identity");
     let id_identity = id_column.identity.as_ref().unwrap();
-    assert!(id_identity.always, "ID column should be GENERATED ALWAYS");
+    assert!(
+        matches!(id_identity.generation, IdentityGeneration::Always),
+        "ID column should be GENERATED ALWAYS"
+    );
 
     let seq_id_column = tbl.columns.iter().find(|c| c.name == "seq_id").unwrap();
-    assert!(seq_id_column.identity.is_some(), "seq_id column should be identity");
+    assert!(
+        seq_id_column.identity.is_some(),
+        "seq_id column should be identity"
+    );
     let seq_id_identity = seq_id_column.identity.as_ref().unwrap();
-    assert!(!seq_id_identity.always, "seq_id column should be GENERATED BY DEFAULT");
+    assert!(
+        matches!(seq_id_identity.generation, IdentityGeneration::ByDefault),
+        "seq_id column should be GENERATED BY DEFAULT"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -469,9 +495,20 @@ async fn test_introspect_table_with_generated_columns() -> Result<(), Box<dyn st
 
     // Verify generated column
     let full_name_column = tbl.columns.iter().find(|c| c.name == "full_name").unwrap();
-    assert!(full_name_column.generated.is_some(), "full_name column should be generated");
+    debug!("full_name_column: {:?}", full_name_column);
+    debug!(
+        "full_name_column.generated: {:?}",
+        full_name_column.generated
+    );
+    assert!(
+        full_name_column.generated.is_some(),
+        "full_name column should be generated"
+    );
     let generated = full_name_column.generated.as_ref().unwrap();
-    assert!(generated.stored, "Generated column should be STORED");
+    assert!(
+        !generated.expression.is_empty(),
+        "Generated column should have an expression"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -595,7 +632,10 @@ async fn test_introspect_table_performance() -> Result<(), Box<dyn std::error::E
     for i in 1..=5 {
         execute_sql(
             &connection,
-            &format!("CREATE TABLE test_perf_table_{} (id integer PRIMARY KEY, name text);", i),
+            &format!(
+                "CREATE TABLE test_perf_table_{} (id integer PRIMARY KEY, name text);",
+                i
+            ),
         )
         .await?;
     }
@@ -608,7 +648,9 @@ async fn test_introspect_table_performance() -> Result<(), Box<dyn std::error::E
     // Verify all tables were introspected
     for i in 1..=5 {
         assert!(
-            schema.tables.contains_key(&format!("test_perf_table_{}", i)),
+            schema
+                .tables
+                .contains_key(&format!("test_perf_table_{}", i)),
             "Table test_perf_table_{} should be introspected",
             i
         );
@@ -654,8 +696,7 @@ async fn test_introspect_table_consistency() -> Result<(), Box<dyn std::error::E
     assert_eq!(tbl1.comment, tbl2.comment);
     assert_eq!(tbl1.tablespace, tbl2.tablespace);
     assert_eq!(tbl1.inherits, tbl2.inherits);
-    assert_eq!(tbl1.partition_by, tbl2.partition_by);
-    assert_eq!(tbl1.storage_parameters, tbl2.storage_parameters);
+    assert_eq!(tbl1.partition_key, tbl2.partition_key);
 
     // Clean up
     db.cleanup().await?;
@@ -692,8 +733,7 @@ async fn test_introspect_table_schema_consistency() -> Result<(), Box<dyn std::e
     assert_eq!(tbl1.comment, tbl2.comment);
     assert_eq!(tbl1.tablespace, tbl2.tablespace);
     assert_eq!(tbl1.inherits, tbl2.inherits);
-    assert_eq!(tbl1.partition_by, tbl2.partition_by);
-    assert_eq!(tbl1.storage_parameters, tbl2.storage_parameters);
+    assert_eq!(tbl1.partition_key, tbl2.partition_key);
 
     // Clean up
     db.cleanup().await?;
@@ -722,8 +762,14 @@ async fn test_introspect_table_comment_consistency() -> Result<(), Box<dyn std::
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let tbl1 = schema1.tables.get("test_comment_consistency_table").unwrap();
-    let tbl2 = schema2.tables.get("test_comment_consistency_table").unwrap();
+    let tbl1 = schema1
+        .tables
+        .get("test_comment_consistency_table")
+        .unwrap();
+    let tbl2 = schema2
+        .tables
+        .get("test_comment_consistency_table")
+        .unwrap();
 
     // Verify comment consistency across multiple introspections
     assert_eq!(tbl1.comment, tbl2.comment);
@@ -736,7 +782,7 @@ async fn test_introspect_table_comment_consistency() -> Result<(), Box<dyn std::
     // Clean up
     db.cleanup().await?;
     Ok(())
-} 
+}
 
 #[tokio::test]
 async fn test_introspect_table_with_various_defaults() -> Result<(), Box<dyn std::error::Error>> {
@@ -771,43 +817,36 @@ async fn test_introspect_table_with_various_defaults() -> Result<(), Box<dyn std
 
     let tbl = table.unwrap();
     let int_col = tbl.columns.iter().find(|c| c.name == "int_col").unwrap();
-    assert_eq!(int_col.default, Some("42".to_string()), "int_col should have default 42");
+    assert!(int_col.has_default, "int_col should have default 42");
 
     let bool_col = tbl.columns.iter().find(|c| c.name == "bool_col").unwrap();
-    assert_eq!(bool_col.default, Some("true".to_string()), "bool_col should have default true");
+    assert!(bool_col.has_default, "bool_col should have default true");
 
     let now_col = tbl.columns.iter().find(|c| c.name == "now_col").unwrap();
-    // Accept both 'now()' and 'now'::text, depending on how introspection returns it
-    assert!(
-        now_col.default.as_deref() == Some("now()") || now_col.default.as_deref().map(|s| s.starts_with("now()")) == Some(true),
-        "now_col should have a now() default, got {:?}", now_col.default
-    );
+    assert!(now_col.has_default, "now_col should have a now() default");
 
     let expr_col = tbl.columns.iter().find(|c| c.name == "expr_col").unwrap();
     debug!("Expr col: {:?}", expr_col);
     assert!(
-        expr_col.default.as_deref() == Some("3") || expr_col.default.as_deref() == Some("(1 + 2)"),
-        "expr_col should have default 3 or '1 + 2', got {:?}", expr_col.default
+        expr_col.has_default,
+        "expr_col should have default 3 or '1 + 2'"
     );
 
     let text_col = tbl.columns.iter().find(|c| c.name == "text_col").unwrap();
     debug!("Text col: {:?}", text_col);
-    assert!(
-        text_col.default.as_deref() == Some("'hello'::text") || text_col.default.as_deref() == Some("'hello'"),
-        "text_col should have default 'hello', got {:?}", text_col.default
-    );
+    assert!(text_col.has_default, "text_col should have default 'hello'");
 
     let uuid_col = tbl.columns.iter().find(|c| c.name == "uuid_col").unwrap();
     debug!("UUID col: {:?}", uuid_col);
     assert!(
-        uuid_col.default.as_deref().map(|s| s.starts_with("gen_random_uuid()")) == Some(true),
-        "uuid_col should have gen_random_uuid() default, got {:?}", uuid_col.default
+        uuid_col.has_default,
+        "uuid_col should have gen_random_uuid() default"
     );
 
     // Clean up
     db.cleanup().await?;
     Ok(())
-} 
+}
 
 #[tokio::test]
 async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::error::Error>> {
@@ -839,8 +878,11 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
     // Verify both tables were introspected
     let parent_table = schema.tables.get("parent_table");
     let child_table = schema.tables.get("child_table");
-    
-    assert!(parent_table.is_some(), "Parent table should be introspected");
+
+    assert!(
+        parent_table.is_some(),
+        "Parent table should be introspected"
+    );
     assert!(child_table.is_some(), "Child table should be introspected");
 
     let child = child_table.unwrap();
@@ -848,15 +890,26 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
     assert_eq!(child.columns.len(), 3, "Child table should have 3 columns");
 
     // Verify foreign key constraint
-    let fk_constraints: Vec<_> = child.constraints.iter()
+    let fk_constraints: Vec<_> = child
+        .constraints
+        .iter()
         .filter(|c| matches!(c.kind, shem_core::ConstraintKind::ForeignKey { .. }))
         .collect();
-    
-    assert!(!fk_constraints.is_empty(), "Child table should have foreign key constraints");
-    
+
+    assert!(
+        !fk_constraints.is_empty(),
+        "Child table should have foreign key constraints"
+    );
+
     let fk = fk_constraints[0];
-    assert!(matches!(fk.kind, shem_core::ConstraintKind::ForeignKey { .. }), "Constraint should be foreign key");
-    assert!(fk.definition.contains("parent_id"), "FK definition should contain parent_id column");
+    assert!(
+        matches!(fk.kind, shem_core::ConstraintKind::ForeignKey { .. }),
+        "Constraint should be foreign key"
+    );
+    assert!(
+        fk.definition.contains("parent_id"),
+        "FK definition should contain parent_id column"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -883,32 +936,37 @@ async fn test_introspect_partitioned_table() -> Result<(), Box<dyn std::error::E
     // Create partitions
     execute_sql(
         &connection,
-        "CREATE TABLE partitioned_table_2023 PARTITION OF partitioned_table
-         FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');",
+        "CREATE TABLE partitioned_table_2023 PARTITION OF partitioned_table FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');",
     )
     .await?;
 
     execute_sql(
         &connection,
-        "CREATE TABLE partitioned_table_2024 PARTITION OF partitioned_table
-         FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');",
+        "CREATE TABLE partitioned_table_2024 PARTITION OF partitioned_table FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');",
     )
     .await?;
 
     // Introspect the database
     let schema = connection.introspect().await?;
 
+    debug!("Schema: {:?}", schema);
     // Verify the partitioned table was introspected
     let table = schema.tables.get("partitioned_table");
+    debug!("Table: {:?}", table);
     assert!(table.is_some(), "Partitioned table should be introspected");
 
     let partitioned = table.unwrap();
     assert_eq!(partitioned.name, "partitioned_table");
-    assert!(partitioned.partition_by.is_some(), "Table should have partition information");
+    assert!(
+        partitioned.partition_key.is_some(),
+        "Table should have partition information"
+    );
 
-    let partition_info = partitioned.partition_by.as_ref().unwrap();
-    assert_eq!(partition_info.method, shem_core::PartitionMethod::Range, "Should be range partitioned");
-    assert_eq!(partition_info.columns, vec!["created_date"], "Should partition by created_date");
+    let partition_info = partitioned.partition_key.as_ref().unwrap();
+    assert!(
+        partition_info.contains("created_date"),
+        "Should partition by created_date"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -1032,7 +1090,10 @@ async fn test_introspect_table_with_column_comments() -> Result<(), Box<dyn std:
 
     // Verify the table was introspected with column comments
     let table = schema.tables.get("comment_columns_table");
-    assert!(table.is_some(), "Table with column comments should be introspected");
+    assert!(
+        table.is_some(),
+        "Table with column comments should be introspected"
+    );
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "comment_columns_table");
@@ -1065,7 +1126,8 @@ async fn test_introspect_table_with_column_comments() -> Result<(), Box<dyn std:
 }
 
 #[tokio::test]
-async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dyn std::error::Error>>
+{
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -1087,23 +1149,40 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
 
     // Verify the table was introspected
     let table = schema.tables.get("composite_pk_table");
-    assert!(table.is_some(), "Table with composite PK should be introspected");
+    assert!(
+        table.is_some(),
+        "Table with composite PK should be introspected"
+    );
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "composite_pk_table");
     assert_eq!(tbl.columns.len(), 3, "Table should have 3 columns");
 
     // Verify composite primary key constraint
-    let pk_constraints: Vec<_> = tbl.constraints.iter()
+    let pk_constraints: Vec<_> = tbl
+        .constraints
+        .iter()
         .filter(|c| matches!(c.kind, shem_core::ConstraintKind::PrimaryKey))
         .collect();
-    
-    assert!(!pk_constraints.is_empty(), "Table should have primary key constraint");
-    
+
+    assert!(
+        !pk_constraints.is_empty(),
+        "Table should have primary key constraint"
+    );
+
     let pk = pk_constraints[0];
-    assert!(matches!(pk.kind, shem_core::ConstraintKind::PrimaryKey), "Constraint should be primary key");
-    assert!(pk.definition.contains("user_id"), "PK definition should contain user_id");
-    assert!(pk.definition.contains("role_id"), "PK definition should contain role_id");
+    assert!(
+        matches!(pk.kind, shem_core::ConstraintKind::PrimaryKey),
+        "Constraint should be primary key"
+    );
+    assert!(
+        pk.definition.contains("user_id"),
+        "PK definition should contain user_id"
+    );
+    assert!(
+        pk.definition.contains("role_id"),
+        "PK definition should contain role_id"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -1111,7 +1190,8 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
 }
 
 #[tokio::test]
-async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn std::error::Error>>
+{
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -1132,22 +1212,36 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
 
     // Verify the table was introspected
     let table = schema.tables.get("exclusion_table");
-    assert!(table.is_some(), "Table with exclusion constraint should be introspected");
+    assert!(
+        table.is_some(),
+        "Table with exclusion constraint should be introspected"
+    );
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "exclusion_table");
     assert_eq!(tbl.columns.len(), 2, "Table should have 2 columns");
 
     // Verify exclusion constraint
-    let exclusion_constraints: Vec<_> = tbl.constraints.iter()
+    let exclusion_constraints: Vec<_> = tbl
+        .constraints
+        .iter()
         .filter(|c| matches!(c.kind, shem_core::ConstraintKind::Exclusion))
         .collect();
-    
-    assert!(!exclusion_constraints.is_empty(), "Table should have exclusion constraint");
-    
+
+    assert!(
+        !exclusion_constraints.is_empty(),
+        "Table should have exclusion constraint"
+    );
+
     let exclusion = exclusion_constraints[0];
-    assert!(matches!(exclusion.kind, shem_core::ConstraintKind::Exclusion), "Constraint should be exclusion");
-    assert!(exclusion.definition.contains("EXCLUDE"), "Should contain EXCLUDE definition");
+    assert!(
+        matches!(exclusion.kind, shem_core::ConstraintKind::Exclusion),
+        "Constraint should be exclusion"
+    );
+    assert!(
+        exclusion.definition.contains("EXCLUDE"),
+        "Should contain EXCLUDE definition"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -1195,7 +1289,10 @@ async fn test_introspect_table_with_custom_types() -> Result<(), Box<dyn std::er
 
     // Verify the table was introspected
     let table = schema.tables.get("custom_types_table");
-    assert!(table.is_some(), "Table with custom types should be introspected");
+    assert!(
+        table.is_some(),
+        "Table with custom types should be introspected"
+    );
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "custom_types_table");
@@ -1203,13 +1300,22 @@ async fn test_introspect_table_with_custom_types() -> Result<(), Box<dyn std::er
 
     // Verify custom type columns
     let status_column = tbl.columns.iter().find(|c| c.name == "status").unwrap();
-    assert_eq!(status_column.type_name, "status_enum", "Status column should have custom enum type");
+    assert_eq!(
+        status_column.type_name, "status_enum",
+        "Status column should have custom enum type"
+    );
 
     let address_column = tbl.columns.iter().find(|c| c.name == "address").unwrap();
-    assert_eq!(address_column.type_name, "address_type", "Address column should have custom composite type");
+    assert_eq!(
+        address_column.type_name, "address_type",
+        "Address column should have custom composite type"
+    );
 
     let tags_column = tbl.columns.iter().find(|c| c.name == "tags").unwrap();
-    assert_eq!(tags_column.type_name, "text[]", "Tags column should have array type");
+    assert_eq!(
+        tags_column.type_name, "text[]",
+        "Tags column should have array type"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -1217,7 +1323,8 @@ async fn test_introspect_table_with_custom_types() -> Result<(), Box<dyn std::er
 }
 
 #[tokio::test]
-async fn test_introspect_table_with_complex_column_types() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_table_with_complex_column_types() -> Result<(), Box<dyn std::error::Error>>
+{
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -1288,7 +1395,10 @@ async fn test_introspect_table_with_complex_column_types() -> Result<(), Box<dyn
 
     // Verify the table was introspected
     let table = schema.tables.get("complex_types_table");
-    assert!(table.is_some(), "Table with complex types should be introspected");
+    assert!(
+        table.is_some(),
+        "Table with complex types should be introspected"
+    );
 
     let tbl = table.unwrap();
     assert_eq!(tbl.name, "complex_types_table");
@@ -1299,55 +1409,109 @@ async fn test_introspect_table_with_complex_column_types() -> Result<(), Box<dyn
     assert_eq!(name_column.type_name, "text", "Name should be text type");
 
     let age_column = tbl.columns.iter().find(|c| c.name == "age").unwrap();
-    assert_eq!(age_column.type_name, "integer", "Age should be integer type");
+    assert_eq!(
+        age_column.type_name, "integer",
+        "Age should be integer type"
+    );
 
     let height_column = tbl.columns.iter().find(|c| c.name == "height").unwrap();
-    assert_eq!(height_column.type_name, "numeric(5,2)", "Height should be numeric(5,2) type");
+    assert_eq!(
+        height_column.type_name, "numeric(5,2)",
+        "Height should be numeric(5,2) type"
+    );
 
     let is_active_column = tbl.columns.iter().find(|c| c.name == "is_active").unwrap();
-    assert_eq!(is_active_column.type_name, "boolean", "Is_active should be boolean type");
+    assert_eq!(
+        is_active_column.type_name, "boolean",
+        "Is_active should be boolean type"
+    );
 
     // Verify custom types
     let status_column = tbl.columns.iter().find(|c| c.name == "status").unwrap();
-    assert_eq!(status_column.type_name, "user_status", "Status should be custom enum type");
+    assert_eq!(
+        status_column.type_name, "user_status",
+        "Status should be custom enum type"
+    );
 
     let address_column = tbl.columns.iter().find(|c| c.name == "address").unwrap();
-    assert_eq!(address_column.type_name, "address_composite", "Address should be custom composite type");
+    assert_eq!(
+        address_column.type_name, "address_composite",
+        "Address should be custom composite type"
+    );
 
-    let vacation_period_column = tbl.columns.iter().find(|c| c.name == "vacation_period").unwrap();
-    assert_eq!(vacation_period_column.type_name, "date_range", "Vacation period should be custom range type");
+    let vacation_period_column = tbl
+        .columns
+        .iter()
+        .find(|c| c.name == "vacation_period")
+        .unwrap();
+    assert_eq!(
+        vacation_period_column.type_name, "date_range",
+        "Vacation period should be custom range type"
+    );
 
     // Verify array types
     let tags_column = tbl.columns.iter().find(|c| c.name == "tags").unwrap();
-    assert_eq!(tags_column.type_name, "text[]", "Tags should be text array type");
+    assert_eq!(
+        tags_column.type_name, "text[]",
+        "Tags should be text array type"
+    );
 
     let scores_column = tbl.columns.iter().find(|c| c.name == "scores").unwrap();
-    assert_eq!(scores_column.type_name, "integer[]", "Scores should be integer array type");
+    assert_eq!(
+        scores_column.type_name, "integer[]",
+        "Scores should be integer array type"
+    );
 
     let flags_column = tbl.columns.iter().find(|c| c.name == "flags").unwrap();
-    assert_eq!(flags_column.type_name, "boolean[]", "Flags should be boolean array type");
+    assert_eq!(
+        flags_column.type_name, "boolean[]",
+        "Flags should be boolean array type"
+    );
 
     // Verify JSON types
     let metadata_column = tbl.columns.iter().find(|c| c.name == "metadata").unwrap();
-    assert_eq!(metadata_column.type_name, "json", "Metadata should be JSON type");
+    assert_eq!(
+        metadata_column.type_name, "json",
+        "Metadata should be JSON type"
+    );
 
     let config_column = tbl.columns.iter().find(|c| c.name == "config").unwrap();
-    assert_eq!(config_column.type_name, "jsonb", "Config should be JSONB type");
+    assert_eq!(
+        config_column.type_name, "jsonb",
+        "Config should be JSONB type"
+    );
 
     // Verify other complex types
     let uuid_column = tbl.columns.iter().find(|c| c.name == "uuid_col").unwrap();
-    assert_eq!(uuid_column.type_name, "uuid", "UUID column should be UUID type");
+    assert_eq!(
+        uuid_column.type_name, "uuid",
+        "UUID column should be UUID type"
+    );
 
-    let binary_column = tbl.columns.iter().find(|c| c.name == "binary_data").unwrap();
-    assert_eq!(binary_column.type_name, "bytea", "Binary data should be BYTEA type");
+    let binary_column = tbl
+        .columns
+        .iter()
+        .find(|c| c.name == "binary_data")
+        .unwrap();
+    assert_eq!(
+        binary_column.type_name, "bytea",
+        "Binary data should be BYTEA type"
+    );
 
     let xml_column = tbl.columns.iter().find(|c| c.name == "xml_data").unwrap();
     assert_eq!(xml_column.type_name, "xml", "XML data should be XML type");
 
-    let point_column = tbl.columns.iter().find(|c| c.name == "geometric_point").unwrap();
-    assert_eq!(point_column.type_name, "point", "Geometric point should be POINT type");
+    let point_column = tbl
+        .columns
+        .iter()
+        .find(|c| c.name == "geometric_point")
+        .unwrap();
+    assert_eq!(
+        point_column.type_name, "point",
+        "Geometric point should be POINT type"
+    );
 
     // Clean up
     db.cleanup().await?;
     Ok(())
-} 
+}

@@ -427,7 +427,7 @@ async fn get_qualified_name_map<C: GenericClient>(
     table: &str,
     namecol: &str,
     nspcol: &str,
-) -> Result<HashMap<u32, String>, Error> {
+) -> Result<HashMap<u32, String>> {
     let query = format!(
         "SELECT t.oid, n.nspname, t.{} FROM pg_catalog.{} t JOIN pg_catalog.pg_namespace n ON t.{} = n.oid",
         namecol, table, nspcol

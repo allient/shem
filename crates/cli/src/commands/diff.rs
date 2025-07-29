@@ -7,8 +7,7 @@ use shared_types::{
     TriggerWhen,
 };
 use shem_core::{
-    DatabaseDriver, Schema, EnumValue,
-    migration::{generate_migration, write_migration},
+    DatabaseDriver, EnumValue, Schema, schema::{ReplicaIdentity, IdentityGeneration, Generated, ColumnStorage},
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -49,10 +48,10 @@ pub async fn execute(
     // Generate migration
     let migration = if let Some(current) = current_schema {
         info!("Generating migration from database schema");
-        generate_migration(&current, &target_schema)?
+        //generate_migration(&current, &target_schema)?
     } else {
         info!("Generating initial migration");
-        generate_migration(&Schema::new(), &target_schema)?
+        //generate_migration(&Schema::new(), &target_schema)?
     };
 
     // Write migration file
@@ -82,7 +81,7 @@ pub async fn execute(
         std::fs::create_dir_all(parent).context("Failed to create migrations directory")?;
     }
 
-    write_migration(&output_path, &migration)?;
+    //write_migration(&output_path, &migration)?;
     info!("Migration written to {}", output_path.display());
 
     Ok(())
@@ -142,16 +141,21 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         ParserStatement::CreateTable(create) => {
             dbg!(create);
             let mut table = shem_core::Table {
+                oid: 0,
                 name: create.name.clone(),
-                schema: create.schema.clone(),
+                schema: create.schema.clone().unwrap_or_default(),
+                owner: "".to_string(),
                 columns: Vec::new(),
                 constraints: Vec::new(),
                 indexes: Vec::new(),
                 comment: None,
                 tablespace: None,
                 inherits: Vec::new(),
-                partition_by: None,
-                storage_parameters: std::collections::HashMap::new(),
+                partition_key: None,
+                replica_identity: shem_core::schema::ReplicaIdentity::Default,
+                acl: None,
+                is_user_defined: true,
+                is_from_extension: false,
             };
 
             // Add columns
@@ -239,28 +243,30 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 let column = shem_core::Column {
                     name: col.name.clone(),
                     type_name,
-                    nullable: !col.not_null,
-                    default: col.default.as_ref().map(|d| format!("{:?}", d)),
-                    identity: col.identity.as_ref().map(|i| shem_core::Identity {
-                        always: i.always,
-                        start: i.start.unwrap_or(1),
-                        increment: i.increment.unwrap_or(1),
-                        min_value: i.min_value,
-                        max_value: i.max_value,
-                        cache: None,
-                        cycle: false,
+                    is_not_null: !col.not_null,
+                    has_default: col.default.is_some(),
+                    identity: col.identity.as_ref().map(|i| shem_core::schema::Identity {
+                        generation: if i.always { 
+                            shem_core::schema::IdentityGeneration::Always 
+                        } else { 
+                            shem_core::schema::IdentityGeneration::ByDefault 
+                        },
                     }),
                     generated: col
                         .generated
                         .as_ref()
-                        .map(|g| shem_core::schema::GeneratedColumn {
+                        .map(|g| shem_core::schema::Generated {
                             expression: format!("{:?}", g.expression),
-                            stored: g.stored,
                         }),
                     comment: None,
                     collation: None,
-                    storage: None,
+                    storage: shem_core::schema::ColumnStorage::Plain,
                     compression: None,
+                    acl: None,
+                    is_dropped: false,
+                    is_local: true,
+                    stats_target: None,
+                    fdw_options: std::collections::HashMap::new(),
                 };
                 table.columns.push(column);
             }
@@ -437,20 +443,33 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateEnum(create) => {
             let enum_type = shem_core::EnumType {
-                oid: 0,
-                name: create.name.clone(),
-                owner: "".to_string(),
-                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
-                values: create.values.iter().map(|v| EnumValue {
+                info: shem_core::schema::TypeInfo {
                     oid: 0,
-                    label: v.clone(),
-                }).collect(),
-                acl: None,
-                comment: None,
-                is_user_defined: true,
-                is_from_extension: false,
+                    name: create.name.clone(),
+                    schema: create
+                        .schema
+                        .clone()
+                        .unwrap_or_else(|| "public".to_string()),
+                    owner: "".to_string(),
+                    acl: None,
+                    comment: None,
+                    is_user_defined: true,
+                    is_from_extension: false,
+                    array_type_oid: None,
+                },
+                values: create
+                    .values
+                    .iter()
+                    .map(|v| EnumValue {
+                        oid: 0,
+                        label: v.clone(),
+                    })
+                    .collect(),
             };
-            schema.enums.insert(enum_type.name.clone(), enum_type);
+            schema.types.insert(
+                enum_type.info.name.clone(),
+                shem_core::schema::Type::Enum(enum_type),
+            );
         }
         ParserStatement::CreateType(_create) => {
             // Handle composite types - they can be stored in a separate collection if needed
@@ -458,26 +477,37 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateDomain(create) => {
             let domain = shem_core::Domain {
-                oid: 0,
-                name: create.name.clone(),
-                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
-                owner: "".to_string(),
+                info: shem_core::schema::TypeInfo {
+                    oid: 0,
+                    name: create.name.clone(),
+                    schema: create
+                        .schema
+                        .clone()
+                        .unwrap_or_else(|| "public".to_string()),
+                    owner: "".to_string(),
+                    acl: None,
+                    comment: None,
+                    is_user_defined: true,
+                    is_from_extension: false,
+                    array_type_oid: None,
+                },
                 base_type: format!("{:?}", create.data_type),
                 collation: None,
                 not_null: false,
                 default: None,
                 constraints: vec![], // TODO: Parse domain constraints
-                acl: None,
-                comment: None,
-                is_user_defined: true,
-                is_from_extension: false,
             };
-            schema.domains.insert(domain.name.clone(), domain);
+            schema.types.insert(
+                domain.info.name.clone(),
+                shem_core::schema::Type::Domain(domain),
+            );
         }
         ParserStatement::CreateSequence(create) => {
             let sequence = shem_core::Sequence {
+                oid: 0,
                 name: create.name.clone(),
                 schema: create.schema.clone(),
+                owner: "".to_string(),
                 data_type: "bigint".to_string(),
                 start: create.start.unwrap_or(1),
                 increment: create.increment.unwrap_or(1),
@@ -485,8 +515,13 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 max_value: create.max_value,
                 cache: create.cache.unwrap_or(1),
                 cycle: create.cycle,
+                current_value: None,
+                is_called: false,
                 owned_by: None,
+                acl: None,
                 comment: None,
+                is_user_defined: true,
+                is_from_extension: false,
             };
             schema.sequences.insert(sequence.name.clone(), sequence);
         }

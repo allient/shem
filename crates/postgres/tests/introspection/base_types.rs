@@ -1,6 +1,6 @@
 use tracing::debug;
 use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use shem_core::{DatabaseConnection, schema::{Type, CompositeType}};
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -11,13 +11,24 @@ async fn execute_sql(
     Ok(())
 }
 
+/// Helper function to get a composite type from the unified types map
+fn get_composite_type<'a>(schema: &'a shem_core::Schema, name: &str) -> Option<&'a CompositeType> {
+    schema.types.get(name).and_then(|t| {
+        if let Type::Composite(ct) = t {
+            Some(ct)
+        } else {
+            None
+        }
+    })
+}
+
 #[tokio::test]
 async fn test_introspect_basic_base_type() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Create a basic base type
+    // Create a basic composite type
     execute_sql(
         &connection,
         "CREATE TYPE test_basic_type AS (value INTEGER, description TEXT);",
@@ -28,7 +39,7 @@ async fn test_introspect_basic_base_type() -> Result<(), Box<dyn std::error::Err
     let schema = connection.introspect().await?;
     
     // Verify the composite type was introspected
-    let composite_type = schema.composite_types.get("test_basic_type");
+    let composite_type = get_composite_type(&schema, "test_basic_type");
     debug!("Composite type: {:?}", composite_type);
     assert!(
         composite_type.is_some(),
@@ -36,8 +47,8 @@ async fn test_introspect_basic_base_type() -> Result<(), Box<dyn std::error::Err
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_basic_type");
-    assert_eq!(ct.schema, Some("public".to_string()), "Composite type should be in public schema");
+    assert_eq!(ct.info.name, "test_basic_type");
+    assert_eq!(ct.info.schema, "public", "Composite type should be in public schema");
     assert!(!ct.attributes.is_empty(), "Composite type should have attributes");
     assert_eq!(ct.attributes.len(), 2, "Composite type should have 2 attributes");
     assert_eq!(ct.attributes[0].name, "value");
@@ -54,7 +65,7 @@ async fn test_introspect_base_type_with_schema() -> Result<(), Box<dyn std::erro
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Create schema and base type in that schema
+    // Create schema and composite type in that schema
     execute_sql(&connection, "CREATE SCHEMA test_base_types;").await?;
     execute_sql(
         &connection,
@@ -66,17 +77,17 @@ async fn test_introspect_base_type_with_schema() -> Result<(), Box<dyn std::erro
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected with correct schema
-    let composite_type = schema.composite_types.get("schema_type");
+    let composite_type = get_composite_type(&schema, "schema_type");
     assert!(
         composite_type.is_some(),
         "Composite type 'schema_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "schema_type");
+    assert_eq!(ct.info.name, "schema_type");
     assert_eq!(
-        ct.schema,
-        Some("test_base_types".to_string()),
+        ct.info.schema,
+        "test_base_types",
         "Composite type should be in the specified schema"
     );
 
@@ -91,7 +102,7 @@ async fn test_introspect_base_type_with_comment() -> Result<(), Box<dyn std::err
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Create base type and add comment
+    // Create composite type and add comment
     execute_sql(
         &connection,
         "CREATE TYPE test_comment_type AS (value INTEGER, description TEXT);",
@@ -99,7 +110,7 @@ async fn test_introspect_base_type_with_comment() -> Result<(), Box<dyn std::err
     .await?;
     execute_sql(
         &connection,
-        "COMMENT ON TYPE test_comment_type IS 'Test base type with comment';",
+        "COMMENT ON TYPE test_comment_type IS 'Test composite type with comment';",
     )
     .await?;
 
@@ -107,17 +118,17 @@ async fn test_introspect_base_type_with_comment() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected with comment
-    let composite_type = schema.composite_types.get("test_comment_type");
+    let composite_type = get_composite_type(&schema, "test_comment_type");
     assert!(
         composite_type.is_some(),
         "Composite type 'test_comment_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_comment_type");
+    assert_eq!(ct.info.name, "test_comment_type");
     assert_eq!(
-        ct.comment,
-        Some("Test base type with comment".to_string()),
+        ct.info.comment,
+        Some("Test composite type with comment".to_string()),
         "Composite type should have the specified comment"
     );
 
@@ -132,7 +143,7 @@ async fn test_introspect_multiple_base_types() -> Result<(), Box<dyn std::error:
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Create multiple base types
+    // Create multiple composite types
     execute_sql(
         &connection,
         "CREATE TYPE test_type1 AS (id INTEGER, name TEXT);",
@@ -149,22 +160,22 @@ async fn test_introspect_multiple_base_types() -> Result<(), Box<dyn std::error:
 
     // Verify both composite types were introspected
     assert!(
-        schema.composite_types.contains_key("test_type1"),
+        get_composite_type(&schema, "test_type1").is_some(),
         "Composite type 'test_type1' should be introspected"
     );
     assert!(
-        schema.composite_types.contains_key("test_type2"),
+        get_composite_type(&schema, "test_type2").is_some(),
         "Composite type 'test_type2' should be introspected"
     );
 
     // Verify composite type details
-    let type1 = schema.composite_types.get("test_type1").unwrap();
-    let type2 = schema.composite_types.get("test_type2").unwrap();
+    let type1 = get_composite_type(&schema, "test_type1").unwrap();
+    let type2 = get_composite_type(&schema, "test_type2").unwrap();
 
-    assert_eq!(type1.name, "test_type1");
-    assert_eq!(type2.name, "test_type2");
-    assert_eq!(type1.schema, Some("public".to_string()));
-    assert_eq!(type2.schema, Some("public".to_string()));
+    assert_eq!(type1.info.name, "test_type1");
+    assert_eq!(type2.info.name, "test_type2");
+    assert_eq!(type1.info.schema, "public");
+    assert_eq!(type2.info.schema, "public");
 
     // Clean up
     db.cleanup().await?;
@@ -188,14 +199,14 @@ async fn test_introspect_base_type_categories() -> Result<(), Box<dyn std::error
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected
-    let composite_type = schema.composite_types.get("test_composite");
+    let composite_type = get_composite_type(&schema, "test_composite");
     assert!(
         composite_type.is_some(),
         "Composite type 'test_composite' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_composite");
+    assert_eq!(ct.info.name, "test_composite");
     assert_eq!(ct.attributes.len(), 2, "Composite type should have 2 attributes");
 
     // Clean up
@@ -220,23 +231,19 @@ async fn test_introspect_base_type_alignment_storage() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected
-    let composite_type = schema.composite_types.get("test_alignment_type");
+    let composite_type = get_composite_type(&schema, "test_alignment_type");
     assert!(
         composite_type.is_some(),
         "Composite type 'test_alignment_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_alignment_type");
+    assert_eq!(ct.info.name, "test_alignment_type");
     
     // Verify the composite type has the expected attributes
     assert_eq!(ct.attributes.len(), 2, "Composite type should have 2 attributes");
     assert_eq!(ct.attributes[0].name, "small_field");
     assert_eq!(ct.attributes[1].name, "large_field");
-    
-    // Verify storage types are set for attributes
-    assert!(ct.attributes[0].storage.is_some(), "Attribute should have storage type");
-    assert!(ct.attributes[1].storage.is_some(), "Attribute should have storage type");
 
     // Clean up
     db.cleanup().await?;
@@ -269,19 +276,19 @@ async fn test_introspect_base_type_with_element() -> Result<(), Box<dyn std::err
 
     // Verify both composite types were introspected
     assert!(
-        schema.composite_types.contains_key("test_element_base"),
+        get_composite_type(&schema, "test_element_base").is_some(),
         "Composite type 'test_element_base' should be introspected"
     );
     assert!(
-        schema.composite_types.contains_key("test_element_ref"),
+        get_composite_type(&schema, "test_element_ref").is_some(),
         "Composite type 'test_element_ref' should be introspected"
     );
 
-    let base_type = schema.composite_types.get("test_element_base").unwrap();
-    let ref_type = schema.composite_types.get("test_element_ref").unwrap();
+    let base_type = get_composite_type(&schema, "test_element_base").unwrap();
+    let ref_type = get_composite_type(&schema, "test_element_ref").unwrap();
 
-    assert_eq!(base_type.name, "test_element_base");
-    assert_eq!(ref_type.name, "test_element_ref");
+    assert_eq!(base_type.info.name, "test_element_base");
+    assert_eq!(ref_type.info.name, "test_element_ref");
 
     // Clean up
     db.cleanup().await?;
@@ -294,12 +301,21 @@ async fn test_introspect_no_base_types() -> Result<(), Box<dyn std::error::Error
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
-    // Introspect the database without any user base types
+    // Introspect the database without any user composite types
     let schema = connection.introspect().await?;
 
     // Verify no user composite types are present
     // Note: System composite types should be filtered out
-    let user_composite_types: Vec<&String> = schema.composite_types.keys().collect();
+    let user_composite_types: Vec<&String> = schema.types
+        .iter()
+        .filter_map(|(name, t)| {
+            if let Type::Composite(_) = t {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(
         user_composite_types.is_empty(),
         "No user composite types should be introspected: {:?}",
@@ -325,7 +341,7 @@ async fn test_introspect_base_type_edge_cases() -> Result<(), Box<dyn std::error
     .await?;
 
     let schema = connection.introspect().await?;
-    let composite_type = schema.composite_types.get(&long_name);
+    let composite_type = get_composite_type(&schema, &long_name);
     assert!(
         composite_type.is_some(),
         "Composite type with long name should be introspected"
@@ -339,7 +355,7 @@ async fn test_introspect_base_type_edge_cases() -> Result<(), Box<dyn std::error
     .await?;
 
     let schema2 = connection.introspect().await?;
-    let composite_type2 = schema2.composite_types.get("test-type-with-dashes");
+    let composite_type2 = get_composite_type(&schema2, "test-type-with-dashes");
     assert!(
         composite_type2.is_some(),
         "Composite type with special characters should be introspected"
@@ -373,7 +389,7 @@ async fn test_introspect_base_type_performance() -> Result<(), Box<dyn std::erro
     // Verify all composite types were introspected
     for i in 1..=10 {
         assert!(
-            schema.composite_types.contains_key(&format!("test_perf_type_{}", i)),
+            get_composite_type(&schema, &format!("test_perf_type_{}", i)).is_some(),
             "Composite type test_perf_type_{} should be introspected",
             i
         );
@@ -407,14 +423,14 @@ async fn test_introspect_base_type_consistency() -> Result<(), Box<dyn std::erro
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let ct1 = schema1.composite_types.get("test_consistency_type").unwrap();
-    let ct2 = schema2.composite_types.get("test_consistency_type").unwrap();
+    let ct1 = get_composite_type(&schema1, "test_consistency_type").unwrap();
+    let ct2 = get_composite_type(&schema2, "test_consistency_type").unwrap();
 
     // Verify consistency across multiple introspections
-    assert_eq!(ct1.name, ct2.name);
-    assert_eq!(ct1.schema, ct2.schema);
+    assert_eq!(ct1.info.name, ct2.info.name);
+    assert_eq!(ct1.info.schema, ct2.info.schema);
     assert_eq!(ct1.attributes.len(), ct2.attributes.len());
-    assert_eq!(ct1.comment, ct2.comment);
+    assert_eq!(ct1.info.comment, ct2.info.comment);
 
     // Clean up
     db.cleanup().await?;
@@ -449,15 +465,15 @@ async fn test_introspect_base_type_complex_structure() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the complex composite type was introspected
-    let composite_type = schema.composite_types.get("test_complex_type");
+    let composite_type = get_composite_type(&schema, "test_complex_type");
     assert!(
         composite_type.is_some(),
         "Complex composite type 'test_complex_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_complex_type");
-    assert_eq!(ct.schema, Some("public".to_string()));
+    assert_eq!(ct.info.name, "test_complex_type");
+    assert_eq!(ct.info.schema, "public");
     assert_eq!(ct.attributes.len(), 8, "Composite type should have 8 attributes");
 
     // Clean up
@@ -482,14 +498,14 @@ async fn test_introspect_base_type_with_default() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected
-    let composite_type = schema.composite_types.get("test_default_type");
+    let composite_type = get_composite_type(&schema, "test_default_type");
     assert!(
         composite_type.is_some(),
         "Composite type 'test_default_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_default_type");
+    assert_eq!(ct.info.name, "test_default_type");
     assert_eq!(ct.attributes.len(), 2, "Composite type should have 2 attributes");
 
     // Clean up
@@ -514,14 +530,14 @@ async fn test_introspect_base_type_delimiter() -> Result<(), Box<dyn std::error:
     let schema = connection.introspect().await?;
 
     // Verify the composite type was introspected
-    let composite_type = schema.composite_types.get("test_delimiter_type");
+    let composite_type = get_composite_type(&schema, "test_delimiter_type");
     assert!(
         composite_type.is_some(),
         "Composite type 'test_delimiter_type' should be introspected"
     );
 
     let ct = composite_type.unwrap();
-    assert_eq!(ct.name, "test_delimiter_type");
+    assert_eq!(ct.info.name, "test_delimiter_type");
     assert_eq!(ct.attributes.len(), 2, "Composite type should have 2 attributes");
     assert_eq!(ct.attributes[0].name, "field1");
     assert_eq!(ct.attributes[1].name, "field2");

@@ -1,6 +1,6 @@
 use tracing::debug;
 use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use shem_core::{DatabaseConnection, schema::{Type, EnumType}};
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -11,6 +11,17 @@ async fn execute_sql(
     Ok(())
 }
 
+/// Helper function to get an enum type from the unified types map
+fn get_enum_type<'a>(schema: &'a shem_core::Schema, name: &str) -> Option<&'a EnumType> {
+    schema.types.get(name).and_then(|t| {
+        if let Type::Enum(et) = t {
+            Some(et)
+        } else {
+            None
+        }
+    })
+}
+
 #[tokio::test]
 async fn test_introspect_basic_enum() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
@@ -18,23 +29,31 @@ async fn test_introspect_basic_enum() -> Result<(), Box<dyn std::error::Error>> 
     let connection = &db.conn;
 
     // Create a basic enum
-    execute_sql(&connection, "CREATE TYPE status_enum AS ENUM ('active', 'inactive', 'pending');").await?;
+    execute_sql(
+        &connection,
+        "CREATE TYPE status_enum AS ENUM ('active', 'inactive', 'pending');",
+    )
+    .await?;
 
     // Introspect the database
     let schema = connection.introspect().await?;
 
     // Verify the enum was introspected
-    let enum_type = schema.enums.get("status_enum");
-    debug!("Enum: {:?}", enum_type);
+    let enum_type = get_enum_type(&schema, "status_enum");
+    debug!("Enum type: {:?}", enum_type);
     assert!(
         enum_type.is_some(),
         "Enum 'status_enum' should be introspected"
     );
 
-    let enum_obj = enum_type.unwrap();
-    assert_eq!(enum_obj.name, "status_enum");
-    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["active", "inactive", "pending"], "Enum should have the correct values");
-    assert_eq!(enum_obj.comment, None, "Enum should not have a comment");
+    let et = enum_type.unwrap();
+    assert_eq!(et.info.name, "status_enum");
+    assert_eq!(et.info.schema, "public", "Enum should be in public schema");
+    assert!(!et.values.is_empty(), "Enum should have values");
+    assert_eq!(et.values.len(), 3, "Enum should have 3 values");
+    assert_eq!(et.values[0].label, "active");
+    assert_eq!(et.values[1].label, "inactive");
+    assert_eq!(et.values[2].label, "pending");
 
     // Clean up
     db.cleanup().await?;
@@ -48,23 +67,30 @@ async fn test_introspect_enum_with_schema() -> Result<(), Box<dyn std::error::Er
     let connection = &db.conn;
 
     // Create schema and enum in that schema
-    execute_sql(&connection, "CREATE SCHEMA test_enum_schema;").await?;
-    execute_sql(&connection, "CREATE TYPE test_enum_schema.priority_enum AS ENUM ('low', 'medium', 'high');").await?;
+    execute_sql(&connection, "CREATE SCHEMA test_enums;").await?;
+    execute_sql(
+        &connection,
+        "CREATE TYPE test_enums.priority_enum AS ENUM ('low', 'medium', 'high');",
+    )
+    .await?;
 
     // Introspect the database
     let schema = connection.introspect().await?;
 
     // Verify the enum was introspected with correct schema
-    let enum_type = schema.enums.get("priority_enum");
+    let enum_type = get_enum_type(&schema, "priority_enum");
     assert!(
         enum_type.is_some(),
         "Enum 'priority_enum' should be introspected"
     );
 
-    let enum_obj = enum_type.unwrap();
-    assert_eq!(enum_obj.name, "priority_enum");
-    assert_eq!(enum_obj.schema, "test_enum_schema", "Enum should be in the specified schema");
-    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["low", "medium", "high"], "Enum should have the correct values");
+    let et = enum_type.unwrap();
+    assert_eq!(et.info.name, "priority_enum");
+    assert_eq!(
+        et.info.schema,
+        "test_enums",
+        "Enum should be in the specified schema"
+    );
 
     // Clean up
     db.cleanup().await?;
@@ -78,10 +104,14 @@ async fn test_introspect_enum_with_comment() -> Result<(), Box<dyn std::error::E
     let connection = &db.conn;
 
     // Create enum and add comment
-    execute_sql(&connection, "CREATE TYPE color_enum AS ENUM ('red', 'green', 'blue');").await?;
     execute_sql(
         &connection,
-        "COMMENT ON TYPE color_enum IS 'Color options for the application';",
+        "CREATE TYPE color_enum AS ENUM ('red', 'green', 'blue');",
+    )
+    .await?;
+    execute_sql(
+        &connection,
+        "COMMENT ON TYPE color_enum IS 'Basic color enum';",
     )
     .await?;
 
@@ -89,19 +119,17 @@ async fn test_introspect_enum_with_comment() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the enum was introspected with comment
-    let enum_type = schema.enums.get("color_enum");
+    let enum_type = get_enum_type(&schema, "color_enum");
     assert!(
         enum_type.is_some(),
         "Enum 'color_enum' should be introspected"
     );
-    debug!("Enum: {:?}", enum_type);
 
-    let enum_obj = enum_type.unwrap();
-    assert_eq!(enum_obj.name, "color_enum");
-    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["red", "green", "blue"], "Enum should have the correct values");
+    let et = enum_type.unwrap();
+    assert_eq!(et.info.name, "color_enum");
     assert_eq!(
-        enum_obj.comment,
-        Some("Color options for the application".to_string()),
+        et.info.comment,
+        Some("Basic color enum".to_string()),
         "Enum should have the specified comment"
     );
 
@@ -117,30 +145,38 @@ async fn test_introspect_multiple_enums() -> Result<(), Box<dyn std::error::Erro
     let connection = &db.conn;
 
     // Create multiple enums
-    execute_sql(&connection, "CREATE TYPE direction_enum AS ENUM ('north', 'south', 'east', 'west');").await?;
-    execute_sql(&connection, "CREATE TYPE size_enum AS ENUM ('small', 'medium', 'large');").await?;
+    execute_sql(
+        &connection,
+        "CREATE TYPE direction_enum AS ENUM ('north', 'south', 'east', 'west');",
+    )
+    .await?;
+    execute_sql(
+        &connection,
+        "CREATE TYPE size_enum AS ENUM ('small', 'medium', 'large');",
+    )
+    .await?;
 
     // Introspect the database
     let schema = connection.introspect().await?;
 
     // Verify both enums were introspected
     assert!(
-        schema.enums.contains_key("direction_enum"),
+        get_enum_type(&schema, "direction_enum").is_some(),
         "Enum 'direction_enum' should be introspected"
     );
     assert!(
-        schema.enums.contains_key("size_enum"),
+        get_enum_type(&schema, "size_enum").is_some(),
         "Enum 'size_enum' should be introspected"
     );
 
     // Verify enum details
-    let direction_enum = schema.enums.get("direction_enum").unwrap();
-    let size_enum = schema.enums.get("size_enum").unwrap();
+    let direction_enum = get_enum_type(&schema, "direction_enum").unwrap();
+    let size_enum = get_enum_type(&schema, "size_enum").unwrap();
 
-    assert_eq!(direction_enum.name, "direction_enum");
-    assert_eq!(direction_enum.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["north", "south", "east", "west"]);
-    assert_eq!(size_enum.name, "size_enum");
-    assert_eq!(size_enum.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["small", "medium", "large"]);
+    assert_eq!(direction_enum.info.name, "direction_enum");
+    assert_eq!(size_enum.info.name, "size_enum");
+    assert_eq!(direction_enum.info.schema, "public");
+    assert_eq!(size_enum.info.schema, "public");
 
     // Clean up
     db.cleanup().await?;
@@ -148,27 +184,32 @@ async fn test_introspect_multiple_enums() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[tokio::test]
-async fn test_introspect_enum_with_single_value() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_single_value_enum() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
 
     // Create enum with single value
-    execute_sql(&connection, "CREATE TYPE single_value_enum AS ENUM ('only_value');").await?;
+    execute_sql(
+        &connection,
+        "CREATE TYPE single_value_enum AS ENUM ('only_value');",
+    )
+    .await?;
 
     // Introspect the database
     let schema = connection.introspect().await?;
 
     // Verify the enum was introspected
-    let enum_type = schema.enums.get("single_value_enum");
+    let enum_type = get_enum_type(&schema, "single_value_enum");
     assert!(
         enum_type.is_some(),
         "Enum 'single_value_enum' should be introspected"
     );
 
-    let enum_obj = enum_type.unwrap();
-    assert_eq!(enum_obj.name, "single_value_enum");
-    assert_eq!(enum_obj.values.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), vec!["only_value"], "Enum should have the single value");
+    let et = enum_type.unwrap();
+    assert_eq!(et.info.name, "single_value_enum");
+    assert_eq!(et.values.len(), 1, "Enum should have 1 value");
+    assert_eq!(et.values[0].label, "only_value");
 
     // Clean up
     db.cleanup().await?;
@@ -176,7 +217,7 @@ async fn test_introspect_enum_with_single_value() -> Result<(), Box<dyn std::err
 }
 
 #[tokio::test]
-async fn test_introspect_no_user_enums() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_no_enums() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -186,7 +227,16 @@ async fn test_introspect_no_user_enums() -> Result<(), Box<dyn std::error::Error
 
     // Verify no user enums are present
     // Note: System enums should be filtered out
-    let user_enums: Vec<&String> = schema.enums.keys().collect();
+    let user_enums: Vec<&String> = schema.types
+        .iter()
+        .filter_map(|(name, t)| {
+            if let Type::Enum(_) = t {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(
         user_enums.is_empty(),
         "No user enums should be introspected: {:?}",

@@ -1472,6 +1472,7 @@ dependencies = [
  "chrono",
  "env_logger",
  "log",
+ "parser",
  "serde",
  "serde_json",
  "shem-core",

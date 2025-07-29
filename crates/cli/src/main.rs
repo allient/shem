@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
             database_url,
             dry_run,
         } => {
-            migrate::execute(
+            migration::execute(
                 migrations,
                 database_url.or_else(|| config.database_url.clone()),
                 dry_run,

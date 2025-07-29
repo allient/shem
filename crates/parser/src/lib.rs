@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 pub mod ast;
 mod visitor;
@@ -46,4 +46,20 @@ pub fn parse_schema(sql: &str) -> Result<SchemaDefinition> {
     }
 
     Ok(schema)
+}
+
+// Helper function to parse PostgreSQL's key=value array format for FDW options
+pub fn pg_options_to_map(options: Option<Vec<String>>) -> HashMap<String, String> {
+    options.map_or_else(HashMap::new, |opts| {
+        opts.into_iter()
+            .filter_map(|opt| {
+                opt.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect()
+    })
+}
+
+pub fn quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
 }

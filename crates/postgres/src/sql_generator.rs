@@ -18,12 +18,13 @@ use shem_core::{
     Role, Rule, Sequence, Server, Subscription, Table, Tablespace, Trigger, View,
     schema::{
         ArrayType, BaseType, CheckOption, CollationProvider, CompositeType, EventTriggerEvent,
-        MultirangeType, ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder,
-        TriggerEvent, TriggerLevel, TriggerTiming,
+        IdentityGeneration, ParameterMode, PolicyCommand, RangeType, RuleEvent, SortOrder,
+        TriggerEvent, TriggerLevel, TriggerTiming, Type,
     },
     traits::SqlGenerator,
 };
 use shem_core::{EnumType, Result};
+use crate::quote_ident;
 
 /// PostgreSQL SQL generator
 #[derive(Debug, Clone)]
@@ -151,23 +152,169 @@ impl PostgresSqlGenerator {
     }
 
     fn generate_create_base_type(&self, base_type: &BaseType) -> Result<String> {
-        // ... logic to build CREATE TYPE for BaseType ...
-        unimplemented!()
+        let type_name = Self::force_quote_identifier(&base_type.info.name);
+        let mut sql = format!("CREATE TYPE {} (", type_name);
+        
+        // Add input and output functions (required)
+        sql.push_str(&format!("INPUT = {}, OUTPUT = {}", base_type.input_fn, base_type.output_fn));
+        
+        // Add internal length
+        sql.push_str(&format!(", INTERNALLENGTH = {}", base_type.internal_length));
+        
+        // Add passed by value
+        sql.push_str(&format!(", PASSEDBYVALUE = {}", base_type.is_passed_by_value));
+        
+        // Add alignment
+        sql.push_str(&format!(", ALIGNMENT = {}", base_type.alignment));
+        
+        // Add storage
+        sql.push_str(&format!(", STORAGE = {}", base_type.storage));
+        
+        // Add category
+        sql.push_str(&format!(", CATEGORY = '{}'", base_type.category));
+        
+        // Add preferred flag
+        if base_type.is_preferred {
+            sql.push_str(", PREFERRED = true");
+        }
+        
+        // Add default value if specified
+        if let Some(default) = &base_type.default_value {
+            sql.push_str(&format!(", DEFAULT = {}", default));
+        }
+        
+        // Add element type if it's an array type
+        if let Some(element_oid) = base_type.element_type_oid {
+            if element_oid > 0 {
+                sql.push_str(&format!(", ELEMENT = {}", element_oid));
+            }
+        }
+        
+        // Add delimiter
+        sql.push_str(&format!(", DELIMITER = '{}'", base_type.delimiter));
+        
+        // Add collatable flag
+        sql.push_str(&format!(", COLLATABLE = {}", base_type.is_collatable));
+        
+        // Add receive function if specified
+        if let Some(receive_fn) = &base_type.receive_fn {
+            sql.push_str(&format!(", RECEIVE = {}", receive_fn));
+        }
+        
+        // Add send function if specified
+        if let Some(send_fn) = &base_type.send_fn {
+            sql.push_str(&format!(", SEND = {}", send_fn));
+        }
+        
+        // Add typmod in function if specified
+        if let Some(typmod_in_fn) = &base_type.typmod_in_fn {
+            sql.push_str(&format!(", TYPMOD_IN = {}", typmod_in_fn));
+        }
+        
+        // Add typmod out function if specified
+        if let Some(typmod_out_fn) = &base_type.typmod_out_fn {
+            sql.push_str(&format!(", TYPMOD_OUT = {}", typmod_out_fn));
+        }
+        
+        // Add analyze function if specified
+        if let Some(analyze_fn) = &base_type.analyze_fn {
+            sql.push_str(&format!(", ANALYZE = {}", analyze_fn));
+        }
+        
+        sql.push_str(");");
+        Ok(sql)
     }
 
     fn generate_create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
-        // ... logic to build CREATE TYPE AS (...) for CompositeType ...
-        unimplemented!()
+        let type_name = Self::force_quote_identifier(&composite_type.info.name);
+        let mut attributes = Vec::new();
+        
+        for attr in &composite_type.attributes {
+            let attr_name = Self::force_quote_identifier(&attr.name);
+            let mut attr_def = format!("{} {}", attr_name, attr.type_name);
+            
+            // Add collation if specified
+            if let Some(collation) = &attr.collation {
+                attr_def.push_str(&format!(" COLLATE {}", collation));
+            }
+            
+            attributes.push(attr_def);
+        }
+        
+        Ok(format!(
+            "CREATE TYPE {} AS ({});",
+            type_name,
+            attributes.join(", ")
+        ))
     }
 
     fn generate_create_domain(&self, domain: &Domain) -> Result<String> {
-        // ... logic to build CREATE DOMAIN for Domain ...
-        unimplemented!()
+        let domain_name = Self::force_quote_identifier(&domain.info.name);
+        let mut sql = format!("CREATE DOMAIN {} AS {}", domain_name, domain.base_type);
+        
+        // Add collation if specified
+        if let Some(collation) = &domain.collation {
+            sql.push_str(&format!(" COLLATE {}", collation));
+        }
+        
+        // Add NOT NULL if specified
+        if domain.not_null {
+            sql.push_str(" NOT NULL");
+        }
+        
+        // Add default value if specified
+        if let Some(default) = &domain.default {
+            sql.push_str(&format!(" DEFAULT {}", default));
+        }
+        
+        // Add constraints
+        for constraint in &domain.constraints {
+            sql.push_str(&format!(" {}", constraint.definition));
+        }
+        
+        sql.push_str(";");
+        Ok(sql)
     }
 
     fn generate_create_enum_type(&self, enum_type: &EnumType) -> Result<String> {
-        // ... logic to build CREATE TYPE AS ENUM for EnumType ...
-        unimplemented!()
+        let type_name = Self::force_quote_identifier(&enum_type.info.name);
+        let values: Vec<String> = enum_type.values.iter()
+            .map(|v| format!("'{}'", v.label))
+            .collect();
+        
+        Ok(format!(
+            "CREATE TYPE {} AS ENUM ({});",
+            type_name,
+            values.join(", ")
+        ))
+    }
+
+    fn generate_create_range_type(&self, range_type: &RangeType) -> Result<String> {
+        let type_name = Self::force_quote_identifier(&range_type.info.name);
+        let mut sql = format!("CREATE TYPE {} AS RANGE (SUBTYPE = {})", type_name, range_type.subtype);
+        
+        // Add subtype operator class if specified
+        if !range_type.subtype_opclass.is_empty() {
+            sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", range_type.subtype_opclass));
+        }
+        
+        // Add collation if specified
+        if let Some(collation) = &range_type.collation {
+            sql.push_str(&format!(", COLLATION = {}", collation));
+        }
+        
+        // Add canonical function if specified
+        if let Some(canonical_fn) = &range_type.canonical_fn {
+            sql.push_str(&format!(", CANONICAL = {}", canonical_fn));
+        }
+        
+        // Add subtype diff function if specified
+        if let Some(subtype_diff_fn) = &range_type.subtype_diff_fn {
+            sql.push_str(&format!(", SUBTYPE_DIFF = {}", subtype_diff_fn));
+        }
+        
+        sql.push_str(";");
+        Ok(sql)
     }
 }
 
@@ -179,9 +326,10 @@ impl SqlGenerator for PostgresSqlGenerator {
             Type::Domain(domain) => self.generate_create_domain(domain),
             Type::Enum(enum_type) => self.generate_create_enum_type(enum_type),
             Type::Range(range_type) => self.generate_create_range_type(range_type),
-            Type::Pseudo(_) => {
-                // Pseudo-types are not dumpable, so we generate nothing.
-                Ok(String::new())
+            Type::Pseudo(pseudo_type) => {
+                // For pseudo types, generate a simple CREATE TYPE statement
+                let type_name = Self::force_quote_identifier(&pseudo_type.info.name);
+                Ok(format!("CREATE TYPE {};", type_name))
             }
         }
     }
@@ -205,7 +353,7 @@ impl SqlGenerator for PostgresSqlGenerator {
         };
 
         Ok(format!(
-            "DROP {} {}.{};\n",
+            "DROP {} {}.{}{};\n",
             kind,
             quote_ident(&info.schema),
             quote_ident(&info.name),
@@ -214,25 +362,22 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn generate_create_table(&self, table: &Table) -> Result<String> {
-        let table_name = Self::force_quote_identifier(&table.name);
+        let table_name = Self::_quote_identifier(&table.name);
         let mut sql = format!("CREATE TABLE {} (\n    ", table_name);
         let mut columns = Vec::new();
 
         // Add columns
         for column in &table.columns {
-            let column_name = Self::force_quote_identifier(&column.name);
+            let column_name = Self::_quote_identifier(&column.name);
             let mut col_def = format!("{} {}", column_name, column.type_name);
-            if !column.nullable {
+            if column.is_not_null {
                 col_def.push_str(" NOT NULL");
             }
-            if let Some(default) = &column.default {
-                col_def.push_str(&format!(" DEFAULT {}", default));
-            }
+            // Note: Column struct doesn't store actual default values, only has_default flag
             if let Some(identity) = &column.identity {
-                col_def.push_str(if identity.always {
-                    " GENERATED ALWAYS AS IDENTITY"
-                } else {
-                    " GENERATED BY DEFAULT AS IDENTITY"
+                col_def.push_str(match identity.generation {
+                    IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
+                    IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
                 });
             }
             if let Some(generated) = &column.generated {
@@ -259,8 +404,8 @@ impl SqlGenerator for PostgresSqlGenerator {
         let mut up_statements = Vec::new();
         let mut down_statements = Vec::new();
 
-        let old_table_name = Self::force_quote_identifier(&old.name);
-        let new_table_name = Self::force_quote_identifier(&new.name);
+        let old_table_name = Self::_quote_identifier(&old.name);
+        let new_table_name = Self::_quote_identifier(&new.name);
 
         // Handle column changes
         let old_columns: std::collections::HashMap<&str, &shem_core::Column> =
@@ -271,7 +416,7 @@ impl SqlGenerator for PostgresSqlGenerator {
         // Find dropped columns (in old but not in new)
         for (col_name, old_col) in &old_columns {
             if !new_columns.contains_key(col_name) {
-                let column_name = Self::force_quote_identifier(col_name);
+                let column_name = Self::_quote_identifier(col_name);
                 up_statements.push(format!(
                     "ALTER TABLE {} DROP COLUMN {}",
                     new_table_name, column_name
@@ -281,17 +426,14 @@ impl SqlGenerator for PostgresSqlGenerator {
                     "ALTER TABLE {} ADD COLUMN {} {}",
                     old_table_name, column_name, old_col.type_name
                 );
-                if !old_col.nullable {
+                if old_col.is_not_null {
                     col_def.push_str(" NOT NULL");
                 }
-                if let Some(default) = &old_col.default {
-                    col_def.push_str(&format!(" DEFAULT {}", default));
-                }
+                // Note: Column struct doesn't store actual default values, only has_default flag
                 if let Some(identity) = &old_col.identity {
-                    col_def.push_str(if identity.always {
-                        " GENERATED ALWAYS AS IDENTITY"
-                    } else {
-                        " GENERATED BY DEFAULT AS IDENTITY"
+                    col_def.push_str(match identity.generation {
+                        IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
+                        IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
                     });
                 }
                 if let Some(generated) = &old_col.generated {
@@ -307,22 +449,19 @@ impl SqlGenerator for PostgresSqlGenerator {
         // Find added columns (in new but not in old)
         for (col_name, new_col) in &new_columns {
             if !old_columns.contains_key(col_name) {
-                let column_name = Self::force_quote_identifier(col_name);
+                let column_name = Self::_quote_identifier(col_name);
                 let mut col_def = format!(
                     "ALTER TABLE {} ADD COLUMN {} {}",
                     new_table_name, column_name, new_col.type_name
                 );
-                if !new_col.nullable {
+                if new_col.is_not_null {
                     col_def.push_str(" NOT NULL");
                 }
-                if let Some(default) = &new_col.default {
-                    col_def.push_str(&format!(" DEFAULT {}", default));
-                }
+                // Note: Column struct doesn't store actual default values, only has_default flag
                 if let Some(identity) = &new_col.identity {
-                    col_def.push_str(if identity.always {
-                        " GENERATED ALWAYS AS IDENTITY"
-                    } else {
-                        " GENERATED BY DEFAULT AS IDENTITY"
+                    col_def.push_str(match identity.generation {
+                        IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
+                        IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
                     });
                 }
                 if let Some(generated) = &new_col.generated {
@@ -342,7 +481,7 @@ impl SqlGenerator for PostgresSqlGenerator {
         // Find modified columns (in both old and new but different)
         for (col_name, new_col) in &new_columns {
             if let Some(old_col) = old_columns.get(col_name) {
-                let column_name = Self::force_quote_identifier(col_name);
+                let column_name = Self::_quote_identifier(col_name);
 
                 // Check for type changes
                 if old_col.type_name != new_col.type_name {
@@ -357,59 +496,30 @@ impl SqlGenerator for PostgresSqlGenerator {
                 }
 
                 // Check for nullability changes
-                if old_col.nullable != new_col.nullable {
-                    if new_col.nullable {
+                if old_col.is_not_null != new_col.is_not_null {
+                    if new_col.is_not_null {
                         up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
+                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
                             new_table_name, column_name
                         ));
                         down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
+                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
                             old_table_name, column_name
                         ));
                     } else {
                         up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
+                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
                             new_table_name, column_name
                         ));
                         down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
+                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
                             old_table_name, column_name
                         ));
                     }
                 }
 
-                // Check for default value changes
-                if old_col.default != new_col.default {
-                    match &new_col.default {
-                        Some(default) => {
-                            up_statements.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {}",
-                                new_table_name, column_name, default
-                            ));
-                        }
-                        None => {
-                            up_statements.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
-                                new_table_name, column_name
-                            ));
-                        }
-                    }
-                    match &old_col.default {
-                        Some(default) => {
-                            down_statements.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {}",
-                                old_table_name, column_name, default
-                            ));
-                        }
-                        None => {
-                            down_statements.push(format!(
-                                "ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT",
-                                old_table_name, column_name
-                            ));
-                        }
-                    }
-                }
+                // Note: Column struct doesn't store actual default values, only has_default flag
+                // Default value changes would need to be handled separately with actual default expressions
 
                 // Check for identity changes
                 if old_col.identity != new_col.identity {
@@ -426,10 +536,9 @@ impl SqlGenerator for PostgresSqlGenerator {
                             "ALTER TABLE {} ALTER COLUMN {} ADD GENERATED {} AS IDENTITY",
                             new_table_name,
                             column_name,
-                            if identity.always {
-                                "ALWAYS"
-                            } else {
-                                "BY DEFAULT"
+                            match identity.generation {
+                                IdentityGeneration::Always => "ALWAYS",
+                                IdentityGeneration::ByDefault => "BY DEFAULT",
                             }
                         ));
                     }
@@ -446,10 +555,9 @@ impl SqlGenerator for PostgresSqlGenerator {
                             "ALTER TABLE {} ALTER COLUMN {} ADD GENERATED {} AS IDENTITY",
                             old_table_name,
                             column_name,
-                            if identity.always {
-                                "ALWAYS"
-                            } else {
-                                "BY DEFAULT"
+                            match identity.generation {
+                                IdentityGeneration::Always => "ALWAYS",
+                                IdentityGeneration::ByDefault => "BY DEFAULT",
                             }
                         ));
                     }
@@ -648,7 +756,7 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_sequence(&self, seq: &Sequence) -> Result<String> {
-        let sequence_name = Self::force_quote_identifier(&seq.name);
+        let sequence_name = Self::_quote_identifier(&seq.name);
 
         let mut sql = format!("CREATE SEQUENCE {}", sequence_name);
 
@@ -696,15 +804,18 @@ impl SqlGenerator for PostgresSqlGenerator {
         let mut up_statements = Vec::new();
         let mut down_statements = Vec::new();
 
+        let old_name = Self::_quote_identifier(&old.name);
+        let new_name = Self::_quote_identifier(&new.name);
+
         // Handle start value changes
         if old.start != new.start {
             up_statements.push(format!(
                 "ALTER SEQUENCE {} RESTART WITH {};",
-                new.name, new.start
+                new_name, new.start
             ));
             down_statements.push(format!(
                 "ALTER SEQUENCE {} RESTART WITH {};",
-                old.name, old.start
+                old_name, old.start
             ));
         }
 
@@ -712,11 +823,11 @@ impl SqlGenerator for PostgresSqlGenerator {
         if old.increment != new.increment {
             up_statements.push(format!(
                 "ALTER SEQUENCE {} INCREMENT BY {};",
-                new.name, new.increment
+                new_name, new.increment
             ));
             down_statements.push(format!(
                 "ALTER SEQUENCE {} INCREMENT BY {};",
-                old.name, old.increment
+                old_name, old.increment
             ));
         }
 
@@ -730,8 +841,8 @@ impl SqlGenerator for PostgresSqlGenerator {
                 Some(min) => format!("SET MINVALUE {}", min),
                 None => "SET NO MINVALUE".to_string(),
             };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new.name, up_min));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old.name, down_min));
+            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, up_min));
+            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, down_min));
         }
 
         // Handle max value changes
@@ -744,22 +855,22 @@ impl SqlGenerator for PostgresSqlGenerator {
                 Some(max) => format!("SET MAXVALUE {}", max),
                 None => "SET NO MAXVALUE".to_string(),
             };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new.name, up_max));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old.name, down_max));
+            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, up_max));
+            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, down_max));
         }
 
         // Handle cache changes
         if old.cache != new.cache {
-            up_statements.push(format!("ALTER SEQUENCE {} CACHE {};", new.name, new.cache));
-            down_statements.push(format!("ALTER SEQUENCE {} CACHE {};", old.name, old.cache));
+            up_statements.push(format!("ALTER SEQUENCE {} CACHE {};", new_name, new.cache));
+            down_statements.push(format!("ALTER SEQUENCE {} CACHE {};", old_name, old.cache));
         }
 
         // Handle cycle changes
         if old.cycle != new.cycle {
             let cycle_str = if new.cycle { "CYCLE" } else { "NO CYCLE" };
             let old_cycle_str = if old.cycle { "CYCLE" } else { "NO CYCLE" };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new.name, cycle_str));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old.name, old_cycle_str));
+            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, cycle_str));
+            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, old_cycle_str));
         }
 
         Ok((up_statements, down_statements))
@@ -991,9 +1102,9 @@ impl SqlGenerator for PostgresSqlGenerator {
 
     fn drop_sequence(&self, seq: &Sequence) -> Result<String> {
         let name = if let Some(schema) = &seq.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&seq.name))
+            format!("{}.{}", schema, Self::_quote_identifier(&seq.name))
         } else {
-            Self::force_quote_identifier(&seq.name)
+            Self::_quote_identifier(&seq.name)
         };
         Ok(format!("DROP SEQUENCE IF EXISTS {} CASCADE;", name))
     }

@@ -1,13 +1,11 @@
 use std::collections::HashMap;
-
-use shem_core::Result;
-use shem_core::schema::*;
-use tokio_postgres::GenericClient;
-use tracing::{debug, info};
-
-use crate::get_collations_map;
 use crate::get_qualified_name_map;
 use crate::parse_options;
+use shem_core::Result;
+use shem_core::schema::*;
+use parser::pg_options_to_map;
+use tokio_postgres::GenericClient;
+use tracing::debug;
 
 /// Introspect PostgreSQL database schema
 pub async fn introspect_schema<C>(client: &C) -> Result<Schema>
@@ -81,14 +79,20 @@ where
     // Purpose: Store arrays of any base/composite type.
     let postgres_types = introspect_types(&*client, false).await?;
     for postgres_type in postgres_types {
-        schema
-            .types
-            .insert(postgres_type.name.clone(), postgres_type);
+        let type_name = match &postgres_type {
+            Type::Base(t) => t.info.name.clone(),
+            Type::Composite(t) => t.info.name.clone(),
+            Type::Domain(t) => t.info.name.clone(),
+            Type::Enum(t) => t.info.name.clone(),
+            Type::Range(t) => t.info.name.clone(),
+            Type::Pseudo(t) => t.info.name.clone(),
+        };
+        schema.types.insert(type_name, postgres_type);
     }
 
     // Introspect sequences
     //Purpose: Generate auto-incrementing IDs.
-    let sequences = introspect_sequences(&*client).await?;
+    let sequences = introspect_sequences(&*client, false).await?;
     for seq in sequences {
         schema.sequences.insert(seq.name.clone(), seq);
     }
@@ -97,7 +101,7 @@ where
 
     // Introspect tables
     // Purpose: Store data.
-    let tables = introspect_tables(&*client).await?;
+    let tables = introspect_tables_unified(&*client).await?;
     for table in tables {
         schema.tables.insert(table.name.clone(), table);
     }
@@ -651,266 +655,544 @@ pub async fn introspect_collations<C: GenericClient>(
     }
 }
 
-async fn introspect_tables<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
-    let query = r#"
-        SELECT 
-            t.table_schema,
-            t.table_name,
-            obj_description(pgc.oid, 'pg_class') as comment,
-            pgc.relowner as owner,
-            pgc.reltablespace as tablespace_oid,
-            pgc.reloptions as storage_parameters
-        FROM information_schema.tables t
-        JOIN pg_class pgc ON pgc.relname = t.table_name
-        JOIN pg_namespace n ON pgc.relnamespace = n.oid AND n.nspname = t.table_schema
-        WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND t.table_type = 'BASE TABLE'
-        AND pgc.relowner > 1  -- exclude system-owned tables
-        AND NOT EXISTS (
-            -- Exclude tables that are part of extensions
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = pgc.oid AND d.deptype = 'e'
-        )
-    "#;
-
-    let rows = client.query(query, &[]).await?;
-    let mut tables = Vec::new();
-
-    for row in rows {
-        let schema: Option<String> = row.get("table_schema");
-        let name: String = row.get("table_name");
-        let comment: Option<String> = row.get("comment");
-        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
-        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
-
-        // Get columns
-        let columns = introspect_columns(client, &schema, &name).await?;
-
-        // Get constraints
-        let constraints = introspect_constraints(client, &schema, &name).await?;
-
-        // Get indexes
-        let indexes = introspect_indexes(client, &schema, &name).await?;
-
-        // Get tablespace name if available
-        let tablespace = if let Some(oid) = tablespace_oid {
-            let ts_query = "SELECT spcname FROM pg_tablespace WHERE oid = $1";
-            if let Ok(ts_rows) = client.query(ts_query, &[&oid]).await {
-                ts_rows.first().map(|row| row.get::<_, String>("spcname"))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Get inheritance information
-        let inherits_query = r#"
-            SELECT c.relname as parent_table
-            FROM pg_inherits i
-            JOIN pg_class c ON i.inhparent = c.oid
-            JOIN pg_class child ON i.inhrelid = child.oid
-            JOIN pg_namespace n ON child.relnamespace = n.oid
-            WHERE child.relname = $1 AND n.nspname = $2
-            ORDER BY c.relname
-        "#;
-        let inherits_rows = client
-            .query(
-                inherits_query,
-                &[&name, &schema.as_deref().unwrap_or("public")],
-            )
-            .await?;
-        let inherits: Vec<String> = inherits_rows
-            .iter()
-            .map(|row| row.get::<_, String>("parent_table"))
-            .collect();
-
-        // Get partitioning information
-        let partition_by = if inherits.is_empty() {
-            // Check if this table is a partitioned table (has partitions)
-            let partition_query = r#"
-                SELECT c.relname as partition_name
-                FROM pg_inherits i
-                JOIN pg_class c ON i.inhrelid = c.oid
-                JOIN pg_class parent ON i.inhparent = parent.oid
-                JOIN pg_namespace n ON parent.relnamespace = n.oid
-                WHERE parent.relname = $1 AND n.nspname = $2
-                LIMIT 1
-            "#;
-            let partition_rows = client
-                .query(
-                    partition_query,
-                    &[&name, &schema.as_deref().unwrap_or("public")],
-                )
-                .await?;
-
-            if !partition_rows.is_empty() {
-                // This is a partitioned table, get the partition strategy and columns
-                let partition_info_query = r#"
-                    SELECT 
-                        pg_get_partkeydef(parent.oid) as partition_expression,
-                        parent.relpartbound as partition_bound
-                    FROM pg_class parent
-                    JOIN pg_namespace n ON parent.relnamespace = n.oid
-                    WHERE parent.relname = $1 AND n.nspname = $2
-                "#;
-                let partition_info_rows = client
-                    .query(
-                        partition_info_query,
-                        &[&name, &schema.as_deref().unwrap_or("public")],
-                    )
-                    .await?;
-
-                if let Some(row) = partition_info_rows.first() {
-                    let partition_expression: Option<String> = row.get("partition_expression");
-                    if let Some(expr) = partition_expression {
-                        // Parse the partition expression to extract method and columns
-                        // Example: "RANGE (created_date)" or "LIST (region)"
-                        if expr.to_uppercase().contains("RANGE") {
-                            // Extract column names from the expression
-                            let columns = extract_partition_columns(&expr);
-                            Some(PartitionBy {
-                                method: PartitionMethod::Range,
-                                columns,
-                            })
-                        } else if expr.to_uppercase().contains("LIST") {
-                            let columns = extract_partition_columns(&expr);
-                            Some(PartitionBy {
-                                method: PartitionMethod::List,
-                                columns,
-                            })
-                        } else if expr.to_uppercase().contains("HASH") {
-                            let columns = extract_partition_columns(&expr);
-                            Some(PartitionBy {
-                                method: PartitionMethod::Hash,
-                                columns,
-                            })
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Parse storage parameters
-        let storage_params = storage_parameters
-            .as_deref()
-            .map(parse_server_options)
-            .unwrap_or_default();
-
-        tables.push(Table {
-            name,
-            schema,
-            columns,
-            constraints,
-            indexes,
-            comment,
-            tablespace,
-            inherits,
-            partition_by,
-            storage_parameters: storage_params,
-        });
+// This function now fetches all the details for the complete Column struct.
+pub async fn introspect_all_columns<C: GenericClient>(
+    client: &C,
+    table_oids: &[u32],
+) -> Result<HashMap<u32, Vec<Column>>> {
+    if table_oids.is_empty() {
+        return Ok(HashMap::new());
     }
 
-    Ok(tables)
-}
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
 
-async fn introspect_columns<C: GenericClient>(
-    client: &C,
-    schema: &Option<String>,
-    table: &str,
-) -> Result<Vec<Column>> {
-    let query = r#"
+    // Build a version-aware query to fetch all column details for the given tables.
+    let mut query = String::from(
+        r#"
+        SELECT
+            a.attrelid,
+            a.attname AS name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name,
+            a.attnotnull AS is_not_null,
+            a.atthasdef AS has_default,
+            a.attisdropped,
+            a.attislocal,
+            CASE WHEN a.attstattarget = -1 THEN NULL ELSE a.attstattarget::integer END AS stats_target,
+            a.attstorage,
+            a.attacl::text AS acl,
+            col_description(a.attrelid, a.attnum) AS comment,
+            CASE WHEN a.attcollation <> t.typcollation THEN a.attcollation ELSE 0 END AS collation_oid,
+            a.attfdwoptions
+    "#,
+    );
+
+    // Add columns that only exist in newer PostgreSQL versions with safe fallbacks.
+    if server_version_num >= 100000 {
+        query.push_str(", a.attidentity");
+    } else {
+        query.push_str(", ''::char AS attidentity");
+    }
+    
+    // Check if attgenerated and attgeneratedbin columns exist (PostgreSQL 12+)
+    let generated_column_exists_query = r#"
         SELECT 
-            a.attname as column_name,
-            pg_catalog.format_type(a.atttypid, a.atttypmod) as type_name,
-            NOT a.attnotnull as is_nullable,
-            pg_get_expr(ad.adbin, ad.adrelid) as column_default,
-            c.identity_generation,
-            c.generation_expression,
-            a.attcollation as collation_oid,
-            col.collname as collation_name,
-            obj_description(a.attrelid, 'pg_class') as table_comment,
-            col_description(a.attrelid, a.attnum) as column_comment
-        FROM pg_catalog.pg_attribute a
-        JOIN pg_catalog.pg_class t ON a.attrelid = t.oid
-        JOIN pg_catalog.pg_namespace n ON t.relnamespace = n.oid
-        LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-        LEFT JOIN information_schema.columns c ON 
-            c.table_schema = n.nspname 
-            AND c.table_name = t.relname 
-            AND c.column_name = a.attname
-        LEFT JOIN pg_catalog.pg_collation col ON col.oid = a.attcollation
-        WHERE n.nspname = $1
-        AND t.relname = $2
-        AND a.attnum > 0
-        AND NOT a.attisdropped
-        ORDER BY a.attnum
+            EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_schema = 'pg_catalog' 
+                AND table_name = 'pg_attribute' 
+                AND column_name = 'attgenerated'
+            ) as attgenerated_exists,
+            EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_schema = 'pg_catalog' 
+                AND table_name = 'pg_attribute' 
+                AND column_name = 'attgeneratedbin'
+            ) as attgeneratedbin_exists;
     "#;
+    let generated_column_exists_row = client.query_one(generated_column_exists_query, &[]).await?;
+    let attgenerated_exists: bool = generated_column_exists_row.get("attgenerated_exists");
+    let attgeneratedbin_exists: bool = generated_column_exists_row.get("attgeneratedbin_exists");
+    
+    if server_version_num >= 120000 && attgenerated_exists {
+        if attgeneratedbin_exists {
+            query.push_str(", a.attgenerated, pg_get_expr(a.attgeneratedbin, a.attrelid) as generated_expr");
+        } else {
+            query.push_str(", a.attgenerated, NULL as generated_expr");
+        }
+    } else {
+        query.push_str(", ''::char AS attgenerated, NULL AS generated_expr");
+    }
+    if server_version_num >= 140000 {
+        query.push_str(", a.attcompression");
+    } else {
+        query.push_str(", ''::char AS attcompression");
+    }
 
-    let rows = client.query(query, &[schema, &table.to_string()]).await?;
-    let mut columns = Vec::new();
+    query.push_str(
+        r#"
+        FROM pg_attribute a
+        JOIN pg_type t ON a.atttypid = t.oid
+        WHERE a.attrelid = ANY($1) AND a.attnum > 0
+        ORDER BY a.attrelid, a.attnum;
+    "#,
+    );
 
+    let rows = client.query(&query, &[&table_oids]).await?;
+
+    // Helper data: Fetch all collations for name resolution in one go.
+    let collations_map =
+        get_qualified_name_map(client, "pg_collation", "collname", "collnamespace").await?;
+
+    let mut map: HashMap<u32, Vec<Column>> = HashMap::new();
     for row in rows {
-        let name: String = row.get("column_name");
-        let type_name: String = row.get("type_name");
-        let nullable: bool = row.get("is_nullable");
-        let default: Option<String> = row.get("column_default");
-        let identity: Option<Identity> = match row.get::<_, Option<String>>("identity_generation") {
-            Some(identity_type) if identity_type == "ALWAYS" => Some(Identity {
-                always: true,
-                start: 1,
-                increment: 1,
-                min_value: None,
-                max_value: None,
-                cache: None,
-                cycle: false,
+        let table_oid: u32 = row.get("attrelid");
+
+        // Parse single-character fields into enums or strings
+        let storage_char: i8 = row.get("attstorage");
+        let storage = match storage_char as u8 as char {
+            'p' => ColumnStorage::Plain,
+            'e' => ColumnStorage::External,
+            'x' => ColumnStorage::Extended,
+            'm' => ColumnStorage::Main,
+            _ => ColumnStorage::Plain, // Should not happen
+        };
+
+        let compression_char: i8 = row.get("attcompression");
+        let compression = match compression_char as u8 as char {
+            'p' => Some("pglz".to_string()),
+            'l' => Some("lz4".to_string()),
+            _ => None,
+        };
+
+        let identity_char: i8 = row.get("attidentity");
+        let identity = match identity_char as u8 as char {
+            'a' => Some(Identity {
+                generation: IdentityGeneration::Always,
             }),
-            Some(identity_type) if identity_type == "BY DEFAULT" => Some(Identity {
-                always: false,
-                start: 1,
-                increment: 1,
-                min_value: None,
-                max_value: None,
-                cache: None,
-                cycle: false,
+            'd' => Some(Identity {
+                generation: IdentityGeneration::ByDefault,
             }),
             _ => None,
         };
-        let generated: Option<GeneratedColumn> = row
-            .get::<_, Option<String>>("generation_expression")
-            .map(|expr| GeneratedColumn {
-                expression: expr,
-                stored: true,
-            });
-        let collation: Option<String> = row.get("collation_name");
-        let column_comment: Option<String> = row.get("column_comment");
 
-        columns.push(Column {
-            name,
-            type_name,
-            nullable,
-            default,
+        let generated_char: i8 = row.get("attgenerated");
+        let generated_expr: Option<String> = row.get("generated_expr");
+        let generated = match generated_char as u8 as char {
+            's' => Some(Generated { 
+                expression: generated_expr.unwrap_or_else(|| "(generated expression)".to_string()) 
+            }),
+            _ => None,
+        };
+
+        let collation_oid: u32 = row.get("collation_oid");
+
+        let column = Column {
+            name: row.get("name"),
+            type_name: row.get("type_name"),
+            is_not_null: row.get("is_not_null"),
+            has_default: row.get("has_default"),
+            is_dropped: row.get("attisdropped"),
+            is_local: row.get("attislocal"),
+            stats_target: row.get("stats_target"),
+            storage,
+            compression,
             identity,
             generated,
-            comment: column_comment,
-            collation,
-            storage: None,     // TODO: Get storage type
-            compression: None, // TODO: Get compression method
-        });
+            acl: row.get("acl"),
+            comment: row.get("comment"),
+            collation: if collation_oid > 0 {
+                collations_map.get(&collation_oid).cloned()
+            } else {
+                None
+            },
+            fdw_options: pg_options_to_map(row.get("attfdwoptions")),
+        };
+
+        map.entry(table_oid).or_default().push(column);
+    }
+    Ok(map)
+}
+
+
+// Bulk introspection functions for unified table introspection
+async fn introspect_all_constraints<C: GenericClient>(
+    client: &C,
+    table_oids: &[u32],
+) -> Result<HashMap<u32, Vec<Constraint>>> {
+    if table_oids.is_empty() {
+        return Ok(HashMap::new());
     }
 
-    Ok(columns)
+    let oids_str = table_oids
+        .iter()
+        .map(|oid| oid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let query = format!(
+        r#"
+        SELECT 
+            c.conrelid as table_oid,
+            c.conname as constraint_name,
+            c.contype::text as constraint_type,
+            pg_get_constraintdef(c.oid) as constraint_definition,
+            c.condeferrable as deferrable,
+            c.condeferred as initially_deferred
+        FROM pg_constraint c
+        WHERE c.conrelid IN ({})
+        "#,
+        oids_str
+    );
+
+    let rows = client.query(&query, &[]).await?;
+    let mut constraints_map = HashMap::new();
+
+    for row in rows {
+        let table_oid: u32 = row.get("table_oid");
+        let name: String = row.get("constraint_name");
+        let constraint_type_str: String = row.get("constraint_type");
+        let constraint_type: char = constraint_type_str.chars().next().unwrap_or('x');
+        let definition: String = row.get("constraint_definition");
+        let deferrable: bool = row.get("deferrable");
+        let initially_deferred: bool = row.get("initially_deferred");
+
+        let kind = match constraint_type {
+            'p' => ConstraintKind::PrimaryKey,
+            'f' => {
+                let references = if let Some(ref_match) = definition.find("REFERENCES ") {
+                    let ref_part = &definition[ref_match + 11..];
+                    if let Some(paren_pos) = ref_part.find('(') {
+                        ref_part[..paren_pos].trim().to_string()
+                    } else {
+                        ref_part.trim().to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+
+                ConstraintKind::ForeignKey {
+                    references,
+                    on_delete: None,
+                    on_update: None,
+                }
+            }
+            'u' => ConstraintKind::Unique,
+            'c' => ConstraintKind::Check,
+            'x' => ConstraintKind::Exclusion,
+            _ => continue,
+        };
+
+        let constraint = Constraint {
+            name,
+            kind,
+            definition,
+            deferrable,
+            initially_deferred,
+        };
+
+        constraints_map.entry(table_oid).or_insert_with(Vec::new).push(constraint);
+    }
+
+    Ok(constraints_map)
+}
+
+async fn introspect_all_indexes<C: GenericClient>(
+    client: &C,
+    table_oids: &[u32],
+) -> Result<HashMap<u32, Vec<Index>>> {
+    if table_oids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let oids_str = table_oids
+        .iter()
+        .map(|oid| oid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let query = format!(
+        r#"
+        SELECT 
+            t.oid as table_oid,
+            i.relname as index_name,
+            a.attname as column_name,
+            ix.indisunique as is_unique,
+            am.amname as index_method,
+            pg_get_expr(ix.indpred, ix.indrelid) as where_clause,
+            pg_get_indexdef(ix.indexrelid) as index_definition,
+            i.reltablespace as tablespace_oid,
+            i.reloptions as storage_parameters,
+            ix.indkey as index_keys,
+            ix.indoption as index_options
+        FROM pg_class t
+        JOIN pg_index ix ON ix.indrelid = t.oid
+        JOIN pg_class i ON i.oid = ix.indexrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+        JOIN pg_am am ON am.oid = i.relam
+        WHERE t.oid IN ({})
+        ORDER BY t.oid, i.relname, array_position(ix.indkey, a.attnum)
+        "#,
+        oids_str
+    );
+
+    let rows = client.query(&query, &[]).await?;
+    let mut indexes_map = HashMap::new();
+    let mut current_index = None;
+
+    for row in rows {
+        let table_oid: u32 = row.get("table_oid");
+        let name: String = row.get("index_name");
+        let column_name: String = row.get("column_name");
+        let is_unique: bool = row.get("is_unique");
+        let method: String = row.get("index_method");
+        let where_clause: Option<String> = row.get("where_clause");
+        let definition: String = row.get("index_definition");
+        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
+        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
+
+        let index_method = match method.as_str() {
+            "btree" => IndexMethod::Btree,
+            "hash" => IndexMethod::Hash,
+            "gist" => IndexMethod::Gist,
+            "gin" => IndexMethod::Gin,
+            "brin" => IndexMethod::Brin,
+            "spgist" => IndexMethod::Spgist,
+            _ => IndexMethod::Btree,
+        };
+
+        if current_index.as_ref().map(|idx: &Index| idx.name.as_str()) != Some(name.as_str()) {
+            // New index
+            let index = Index {
+                name: name.clone(),
+                columns: vec![IndexColumn {
+                    name: column_name.clone(),
+                    expression: None,
+                    order: SortOrder::Ascending,
+                    nulls_first: false,
+                    opclass: None,
+                }],
+                method: index_method,
+                unique: is_unique,
+                where_clause,
+                tablespace: tablespace_oid.map(|oid| oid.to_string()),
+                storage_parameters: storage_parameters.map(|params| {
+                    params.into_iter()
+                        .filter_map(|param| {
+                            if let Some((key, value)) = param.split_once('=') {
+                                Some((key.to_string(), value.to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }).unwrap_or_default(),
+            };
+            current_index = Some(index);
+            indexes_map.entry(table_oid).or_insert_with(Vec::new).push(current_index.as_ref().unwrap().clone());
+        } else {
+            // Same index, add column
+            if let Some(index) = current_index.as_mut() {
+                index.columns.push(IndexColumn {
+                    name: column_name,
+                    expression: None,
+                    order: SortOrder::Ascending,
+                    nulls_first: false,
+                    opclass: None,
+                });
+            }
+        }
+    }
+
+    Ok(indexes_map)
+}
+
+async fn introspect_all_inheritance<C: GenericClient>(
+    client: &C,
+) -> Result<HashMap<u32, Vec<String>>> {
+    let query = r#"
+        SELECT 
+            inhrelid as table_oid,
+            c.relname as parent_table
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhparent
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut inheritance_map = HashMap::new();
+
+    for row in rows {
+        let table_oid: u32 = row.get("table_oid");
+        let parent_table: String = row.get("parent_table");
+        inheritance_map.entry(table_oid).or_insert_with(Vec::new).push(parent_table);
+    }
+
+    Ok(inheritance_map)
+}
+
+async fn introspect_all_partition_keys<C: GenericClient>(
+    client: &C,
+) -> Result<HashMap<u32, String>> {
+    // Check if partkey column exists in pg_partitioned_table (PostgreSQL 10+)
+    let partkey_column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_partitioned_table' 
+            AND column_name = 'partkey'
+        ) as column_exists;
+    "#;
+    let partkey_column_exists_row = client.query_one(partkey_column_exists_query, &[]).await?;
+    let partkey_exists: bool = partkey_column_exists_row.get("column_exists");
+
+    if !partkey_exists {
+        // Return empty map for older PostgreSQL versions that don't support partitioning
+        return Ok(HashMap::new());
+    }
+
+    let query = r#"
+        SELECT 
+            c.oid as table_oid,
+            pt.partstrat as partition_strategy,
+            array_agg(a.attname ORDER BY array_position(pt.partkey, a.attnum)) as column_names
+        FROM pg_class c
+        JOIN pg_partitioned_table pt ON pt.partrelid = c.oid
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(pt.partkey)
+        WHERE c.relkind = 'p'
+        GROUP BY c.oid, pt.partstrat
+        ORDER BY c.oid
+    "#;
+
+    let rows = client.query(query, &[]).await?;
+    let mut partition_key_map = HashMap::new();
+
+    for row in rows {
+        let table_oid: u32 = row.get("table_oid");
+        let partition_strategy: char = row.get("partition_strategy");
+        let column_names: Vec<String> = row.get("column_names");
+        
+        let strategy_str = match partition_strategy {
+            'r' => "RANGE",
+            'l' => "LIST", 
+            'h' => "HASH",
+            _ => "UNKNOWN"
+        };
+        
+        let partition_expression = format!("{} ({})", strategy_str, column_names.join(", "));
+        partition_key_map.insert(table_oid, partition_expression);
+    }
+
+    Ok(partition_key_map)
+}
+
+pub async fn introspect_tables_unified<C: GenericClient>(client: &C) -> Result<Vec<Table>> {
+    // Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!("datlastsysoid column exists: {}", datlastsysoid_exists);
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID: {}", last_system_oid);
+
+    // --- QUERY 1: Fetch all relation-like objects with Replica Identity info ---
+    let relations_query = r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relkind, obj_description(c.oid, 'pg_class') AS comment,
+            ts.spcname AS tablespace, c.relacl::text AS acl,
+            c.relreplident AS replica_identity_char,
+            ri_class.relname AS replica_identity_index_name, -- Get the index name directly
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
+        -- Join to find the replica identity index, if one is set
+        LEFT JOIN pg_index ri ON ri.indrelid = c.oid AND ri.indisreplident
+        LEFT JOIN pg_class ri_class ON ri_class.oid = ri.indexrelid
+        WHERE c.relkind IN ('r', 'p'); -- Only tables and partitioned tables
+    "#;
+    let relation_rows = client.query(relations_query, &[]).await?;
+
+    let all_relation_oids: Vec<u32> = relation_rows.iter().map(|row| row.get("oid")).collect();
+
+    // --- BULK QUERIES for sub-objects ---
+    let columns_map = introspect_all_columns(client, &all_relation_oids).await?;
+    let constraints_map = introspect_all_constraints(client, &all_relation_oids).await?;
+    let indexes_map = introspect_all_indexes(client, &all_relation_oids).await?;
+    let inheritance_map = introspect_all_inheritance(client).await?;
+    let partition_key_map = introspect_all_partition_keys(client).await?;
+
+    // --- Assemble the final Vec<Table> ---
+    let mut tables = Vec::new();
+    for row in relation_rows {
+        let oid: u32 = row.get("oid");
+
+        let is_user_defined = oid > last_system_oid;
+        let is_from_extension: bool = row.get("is_from_extension");
+
+        // Filter for dumpable tables
+        if is_user_defined && !is_from_extension {
+            let replica_identity_char: i8 = row.get("replica_identity_char");
+
+            let replica_identity = match replica_identity_char as u8 as char {
+                'd' => ReplicaIdentity::Default,
+                'n' => ReplicaIdentity::Nothing,
+                'f' => ReplicaIdentity::Full,
+                'i' => {
+                    let index_name: Option<String> = row.get("replica_identity_index_name");
+                    ReplicaIdentity::Index(index_name.unwrap_or_default())
+                }
+                _ => ReplicaIdentity::Default, // Should not happen
+            };
+
+            tables.push(Table {
+                oid,
+                name: row.get("name"),
+                schema: row.get("schema_name"),
+                owner: row.get("owner"),
+                comment: row.get("comment"),
+                tablespace: row.get("tablespace"),
+                acl: row.get("acl"),
+                columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                constraints: constraints_map.get(&oid).cloned().unwrap_or_default(),
+                indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
+                inherits: inheritance_map.get(&oid).cloned().unwrap_or_default(),
+                partition_key: partition_key_map.get(&oid).cloned(),
+                replica_identity,
+                is_user_defined,
+                is_from_extension,
+            });
+        }
+    }
+
+    Ok(tables)
 }
 
 async fn introspect_constraints<C: GenericClient>(
@@ -1480,102 +1762,164 @@ async fn introspect_procedures<C: GenericClient>(client: &C) -> Result<Vec<Proce
     Ok(procedures)
 }
 
-async fn introspect_sequences<C: GenericClient>(client: &C) -> Result<Vec<Sequence>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        WITH owned_info AS (
-            SELECT
-                dep.objid AS sequence_oid,
-                n.nspname AS table_schema,
-                c.relname AS table_name,
-                a.attname AS column_name
-            FROM pg_depend dep
-            JOIN pg_class c ON dep.refobjid = c.oid
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = dep.refobjsubid
-            WHERE dep.deptype IN ('a', 'i')
-        )
-        SELECT 
-            c.relname AS sequence_name,
-            n.nspname AS sequence_schema,
-            s.seqstart AS start_value,
-            s.seqmin AS minimum_value,
-            s.seqmax AS maximum_value,
-            s.seqincrement AS increment,
-            s.seqcache AS cache_value,
-            s.seqcycle AS cycle_option,
-            c.relowner AS owner,
-            obj_description(c.oid, 'pg_class') AS sequence_comment,
-            oi.table_schema,
-            oi.table_name,
-            oi.column_name
+pub async fn introspect_sequences<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Sequence>> {
+    // 1. Get server version and last system OID
+    let version_row = client.query_one("SHOW server_version_num", &[]).await?;
+    let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
+
+    // Check if datlastsysoid column exists (PostgreSQL 9.6+)
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!(
+        "datlastsysoid column exists (sequences): {}",
+        datlastsysoid_exists
+    );
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID (sequences): {}", last_system_oid);
+
+    // --- QUERY 1: Fetch all sequences and their properties ---
+    // This query is version-aware. For PG10+, it uses pg_sequence.
+    // For older versions, it calls the sequence relation directly.
+    let sequence_query = if server_version_num >= 100000 {
+        r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relacl::text AS acl, obj_description(c.oid, 'pg_class') AS comment,
+            s.seqstart AS start_value, s.seqmin AS min_value, s.seqmax AS max_value,
+            s.seqincrement AS increment, s.seqcache AS cache_size, s.seqcycle AS cycle,
+            pg_catalog.format_type(s.seqtypid, NULL) AS data_type,
+            (pg_sequence_last_value(c.oid)) AS last_value,
+                            false AS is_called, -- Simplified for compatibility
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_class c
         JOIN pg_namespace n ON c.relnamespace = n.oid
         JOIN pg_sequence s ON s.seqrelid = c.oid
-        LEFT JOIN owned_info oi ON oi.sequence_oid = c.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND c.relkind = 'S'
-          AND c.relowner > 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM pg_depend d
-              JOIN pg_extension e ON d.refobjid = e.oid
-              WHERE d.objid = c.oid AND d.deptype = 'e'
-          )
-        ORDER BY n.nspname, c.relname
+        WHERE c.relkind = 'S';
+        "#
+    } else {
+        // Fallback for PG < 10 - use a simpler approach that works with older versions
+        r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relacl::text AS acl, obj_description(c.oid, 'pg_class') AS comment,
+            1 AS start_value, 1 AS min_value, 9223372036854775807 AS max_value,
+            1 AS increment, 1 AS cache_size, false AS cycle,
+            'bigint' AS data_type,
+            1 AS last_value,
+            false AS is_called,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE c.relkind = 'S';
+        "#
+    };
+    let sequence_rows = client.query(sequence_query, &[]).await?;
+
+    // --- QUERY 2: Fetch all ownership info at once ---
+    let ownership_query = r#"
+        SELECT
+            dep.objid AS sequence_oid,
+            n.nspname AS table_schema,
+            c.relname AS table_name,
+            a.attname AS column_name
+        FROM pg_depend dep
+        JOIN pg_class c ON dep.refobjid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = dep.refobjsubid
+        WHERE dep.classid = 'pg_class'::regclass AND c.relkind = 'r' AND dep.deptype IN ('a', 'i');
     "#;
+    let ownership_rows = client.query(ownership_query, &[]).await?;
 
-    let rows = client.query(query, &[]).await?;
-    let mut sequences = Vec::new();
+    // Process ownership info into a HashMap for efficient lookup
+    let ownership_map: HashMap<u32, OwnedBy> = ownership_rows
+        .into_iter()
+        .map(|row| {
+            let seq_oid: u32 = row.get("sequence_oid");
+            (
+                seq_oid,
+                OwnedBy {
+                    table_schema: row.get("table_schema"),
+                    table_name: row.get("table_name"),
+                    column_name: row.get("column_name"),
+                },
+            )
+        })
+        .collect();
 
-    for row in rows {
-        let name: String = row.get("sequence_name");
-        let schema: String = row.get("sequence_schema");
-        let start: i64 = row.get("start_value");
-        let min_value: i64 = row.get("minimum_value");
-        let max_value: i64 = row.get("maximum_value");
-        let increment: i64 = row.get("increment");
-        let cache: i64 = row.get("cache_value");
-        let cycle: bool = row.get("cycle_option");
-        let comment: Option<String> = row.get("sequence_comment");
-
-        let data_type = if min_value >= i16::MIN as i64 && max_value <= i16::MAX as i64 {
-            "smallint"
-        } else if min_value >= i32::MIN as i64 && max_value <= i32::MAX as i64 {
-            "integer"
-        } else {
-            "bigint"
-        };
-
-        let owned_by = match (
-            row.get::<_, Option<String>>("table_schema"),
-            row.get::<_, Option<String>>("table_name"),
-            row.get::<_, Option<String>>("column_name"),
-        ) {
-            (Some(schema), Some(table), Some(column)) => {
-                Some(format!("{}.{}.{}", schema, table, column))
-            }
-            _ => None,
-        };
-
-        sequences.push(Sequence {
-            name,
-            schema: Some(schema),
-            data_type: data_type.to_string(),
-            start,
-            increment,
-            min_value: Some(min_value),
-            max_value: Some(max_value),
-            cache,
-            cycle,
-            owned_by,
-            comment,
+    // --- Assemble final Vec<Sequence> ---
+    let mut all_sequences = Vec::new();
+    for row in sequence_rows {
+        let oid: u32 = row.get("oid");
+        all_sequences.push(Sequence {
+            oid,
+            name: row.get("name"),
+            schema: row.get("schema_name"),
+            owner: row.get("owner"),
+            data_type: row.get("data_type"),
+            start: row.get("start_value"),
+            increment: row.get("increment"),
+            min_value: row.get("min_value"),
+            max_value: row.get("max_value"),
+            cache: row.get("cache_size"),
+            cycle: row.get("cycle"),
+            current_value: row.get("last_value"),
+            is_called: row.get("is_called"),
+            owned_by: ownership_map.get(&oid).map(|owned| {
+                format!(
+                    "{}.{}.{}",
+                    owned.table_schema, owned.table_name, owned.column_name
+                )
+            }),
+            acl: row.get("acl"),
+            comment: row.get("comment"),
+            is_user_defined: oid > last_system_oid,
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
-    Ok(sequences)
+    // --- Final Filtering ---
+    if include_predefined {
+        Ok(all_sequences)
+    } else {
+        let dumpable_sequences = all_sequences
+            .into_iter()
+            .filter(|s| s.is_user_defined && !s.is_from_extension)
+            .collect();
+        Ok(dumpable_sequences)
+    }
 }
 
 fn parse_trigger_from_definition(
@@ -2284,6 +2628,129 @@ async fn _introspect_foreign_data_wrappers<C: GenericClient>(
     Ok(fdws)
 }
 
+async fn introspect_columns_for_table<C: GenericClient>(
+    client: &C,
+    schema: &Option<String>,
+    table: &str,
+) -> Result<Vec<Column>> {
+    let query = r#"
+        SELECT 
+            a.attname AS column_name,
+            pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name,
+            a.attnotnull AS is_not_null,
+            a.atthasdef AS has_default,
+            a.attcollation AS collation_oid,
+            a.attstorage AS storage,
+            a.attcompression AS compression,
+            a.attidentity AS identity,
+            a.attgenerated AS generated,
+            col_description(a.attrelid, a.attnum) AS comment,
+            a.attacl::text AS acl,
+            a.attisdropped AS is_dropped,
+            a.attislocal AS is_local,
+            a.attstattarget AS stats_target,
+            a.attfdwoptions AS fdw_options
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class t ON a.attrelid = t.oid
+        JOIN pg_catalog.pg_namespace n ON t.relnamespace = n.oid
+        WHERE t.relname = $2
+        AND n.nspname = $1
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+        ORDER BY a.attnum
+    "#;
+
+    let rows = client.query(query, &[schema, &table.to_string()]).await?;
+    let mut columns = Vec::new();
+
+    for row in rows {
+        let name: String = row.get("column_name");
+        let type_name: String = row.get("type_name");
+        let is_not_null: bool = row.get("is_not_null");
+        let has_default: bool = row.get("has_default");
+        let collation_oid: Option<u32> = row.get("collation_oid");
+        let storage_str: String = row.get("storage");
+        let storage: char = storage_str.chars().next().unwrap_or('p');
+        let compression: Option<String> = row.get("compression");
+        let identity_str: Option<String> = row.get("identity");
+        let identity: Option<char> = identity_str.map(|s| s.chars().next().unwrap_or('d'));
+        let generated_str: Option<String> = row.get("generated");
+        let generated: Option<char> = generated_str.map(|s| s.chars().next().unwrap_or('s'));
+        let comment: Option<String> = row.get("comment");
+        let acl: Option<String> = row.get("acl");
+        let is_dropped: bool = row.get("is_dropped");
+        let is_local: bool = row.get("is_local");
+        let stats_target: Option<i32> = row.get("stats_target");
+        let fdw_options: Option<Vec<String>> = row.get("fdw_options");
+
+        // Convert storage char to ColumnStorage enum
+        let column_storage = match storage {
+            'p' => ColumnStorage::Plain,
+            'e' => ColumnStorage::External,
+            'x' => ColumnStorage::Extended,
+            'm' => ColumnStorage::Main,
+            _ => ColumnStorage::Plain,
+        };
+
+        // Convert identity char to Identity struct
+        let identity_struct = identity.map(|c| Identity {
+            generation: match c {
+                'a' => IdentityGeneration::Always,
+                'd' => IdentityGeneration::ByDefault,
+                _ => IdentityGeneration::ByDefault,
+            },
+        });
+
+        // Convert generated char to Generated struct
+        let generated_struct = generated.map(|c| Generated {
+            expression: "".to_string(), // TODO: Extract actual expression
+        });
+
+        // Get collation name if available
+        let collation = if let Some(oid) = collation_oid {
+            let collation_row = client
+                .query_one(
+                    "SELECT n.nspname || '.' || c.collname AS collation_name FROM pg_collation c JOIN pg_namespace n ON c.collnamespace = n.oid WHERE c.oid = $1",
+                    &[&oid],
+                )
+                .await?;
+            Some(collation_row.get::<_, String>("collation_name"))
+        } else {
+            None
+        };
+
+        columns.push(Column {
+            name,
+            type_name,
+            is_not_null,
+            has_default,
+            collation,
+            storage: column_storage,
+            compression,
+            identity: identity_struct,
+            generated: generated_struct,
+            comment,
+            acl,
+            is_dropped,
+            is_local,
+            stats_target,
+            fdw_options: fdw_options.map(|opts| {
+                opts.into_iter()
+                    .filter_map(|opt| {
+                        if let Some((key, value)) = opt.split_once('=') {
+                            Some((key.to_string(), value.to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }).unwrap_or_default(),
+        });
+    }
+
+    Ok(columns)
+}
+
 async fn _introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<ForeignTable>> {
     let query = r#"
         SELECT 
@@ -2316,7 +2783,7 @@ async fn _introspect_foreign_tables<C: GenericClient>(client: &C) -> Result<Vec<
         let options: Option<Vec<String>> = row.get("options");
 
         // Get columns for this foreign table
-        let columns = introspect_columns(client, &schema, &name).await?;
+        let columns = introspect_columns_for_table(client, &schema, &name).await?;
 
         let options_map = options
             .as_deref()
@@ -2563,11 +3030,11 @@ pub async fn introspect_types<C: GenericClient>(
     let types_query = r#"
         SELECT
             t.oid, t.typname AS name, n.nspname AS schema_name, pg_get_userbyid(t.typowner) AS owner,
-            t.typtype, t.typacl AS acl, obj_description(t.oid, 'pg_type') AS comment,
+            t.typtype, t.typacl::text AS acl, obj_description(t.oid, 'pg_type') AS comment,
             t.typarray AS array_type_oid,
             -- Base type properties
             t.typlen AS internal_length, t.typbyval AS is_passed_by_value, t.typalign, t.typstorage,
-            t.typcategory, t.typispreferred, pg_get_expr(t.typdefaultbin, 0) AS default_value,
+            t.typcategory, t.typispreferred AS is_preferred, pg_get_expr(t.typdefaultbin, 0) AS default_value,
             t.typelem AS element_type_oid, t.typdelim AS delimiter, (t.typcollation <> 0) AS is_collatable,
             t.typinput::regproc::text AS input_fn, t.typoutput::regproc::text AS output_fn,
             t.typreceive::regproc::text AS receive_fn, t.typsend::regproc::text AS send_fn,
@@ -2698,12 +3165,24 @@ pub async fn introspect_types<C: GenericClient>(
                     info,
                     base_type: row.get("base_type"),
                     collation: if collation_oid > 0 {
-                        collations_map.get(&collation_oid).cloned()
+                        // For built-in collations (pg_catalog schema), return just the name
+                        // For user-defined collations, return the fully qualified name
+                        if let Some(qualified_name) = collations_map.get(&collation_oid) {
+                            if qualified_name.starts_with("\"pg_catalog\".") {
+                                // Extract just the collation name from "pg_catalog"."name"
+                                let name_part = qualified_name.split('.').nth(1);
+                                name_part.map(|s| s.to_string())
+                            } else {
+                                Some(qualified_name.clone())
+                            }
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     },
                     not_null: row.get("not_null"),
-                    default: row.get("default"),
+                    default: row.get("default_value"),
                     constraints: Vec::new(), // Will be filled in below
                 })
             }
@@ -2752,7 +3231,7 @@ pub async fn introspect_types<C: GenericClient>(
         if let Some(Type::Enum(e)) = types_map.get_mut(&type_oid) {
             e.values.push(EnumValue {
                 oid: row.get("oid"),
-                label: row.get("label"),
+                label: row.get("enumlabel"),
             });
         }
     }
@@ -2796,7 +3275,7 @@ pub async fn introspect_types<C: GenericClient>(
         if let Some(Type::Domain(d)) = types_map.get_mut(&domain_oid) {
             d.constraints.push(DomainConstraint {
                 oid: row.get("oid"),
-                name: row.get("name"),
+                name: row.get("conname"),
                 definition: row.get("definition"),
                 not_valid: row.get("not_valid"),
             });
@@ -2814,7 +3293,7 @@ pub async fn introspect_types<C: GenericClient>(
                 Type::Base(t) => {
                     t.info.is_user_defined
                         && !t.info.is_from_extension
-                        && t.info.element_type_oid.is_none()
+                        && t.element_type_oid.is_none()
                 }
                 Type::Composite(t) => t.info.is_user_defined && !t.info.is_from_extension,
                 Type::Domain(t) => t.info.is_user_defined && !t.info.is_from_extension,

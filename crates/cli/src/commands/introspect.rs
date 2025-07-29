@@ -13,13 +13,14 @@ use shared_types::{
 use shem_core::{
     DatabaseConnection, DatabaseDriver, Error, Result, Schema,
     schema::{
-        CheckOption, Collation, CollationProvider, Column, CompositeType, Constraint,
-        ConstraintKind, ConstraintTrigger, Domain, EnumType, EnumValue, EventTrigger, EventTriggerEvent,
-        Extension, Function, GeneratedColumn, Identity, MaterializedView, NamedSchema,
-        ParallelSafety, Parameter, ParameterMode, Policy, PolicyCommand, Procedure, RangeType,
-        ReferentialAction, ReturnKind, ReturnType, Rule, RuleEvent, Sequence, Table, Trigger, TriggerEvent,
-        TriggerLevel, TriggerTiming, View, Volatility, Server, Publication, Subscription, Role,
-        Tablespace, ForeignKeyConstraint, BaseType, ArrayType, MultirangeType,
+        ArrayType, BaseType, CheckOption, Collation, CollationProvider, Column, CompositeType,
+        Constraint, ConstraintKind, ConstraintTrigger, Domain, EnumType, EnumValue, EventTrigger,
+        EventTriggerEvent, Extension, ForeignKeyConstraint, Function, GeneratedColumn, Identity,
+        MaterializedView, NamedSchema, ParallelSafety, Parameter, ParameterMode, Policy,
+        PolicyCommand, Procedure, Publication, RangeType, ReferentialAction, ReturnKind,
+        ReturnType, Role, Rule, RuleEvent, Sequence, Server, Subscription, Table, Tablespace,
+        Trigger, TriggerEvent, TriggerLevel, TriggerTiming, Type, TypeInfo, View, Volatility,
+        ColumnStorage, IdentityGeneration, Generated, ReplicaIdentity,
     },
     traits::SchemaSerializer,
 };
@@ -55,8 +56,6 @@ enum SchemaObject<'a> {
     Tablespace(&'a Tablespace),
     ForeignKeyConstraint(&'a ForeignKeyConstraint),
     BaseType(&'a BaseType),
-    ArrayType(&'a ArrayType),
-    MultirangeType(&'a MultirangeType),
 }
 
 impl<'a> SchemaObject<'a> {
@@ -64,10 +63,10 @@ impl<'a> SchemaObject<'a> {
         match self {
             SchemaObject::Extension(ext) => ext.name.clone(),
             SchemaObject::Collation(coll) => coll.name.clone(),
-            SchemaObject::Enum(t) => t.name.clone(),
-            SchemaObject::CompositeType(t) => t.name.clone(),
-            SchemaObject::RangeType(t) => t.name.clone(),
-            SchemaObject::Domain(d) => d.name.clone(),
+            SchemaObject::Enum(t) => t.info.name.clone(),
+            SchemaObject::CompositeType(t) => t.info.name.clone(),
+            SchemaObject::RangeType(t) => t.info.name.clone(),
+            SchemaObject::Domain(d) => d.info.name.clone(),
             SchemaObject::Sequence(s) => s.name.clone(),
             SchemaObject::Table(t) => t.name.clone(),
             SchemaObject::View(v) => v.name.clone(),
@@ -86,9 +85,7 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Role(r) => r.name.clone(),
             SchemaObject::Tablespace(t) => t.name.clone(),
             SchemaObject::ForeignKeyConstraint(fk) => fk.name.clone(),
-            SchemaObject::BaseType(b) => b.name.clone(),
-            SchemaObject::ArrayType(a) => a.name.clone(),
-            SchemaObject::MultirangeType(m) => m.name.clone(),
+            SchemaObject::BaseType(b) => b.info.name.clone(),
         }
     }
 
@@ -96,12 +93,12 @@ impl<'a> SchemaObject<'a> {
         match self {
             SchemaObject::Extension(ext) => Some(ext.schema.clone()),
             SchemaObject::Collation(coll) => Some(coll.schema.clone()),
-            SchemaObject::Enum(t) => Some(t.schema.clone()),
-            SchemaObject::CompositeType(t) => t.schema.clone(),
-            SchemaObject::RangeType(t) => t.schema.clone(),
-            SchemaObject::Domain(d) => Some(d.schema.clone()),
+            SchemaObject::Enum(t) => Some(t.info.schema.clone()),
+            SchemaObject::CompositeType(t) => Some(t.info.schema.clone()),
+            SchemaObject::RangeType(t) => Some(t.info.schema.clone()),
+            SchemaObject::Domain(d) => Some(d.info.schema.clone()),
             SchemaObject::Sequence(s) => s.schema.clone(),
-            SchemaObject::Table(t) => t.schema.clone(),
+            SchemaObject::Table(t) => Some(t.schema.clone()),
             SchemaObject::View(v) => v.schema.clone(),
             SchemaObject::MaterializedView(v) => v.schema.clone(),
             SchemaObject::Function(f) => f.schema.clone(),
@@ -113,15 +110,13 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Rule(r) => r.schema.clone(),
             // Objects that don't have schemas
             SchemaObject::NamedSchema(_) => None, // NamedSchema is the schema itself
-            SchemaObject::Server(_) => None, // Servers don't have schemas
+            SchemaObject::Server(_) => None,      // Servers don't have schemas
             SchemaObject::Publication(_) => None, // Publications don't have schemas
             SchemaObject::Subscription(_) => None, // Subscriptions don't have schemas
-            SchemaObject::Role(_) => None, // Roles don't have schemas
-            SchemaObject::Tablespace(_) => None, // Tablespaces don't have schemas
+            SchemaObject::Role(_) => None,        // Roles don't have schemas
+            SchemaObject::Tablespace(_) => None,  // Tablespaces don't have schemas
             SchemaObject::ForeignKeyConstraint(fk) => fk.schema.clone(),
-            SchemaObject::BaseType(b) => b.schema.clone(),
-            SchemaObject::ArrayType(a) => a.schema.clone(),
-            SchemaObject::MultirangeType(m) => m.schema.clone(),
+            SchemaObject::BaseType(b) => Some(b.info.schema.clone()),
         }
     }
 
@@ -317,14 +312,6 @@ impl SchemaSerializer for SqlSerializer {
                     sql.push_str(&generate_create_base_type(b)?);
                     sql.push_str(";\n\n");
                 }
-                SchemaObject::ArrayType(a) => {
-                    sql.push_str(&generate_create_array_type(a)?);
-                    sql.push_str(";\n\n");
-                }
-                SchemaObject::MultirangeType(m) => {
-                    sql.push_str(&generate_create_multirange_type(m)?);
-                    sql.push_str(";\n\n");
-                }
             }
         }
 
@@ -357,20 +344,29 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateEnum(create) => {
                     let enum_type = EnumType {
-                        oid: 0,
-                        name: create.name,
-                        owner: "".to_string(),
-                        schema: create.schema.unwrap_or_else(|| "public".to_string()),
-                        values: create.values.iter().map(|v| EnumValue {
+                        info: TypeInfo {
                             oid: 0,
-                            label: v.clone(),
-                        }).collect(),
-                        acl: None,
-                        comment: None,
-                        is_user_defined: true,
-                        is_from_extension: false,
+                            name: create.name.clone(),
+                            schema: create.schema.unwrap_or_else(|| "public".to_string()),
+                            owner: "".to_string(),
+                            acl: None,
+                            comment: None,
+                            is_user_defined: true,
+                            is_from_extension: false,
+                            array_type_oid: None,
+                        },
+                        values: create
+                            .values
+                            .iter()
+                            .map(|v| EnumValue {
+                                oid: 0,
+                                label: v.clone(),
+                            })
+                            .collect(),
                     };
-                    schema.enums.insert(enum_type.name.clone(), enum_type);
+                    schema
+                        .types
+                        .insert(enum_type.info.name.clone(), Type::Enum(enum_type));
                 }
                 Statement::CreateType(_create) => {
                     // Handle composite types - they can be stored in a separate collection if needed
@@ -378,26 +374,33 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateDomain(create) => {
                     let domain = Domain {
-                        oid: 0,
-                        name: create.name,
-                        schema: create.schema.expect("Domain must have a schema"),
-                        owner: "".to_string(),
+                        info: TypeInfo {
+                            oid: 0,
+                            name: create.name.clone(),
+                            schema: create.schema.expect("Domain must have a schema"),
+                            owner: "".to_string(),
+                            acl: None,
+                            comment: None,
+                            is_user_defined: true,
+                            is_from_extension: false,
+                            array_type_oid: None,
+                        },
                         base_type: format!("{:?}", create.data_type),
                         collation: None,
                         not_null: false,
                         default: None,
                         constraints: vec![], // TODO: Parse domain constraints
-                        acl: None,
-                        comment: None,
-                        is_user_defined: true,
-                        is_from_extension: false,
                     };
-                    schema.domains.insert(domain.name.clone(), domain);
+                    schema
+                        .types
+                        .insert(domain.info.name.clone(), Type::Domain(domain));
                 }
                 Statement::CreateSequence(create) => {
                     let sequence = Sequence {
+                        oid: 0,
                         name: create.name,
                         schema: create.schema,
+                        owner: "".to_string(),
                         data_type: "bigint".to_string(),
                         start: create.start.unwrap_or(1),
                         increment: create.increment.unwrap_or(1),
@@ -405,40 +408,49 @@ impl SchemaSerializer for SqlSerializer {
                         max_value: create.max_value,
                         cache: create.cache.unwrap_or(1),
                         cycle: create.cycle,
+                        current_value: None,
+                        is_called: false,
                         owned_by: None,
+                        acl: None,
                         comment: None,
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.sequences.insert(sequence.name.clone(), sequence);
                 }
                 Statement::CreateTable(create) => {
                     let table = Table {
+                        oid: 0,
                         name: create.name,
-                        schema: create.schema,
+                        schema: create.schema.expect("Table schema is required"),
+                        owner: "".to_string(),
                         columns: create
                             .columns
                             .into_iter()
                             .map(|col| Column {
                                 name: col.name,
                                 type_name: format!("{:?}", col.data_type),
-                                nullable: !col.not_null,
-                                default: col.default.map(|e| format!("{:?}", e)),
+                                is_not_null: !col.not_null,
+                                has_default: col.default.is_some(),
                                 identity: col.identity.map(|i| Identity {
-                                    always: i.always,
-                                    start: i.start.unwrap_or(1),
-                                    increment: i.increment.unwrap_or(1),
-                                    min_value: i.min_value,
-                                    max_value: i.max_value,
-                                    cache: None,
-                                    cycle: false,
+                                    generation: if i.always { 
+                                        IdentityGeneration::Always 
+                                    } else { 
+                                        IdentityGeneration::ByDefault 
+                                    },
                                 }),
-                                generated: col.generated.map(|g| GeneratedColumn {
+                                generated: col.generated.map(|g| Generated {
                                     expression: format!("{:?}", g.expression),
-                                    stored: g.stored,
                                 }),
                                 comment: None,
                                 collation: None,
-                                storage: None,
+                                storage: ColumnStorage::Plain,
                                 compression: None,
+                                acl: None,
+                                is_dropped: false,
+                                is_local: true,
+                                stats_target: None,
+                                fdw_options: std::collections::HashMap::new(),
                             })
                             .collect(),
                         constraints: create
@@ -514,12 +526,15 @@ impl SchemaSerializer for SqlSerializer {
                                 },
                             })
                             .collect(),
-                        indexes: Vec::new(), // TODO: Extract indexes from CREATE INDEX statements
+                        indexes: Vec::new(),
                         comment: None,
                         tablespace: None,
                         inherits: Vec::new(),
-                        partition_by: None,
-                        storage_parameters: std::collections::HashMap::new(),
+                        partition_key: None,
+                        replica_identity: ReplicaIdentity::Default,
+                        acl: None,
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.tables.insert(table.name.clone(), table);
                 }
@@ -720,39 +735,18 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
         ordered_objects.push(SchemaObject::Server(server));
     }
 
-    // 6. Base Types (fundamental types)
-    for (_, base_type) in &schema.base_types {
-        ordered_objects.push(SchemaObject::BaseType(base_type));
-    }
-
-    // 7. Enums
-    for (_, enum_type) in &schema.enums {
-        ordered_objects.push(SchemaObject::Enum(enum_type));
-    }
-
-    // 8. Domains
-    for (_, domain) in &schema.domains {
-        ordered_objects.push(SchemaObject::Domain(domain));
-    }
-
-    // 9. Composite types - moved before tables
-    for (_, composite_type) in &schema.composite_types {
-        ordered_objects.push(SchemaObject::CompositeType(composite_type));
-    }
-
-    // 10. Range types
-    for (_, range_type) in &schema.range_types {
-        ordered_objects.push(SchemaObject::RangeType(range_type));
-    }
-
-    // 11. Array types
-    for (_, array_type) in &schema.array_types {
-        ordered_objects.push(SchemaObject::ArrayType(array_type));
-    }
-
-    // 12. Multirange types
-    for (_, multirange_type) in &schema.multirange_types {
-        ordered_objects.push(SchemaObject::MultirangeType(multirange_type));
+    // 6. Types (unified)
+    for (_, type_def) in &schema.types {
+        match type_def {
+            Type::Base(base_type) => ordered_objects.push(SchemaObject::BaseType(base_type)),
+            Type::Enum(enum_type) => ordered_objects.push(SchemaObject::Enum(enum_type)),
+            Type::Domain(domain) => ordered_objects.push(SchemaObject::Domain(domain)),
+            Type::Composite(composite_type) => {
+                ordered_objects.push(SchemaObject::CompositeType(composite_type))
+            }
+            Type::Range(range_type) => ordered_objects.push(SchemaObject::RangeType(range_type)),
+            Type::Pseudo(_) => {} // Skip pseudo types
+        }
     }
 
     // 13. Collations
@@ -793,11 +787,7 @@ fn resolve_schema_dependencies(schema: &Schema) -> Result<Vec<SchemaObject>> {
             } else {
                 // If it's just a table name, try to find the table and get its full name
                 if let Some(table) = schema.tables.get(&dep) {
-                    if let Some(schema_name) = &table.schema {
-                        format!("{}.{}", schema_name, dep)
-                    } else {
-                        dep.clone() // No schema, use as-is
-                    }
+                    format!("{}.{}", table.schema, dep)
                 } else {
                     continue; // Skip if we can't find the table
                 }
@@ -900,29 +890,32 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
         }
     }
 
-    // Check enums
-    for (name, _enum_type) in &schema.enums {
-        let key = format!("enum:{}", name);
-        if let Some(existing) = object_names.get(&key) {
-            errors.push(format!(
-                "Duplicate enum name: {} (already used by {})",
-                name, existing
-            ));
-        } else {
-            object_names.insert(key, format!("enum:{}", name));
-        }
-    }
-
-    // Check domains
-    for (name, _domain) in &schema.domains {
-        let key = format!("domain:{}", name);
-        if let Some(existing) = object_names.get(&key) {
-            errors.push(format!(
-                "Duplicate domain name: {} (already used by {})",
-                name, existing
-            ));
-        } else {
-            object_names.insert(key, format!("domain:{}", name));
+    // Check types (enums, domains, etc.)
+    for (name, type_def) in &schema.types {
+        match type_def {
+            Type::Enum(_) => {
+                let key = format!("enum:{}", name);
+                if let Some(existing) = object_names.get(&key) {
+                    errors.push(format!(
+                        "Duplicate enum name: {} (already used by {})",
+                        name, existing
+                    ));
+                } else {
+                    object_names.insert(key, format!("enum:{}", name));
+                }
+            }
+            Type::Domain(_) => {
+                let key = format!("domain:{}", name);
+                if let Some(existing) = object_names.get(&key) {
+                    errors.push(format!(
+                        "Duplicate domain name: {} (already used by {})",
+                        name, existing
+                    ));
+                } else {
+                    object_names.insert(key, format!("domain:{}", name));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1106,29 +1099,32 @@ fn validate_schema_objects(schema: &Schema) -> Result<()> {
         }
     }
 
-    // Check composite types
-    for (name, _composite_type) in &schema.composite_types {
-        let key = format!("composite_type:{}", name);
-        if let Some(existing) = object_names.get(&key) {
-            errors.push(format!(
-                "Duplicate composite type name: {} (already used by {})",
-                name, existing
-            ));
-        } else {
-            object_names.insert(key, format!("composite_type:{}", name));
-        }
-    }
-
-    // Check range types
-    for (name, _range_type) in &schema.range_types {
-        let key = format!("range_type:{}", name);
-        if let Some(existing) = object_names.get(&key) {
-            errors.push(format!(
-                "Duplicate range type name: {} (already used by {})",
-                name, existing
-            ));
-        } else {
-            object_names.insert(key, format!("range_type:{}", name));
+    // Check composite and range types
+    for (name, type_def) in &schema.types {
+        match type_def {
+            Type::Composite(_) => {
+                let key = format!("composite_type:{}", name);
+                if let Some(existing) = object_names.get(&key) {
+                    errors.push(format!(
+                        "Duplicate composite type name: {} (already used by {})",
+                        name, existing
+                    ));
+                } else {
+                    object_names.insert(key, format!("composite_type:{}", name));
+                }
+            }
+            Type::Range(_) => {
+                let key = format!("range_type:{}", name);
+                if let Some(existing) = object_names.get(&key) {
+                    errors.push(format!(
+                        "Duplicate range type name: {} (already used by {})",
+                        name, existing
+                    ));
+                } else {
+                    object_names.insert(key, format!("range_type:{}", name));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1537,10 +1533,13 @@ fn generate_create_schema(schema: &NamedSchema) -> Result<String> {
 }
 
 fn generate_create_enum(type_def: &EnumType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", type_def.name);
+    let mut sql = format!("CREATE TYPE {}", type_def.info.name);
 
-    if type_def.schema != "public" {
-        sql = format!("CREATE TYPE {}.{}", type_def.schema, type_def.name);
+    if type_def.info.schema != "public" {
+        sql = format!(
+            "CREATE TYPE {}.{}",
+            type_def.info.schema, type_def.info.name
+        );
     }
 
     sql.push_str(" AS ENUM (");
@@ -1559,10 +1558,13 @@ fn generate_create_enum(type_def: &EnumType) -> Result<String> {
 }
 
 fn _generate_create_type(type_def: &CompositeType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", type_def.name);
+    let mut sql = format!("CREATE TYPE {}", type_def.info.name);
 
-    if let Some(schema) = &type_def.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, type_def.name);
+    if type_def.info.schema != "public" {
+        sql = format!(
+            "CREATE TYPE {}.{}",
+            type_def.info.schema, type_def.info.name
+        );
     }
 
     sql.push_str(" AS (");
@@ -1579,12 +1581,12 @@ fn _generate_create_type(type_def: &CompositeType) -> Result<String> {
 }
 
 fn generate_create_domain(domain: &Domain) -> Result<String> {
-    let mut sql = format!("CREATE DOMAIN {}.{}", domain.schema, domain.name);
+    let mut sql = format!("CREATE DOMAIN {}.{}", domain.info.schema, domain.info.name);
 
     sql.push_str(&format!(" AS {}", domain.base_type));
 
     for constraint in &domain.constraints {
-        if constraint.r#type == shem_core::schema::DomainConstraintType::Check {
+        if constraint.definition.starts_with("CHECK") {
             // Remove "CHECK" prefix if it exists in the constraint expression
             let check_expr = if constraint.definition.starts_with("CHECK (") {
                 &constraint.definition[7..constraint.definition.len() - 1] // Remove "CHECK (" and ")"
@@ -1635,11 +1637,7 @@ fn generate_create_sequence(seq: &Sequence) -> Result<String> {
 }
 
 fn generate_create_table(table: &Table) -> Result<String> {
-    let mut sql = format!("CREATE TABLE {}", table.name);
-
-    if let Some(schema) = &table.schema {
-        sql = format!("CREATE TABLE {}.{}", schema, table.name);
-    }
+    let mut sql = format!("CREATE TABLE {}.{}", table.schema, table.name);
 
     sql.push_str(" (");
 
@@ -1649,38 +1647,29 @@ fn generate_create_table(table: &Table) -> Result<String> {
     for column in &table.columns {
         let mut col_def = format!("{} {}", column.name, column.type_name);
 
-        if !column.nullable {
+        if !column.is_not_null {
             col_def.push_str(" NOT NULL");
         }
 
         // Only add DEFAULT if there's no GENERATED ALWAYS AS clause
-        if let Some(default) = &column.default {
-            if column.generated.is_none() {
-                col_def.push_str(&format!(" DEFAULT {}", default));
-            }
+        if column.has_default && column.generated.is_none() {
+            col_def.push_str(" DEFAULT <default_value>");
         }
 
         if let Some(identity) = &column.identity {
-            if identity.always {
-                col_def.push_str(" GENERATED ALWAYS AS IDENTITY");
-            } else {
-                col_def.push_str(" GENERATED BY DEFAULT AS IDENTITY");
-            }
-
-            if identity.start != 1 {
-                col_def.push_str(&format!(" (START WITH {})", identity.start));
-            }
-
-            if identity.increment != 1 {
-                col_def.push_str(&format!(" (INCREMENT BY {})", identity.increment));
+            match identity.generation {
+                IdentityGeneration::Always => {
+                    col_def.push_str(" GENERATED ALWAYS AS IDENTITY");
+                }
+                IdentityGeneration::ByDefault => {
+                    col_def.push_str(" GENERATED BY DEFAULT AS IDENTITY");
+                }
             }
         }
 
         if let Some(generated) = &column.generated {
             col_def.push_str(&format!(" GENERATED ALWAYS AS ({})", generated.expression));
-            if generated.stored {
-                col_def.push_str(" STORED");
-            }
+            col_def.push_str(" STORED");
         }
 
         columns.push(col_def);
@@ -2107,28 +2096,32 @@ fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<Str
 }
 
 fn generate_create_range_type(range_type: &RangeType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", range_type.name);
+    let mut sql = format!("CREATE TYPE {}", range_type.info.name);
 
-    if let Some(schema) = &range_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, range_type.name);
+    if range_type.info.schema != "public" {
+        sql = format!(
+            "CREATE TYPE {}.{}",
+            range_type.info.schema, range_type.info.name
+        );
     }
 
     sql.push_str(" AS RANGE (SUBTYPE = ");
     sql.push_str(&range_type.subtype);
 
-    if let Some(opclass) = &range_type.subtype_opclass {
-        sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", opclass));
-    }
+    sql.push_str(&format!(
+        ", SUBTYPE_OPCLASS = {}",
+        range_type.subtype_opclass
+    ));
 
     if let Some(collation) = &range_type.collation {
         sql.push_str(&format!(", COLLATION = {}", collation));
     }
 
-    if let Some(canonical) = &range_type.canonical {
+    if let Some(canonical) = &range_type.canonical_fn {
         sql.push_str(&format!(", CANONICAL = {}", canonical));
     }
 
-    if let Some(subtype_diff) = &range_type.subtype_diff {
+    if let Some(subtype_diff) = &range_type.subtype_diff_fn {
         sql.push_str(&format!(", SUBTYPE_DIFF = {}", subtype_diff));
     }
 
@@ -2186,24 +2179,27 @@ fn generate_comments(schema: &Schema) -> Result<String> {
     }
 
     // Type comments
-    for (_, enum_type) in &schema.enums {
-        if let Some(comment) = &enum_type.comment {
-            comments.push_str(&format!(
-                "COMMENT ON TYPE {} IS '{}';\n",
-                enum_type.name,
-                comment.replace("'", "''")
-            ));
-        }
-    }
-
-    // Domain comments
-    for (_, domain) in &schema.domains {
-        if let Some(comment) = &domain.comment {
-            comments.push_str(&format!(
-                "COMMENT ON DOMAIN {} IS '{}';\n",
-                domain.name,
-                comment.replace("'", "''")
-            ));
+    for (name, type_def) in &schema.types {
+        match type_def {
+            Type::Enum(enum_type) => {
+                if let Some(comment) = &enum_type.info.comment {
+                    comments.push_str(&format!(
+                        "COMMENT ON TYPE {} IS '{}';\n",
+                        enum_type.info.name,
+                        comment.replace("'", "''")
+                    ));
+                }
+            }
+            Type::Domain(domain) => {
+                if let Some(comment) = &domain.info.comment {
+                    comments.push_str(&format!(
+                        "COMMENT ON DOMAIN {} IS '{}';\n",
+                        domain.info.name,
+                        comment.replace("'", "''")
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2246,10 +2242,13 @@ fn trigger_event_to_str(event: &TriggerEvent) -> &'static str {
 }
 
 fn generate_create_composite_type(composite_type: &CompositeType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", composite_type.name);
+    let mut sql = format!("CREATE TYPE {}", composite_type.info.name);
 
-    if let Some(schema) = &composite_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, composite_type.name);
+    if composite_type.info.schema != "public" {
+        sql = format!(
+            "CREATE TYPE {}.{}",
+            composite_type.info.schema, composite_type.info.name
+        );
     }
 
     sql.push_str(" AS (");
@@ -2268,135 +2267,172 @@ fn generate_create_composite_type(composite_type: &CompositeType) -> Result<Stri
 // SQL generation functions for the new objects
 fn generate_create_server(server: &Server) -> Result<String> {
     let mut sql = format!("CREATE SERVER {}", server.name);
-    
+
     if let Some(version) = &server.version {
         sql.push_str(&format!(" VERSION '{}'", version));
     }
-    
-    sql.push_str(&format!(" FOREIGN DATA WRAPPER {}", server.foreign_data_wrapper));
-    
+
+    sql.push_str(&format!(
+        " FOREIGN DATA WRAPPER {}",
+        server.foreign_data_wrapper
+    ));
+
     if !server.options.is_empty() {
-        let options: Vec<String> = server.options
+        let options: Vec<String> = server
+            .options
             .iter()
             .map(|(k, v)| format!("{} '{}'", k, v))
             .collect();
         sql.push_str(&format!(" OPTIONS ({})", options.join(", ")));
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_publication(publication: &Publication) -> Result<String> {
     let mut sql = format!("CREATE PUBLICATION {}", publication.name);
-    
+
     if publication.all_tables {
         sql.push_str(" FOR ALL TABLES");
     } else if !publication.tables.is_empty() {
         sql.push_str(&format!(" FOR TABLE {}", publication.tables.join(", ")));
     }
-    
+
     let mut operations = Vec::new();
-    if publication.insert { operations.push("INSERT"); }
-    if publication.update { operations.push("UPDATE"); }
-    if publication.delete { operations.push("DELETE"); }
-    if publication.truncate { operations.push("TRUNCATE"); }
-    
+    if publication.insert {
+        operations.push("INSERT");
+    }
+    if publication.update {
+        operations.push("UPDATE");
+    }
+    if publication.delete {
+        operations.push("DELETE");
+    }
+    if publication.truncate {
+        operations.push("TRUNCATE");
+    }
+
     if !operations.is_empty() {
         sql.push_str(&format!(" WITH ({})", operations.join(", ")));
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_subscription(subscription: &Subscription) -> Result<String> {
     let mut sql = format!("CREATE SUBSCRIPTION {}", subscription.name);
-    
+
     sql.push_str(&format!(" CONNECTION '{}'", subscription.connection));
-    sql.push_str(&format!(" PUBLICATION {}", subscription.publication.join(", ")));
-    
+    sql.push_str(&format!(
+        " PUBLICATION {}",
+        subscription.publication.join(", ")
+    ));
+
     if let Some(slot_name) = &subscription.slot_name {
         sql.push_str(&format!(" SLOT NAME {}", slot_name));
     }
-    
+
     if !subscription.enabled {
         sql.push_str(" WITH (enabled = false)");
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_role(role: &Role) -> Result<String> {
     let mut sql = format!("CREATE ROLE {}", role.name);
-    
+
     let mut options = Vec::new();
-    
-    if role.superuser { options.push("SUPERUSER".to_string()); }
-    if role.createdb { options.push("CREATEDB".to_string()); }
-    if role.createrole { options.push("CREATEROLE".to_string()); }
-    if role.inherit { options.push("INHERIT".to_string()); }
-    if role.login { options.push("LOGIN".to_string()); }
-    if role.replication { options.push("REPLICATION".to_string()); }
-    
+
+    if role.superuser {
+        options.push("SUPERUSER".to_string());
+    }
+    if role.createdb {
+        options.push("CREATEDB".to_string());
+    }
+    if role.createrole {
+        options.push("CREATEROLE".to_string());
+    }
+    if role.inherit {
+        options.push("INHERIT".to_string());
+    }
+    if role.login {
+        options.push("LOGIN".to_string());
+    }
+    if role.replication {
+        options.push("REPLICATION".to_string());
+    }
+
     if role.connection_limit != -1 {
         options.push(format!("CONNECTION LIMIT {}", role.connection_limit));
     }
-    
+
     if let Some(password) = &role.password {
         options.push(format!("PASSWORD '{}'", password));
     }
-    
+
     if let Some(valid_until) = &role.valid_until {
         options.push(format!("VALID UNTIL '{}'", valid_until));
     }
-    
+
     if !options.is_empty() {
         sql.push_str(&format!(" WITH {}", options.join(" ")));
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_tablespace(tablespace: &Tablespace) -> Result<String> {
     let mut sql = format!("CREATE TABLESPACE {}", tablespace.name);
-    
+
     sql.push_str(&format!(" OWNER {}", tablespace.owner));
     sql.push_str(&format!(" LOCATION '{}'", tablespace.location));
-    
+
     if !tablespace.options.is_empty() {
-        let options: Vec<String> = tablespace.options
+        let options: Vec<String> = tablespace
+            .options
             .iter()
             .map(|(k, v)| format!("{} = {}", k, v))
             .collect();
         sql.push_str(&format!(" WITH ({})", options.join(", ")));
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_foreign_key_constraint(fk: &ForeignKeyConstraint) -> Result<String> {
     let mut sql = format!("ALTER TABLE {}", fk.table);
-    
+
     if let Some(schema) = &fk.schema {
         sql = format!("ALTER TABLE {}.{}", schema, fk.table);
     }
-    
-    sql.push_str(&format!(" ADD CONSTRAINT {} FOREIGN KEY ({})", 
-        fk.name, fk.columns.join(", ")));
-    
+
+    sql.push_str(&format!(
+        " ADD CONSTRAINT {} FOREIGN KEY ({})",
+        fk.name,
+        fk.columns.join(", ")
+    ));
+
     sql.push_str(&format!(" REFERENCES {}", fk.references_table));
     if let Some(ref_schema) = &fk.references_schema {
         sql = format!("{}.{}", ref_schema, fk.references_table);
     }
     sql.push_str(&format!(" ({})", fk.references_columns.join(", ")));
-    
+
     if let Some(on_delete) = &fk.on_delete {
-        sql.push_str(&format!(" ON DELETE {}", referential_action_to_str(on_delete)));
+        sql.push_str(&format!(
+            " ON DELETE {}",
+            referential_action_to_str(on_delete)
+        ));
     }
-    
+
     if let Some(on_update) = &fk.on_update {
-        sql.push_str(&format!(" ON UPDATE {}", referential_action_to_str(on_update)));
+        sql.push_str(&format!(
+            " ON UPDATE {}",
+            referential_action_to_str(on_update)
+        ));
     }
-    
+
     if fk.deferrable {
         sql.push_str(" DEFERRABLE");
         if fk.initially_deferred {
@@ -2405,94 +2441,54 @@ fn generate_create_foreign_key_constraint(fk: &ForeignKeyConstraint) -> Result<S
             sql.push_str(" INITIALLY IMMEDIATE");
         }
     }
-    
+
     Ok(sql)
 }
 
 fn generate_create_base_type(base_type: &BaseType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", base_type.name);
-    
-    if let Some(schema) = &base_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, base_type.name);
+    let mut sql = format!("CREATE TYPE {}", base_type.info.name);
+
+    if base_type.info.schema != "public" {
+        sql = format!(
+            "CREATE TYPE {}.{}",
+            base_type.info.schema, base_type.info.name
+        );
     }
-    
-    if let Some(length) = base_type.internal_length {
-        sql.push_str(&format!(" (INTERNALLENGTH = {})", length));
+
+    if base_type.internal_length > 0 {
+        sql.push_str(&format!(
+            " (INTERNALLENGTH = {})",
+            base_type.internal_length
+        ));
     }
-    
+
     if base_type.is_passed_by_value {
         sql.push_str(" (PASSEDBYVALUE)");
     }
-    
+
     sql.push_str(&format!(" (ALIGNMENT = {})", base_type.alignment));
     sql.push_str(&format!(" (STORAGE = {})", base_type.storage));
-    
-    if let Some(category) = &base_type.category {
-        sql.push_str(&format!(" (CATEGORY = '{}')", category));
-    }
-    
-    if base_type.preferred {
+
+    sql.push_str(&format!(" (CATEGORY = '{}')", base_type.category));
+
+    if base_type.is_preferred {
         sql.push_str(" (PREFERRED = true)");
     }
-    
-    if let Some(default) = &base_type.default {
+
+    if let Some(default) = &base_type.default_value {
         sql.push_str(&format!(" (DEFAULT = '{}')", default));
     }
-    
-    if let Some(element) = &base_type.element {
+
+    if let Some(element) = &base_type.element_type_oid {
         sql.push_str(&format!(" (ELEMENT = {})", element));
     }
-    
-    if let Some(delimiter) = &base_type.delimiter {
-        sql.push_str(&format!(" (DELIMITER = '{}')", delimiter));
-    }
-    
-    if base_type.collatable {
+
+    sql.push_str(&format!(" (DELIMITER = '{}')", base_type.delimiter));
+
+    if base_type.is_collatable {
         sql.push_str(" (COLLATABLE = true)");
     }
-    
-    Ok(sql)
-}
 
-fn generate_create_array_type(array_type: &ArrayType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", array_type.name);
-    
-    if let Some(schema) = &array_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, array_type.name);
-    }
-    
-    sql.push_str(&format!(" AS {}[]", array_type.element_type));
-    
-    if let Some(element_schema) = &array_type.element_schema {
-        sql = format!("CREATE TYPE {}.{} AS {}.{}[]", 
-            array_type.schema.as_deref().unwrap_or("public"), 
-            array_type.name, 
-            element_schema, 
-            array_type.element_type);
-    }
-    
-    Ok(sql)
-}
-
-fn generate_create_multirange_type(multirange_type: &MultirangeType) -> Result<String> {
-    let mut sql = format!("CREATE TYPE {}", multirange_type.name);
-    
-    if let Some(schema) = &multirange_type.schema {
-        sql = format!("CREATE TYPE {}.{}", schema, multirange_type.name);
-    }
-    
-    sql.push_str(&format!(" AS MULTIRANGE (SUBTYPE = {}", multirange_type.range_type));
-    
-    if let Some(range_schema) = &multirange_type.range_schema {
-        sql = format!("CREATE TYPE {}.{} AS MULTIRANGE (SUBTYPE = {}.{})", 
-            multirange_type.schema.as_deref().unwrap_or("public"), 
-            multirange_type.name, 
-            range_schema, 
-            multirange_type.range_type);
-    }
-    
-    sql.push_str(")");
-    
     Ok(sql)
 }
 
