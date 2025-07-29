@@ -43,10 +43,9 @@ async fn test_introspect_basic_materialized_view() -> Result<(), Box<dyn std::er
     let view = schema.materialized_views.get("active_users").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.name, "active_users");
-    assert_eq!(view.schema, Some("public".to_string())); // Public schema
+    assert_eq!(view.schema, "public".to_string()); // Public schema
     assert!(view.definition.contains("SELECT id,\n    name\n   FROM users"));
-    assert_eq!(view.check_option, CheckOption::None); // Materialized views don't have check options
-    assert!(view.populate_with_data); // Should be populated with data
+    assert!(view.is_populated); // Should be populated with data
     assert!(view.indexes.is_empty()); // No indexes by default
 
     Ok(())
@@ -83,7 +82,7 @@ async fn test_introspect_materialized_view_with_schema() -> Result<(), Box<dyn s
     let view = schema.materialized_views.get("expensive_products").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.name, "expensive_products");
-    assert_eq!(view.schema, Some("test_schema".to_string()));
+    assert_eq!(view.schema, "test_schema".to_string());
     assert!(view.definition.contains("SELECT id,\n    name,\n    price\n   FROM test_schema.products"));
 
     Ok(())
@@ -192,7 +191,7 @@ async fn test_introspect_materialized_view_with_storage_parameters() -> Result<(
     // Verify the materialized view has storage parameters
     let view = schema.materialized_views.get("recent_logs").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
-    assert_eq!(view.storage_parameters.get("fillfactor"), Some(&"70".to_string()));
+    assert_eq!(view.options.get("fillfactor"), Some(&"70".to_string()));
 
     Ok(())
 }
@@ -896,8 +895,7 @@ async fn test_introspect_materialized_view_consistency() -> Result<(), Box<dyn s
     assert_eq!(view1.name, view2.name);
     assert_eq!(view1.schema, view2.schema);
     assert_eq!(view1.definition, view2.definition);
-    assert_eq!(view1.check_option, view2.check_option);
-    assert_eq!(view1.populate_with_data, view2.populate_with_data);
+    assert_eq!(view1.is_populated, view2.is_populated);
 
     Ok(())
 }

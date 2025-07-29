@@ -76,7 +76,7 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Trigger(t) => t.name.clone(),
             SchemaObject::ConstraintTrigger(t) => t.name.clone(),
             SchemaObject::EventTrigger(t) => t.name.clone(),
-            SchemaObject::Policy(p) => p.name.clone(),
+            SchemaObject::Policy(p) => p.name.as_ref().unwrap_or(&"__ENABLE_RLS__".to_string()).clone(),
             SchemaObject::Rule(r) => r.name.clone(),
             SchemaObject::NamedSchema(ns) => ns.name.clone(),
             SchemaObject::Server(s) => s.name.clone(),
@@ -100,14 +100,14 @@ impl<'a> SchemaObject<'a> {
             SchemaObject::Sequence(s) => s.schema.clone(),
             SchemaObject::Table(t) => Some(t.schema.clone()),
             SchemaObject::View(v) => Some(v.schema.clone()),
-            SchemaObject::MaterializedView(v) => v.schema.clone(),
+            SchemaObject::MaterializedView(v) => Some(v.schema.clone()),
             SchemaObject::Function(f) => f.schema.clone(),
             SchemaObject::Procedure(p) => p.schema.clone(),
             SchemaObject::Trigger(t) => t.schema.clone(),
             SchemaObject::ConstraintTrigger(t) => t.schema.clone(),
             SchemaObject::EventTrigger(_) => None, // Event triggers don't have schemas
-            SchemaObject::Policy(p) => p.schema.clone(),
-            SchemaObject::Rule(r) => r.schema.clone(),
+            SchemaObject::Policy(p) => Some(p.schema.clone()),
+            SchemaObject::Rule(r) => Some(r.schema.clone()),
             // Objects that don't have schemas
             SchemaObject::NamedSchema(_) => None, // NamedSchema is the schema itself
             SchemaObject::Server(_) => None,      // Servers don't have schemas
@@ -563,15 +563,20 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreateMaterializedView(create) => {
                     let view = MaterializedView {
+                        oid: 0, // Will be assigned during introspection
                         name: create.name,
-                        schema: create.schema,
+                        schema: create.schema.unwrap_or_else(|| "public".to_string()),
+                        owner: "postgres".to_string(), // Default owner
                         definition: create.query,
-                        check_option: CheckOption::None, // Materialized views don't have check options
-                        comment: None,
+                        columns: Vec::new(), // Will be populated during introspection
+                        is_populated: true, // Default to WITH DATA for parsed statements
+                        options: std::collections::HashMap::new(),
                         tablespace: None,
-                        storage_parameters: std::collections::HashMap::new(),
+                        acl: None,
+                        comment: None,
                         indexes: Vec::new(),
-                        populate_with_data: true, // Default to WITH DATA for parsed statements
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
                     schema.materialized_views.insert(view.name.clone(), view);
                 }
@@ -686,16 +691,21 @@ impl SchemaSerializer for SqlSerializer {
                 }
                 Statement::CreatePolicy(create) => {
                     let policy = Policy {
-                        name: create.name,
-                        table: create.table,
-                        schema: None,
+                        oid: 0, // Will be assigned during introspection
+                        name: Some(create.name),
+                        table_oid: 0, // Will be assigned during introspection
+                        table_name: create.table,
+                        schema: "public".to_string(), // Default schema
                         command: PolicyCommand::All,
                         permissive: create.permissive,
                         roles: create.roles,
                         using: create.using.map(|e| format!("{:?}", e)),
                         check: create.with_check.map(|e| format!("{:?}", e)),
+                        is_user_defined: true,
+                        is_from_extension: false,
                     };
-                    schema.policies.insert(policy.name.clone(), policy);
+                    let key = format!("{}.{}.{}", policy.schema, policy.table_name, policy.name.as_ref().unwrap());
+                    schema.policies.insert(key, policy);
                 }
 
                 _ => {}
@@ -1230,20 +1240,12 @@ fn get_object_dependencies(obj: &SchemaObject, schema: &Schema) -> Vec<String> {
         }
         SchemaObject::Policy(policy) => {
             // Policies depend on their table
-            let table_name = if let Some(schema) = &policy.schema {
-                format!("{}.{}", schema, policy.table)
-            } else {
-                policy.table.clone()
-            };
+            let table_name = format!("{}.{}", policy.schema, policy.table_name);
             dependencies.push(table_name);
         }
         SchemaObject::Rule(rule) => {
             // Rules depend on their table
-            let table_name = if let Some(schema) = &rule.schema {
-                format!("{}.{}", schema, rule.table)
-            } else {
-                rule.table.clone()
-            };
+            let table_name = format!("{}.{}", rule.schema, rule.table_name);
             dependencies.push(table_name);
         }
         SchemaObject::Sequence(seq) => {
@@ -1707,14 +1709,21 @@ fn generate_create_view(view: &View) -> Result<String> {
 }
 
 fn generate_create_materialized_view(view: &MaterializedView) -> Result<String> {
-    let mut sql = format!("CREATE MATERIALIZED VIEW {}", view.name);
-
-    if let Some(schema) = &view.schema {
-        sql = format!("CREATE MATERIALIZED VIEW {}.{}", schema, view.name);
-    }
+    let mut sql = if view.schema == "public" {
+        format!("CREATE MATERIALIZED VIEW {}", view.name)
+    } else {
+        format!("CREATE MATERIALIZED VIEW {}.{}", view.schema, view.name)
+    };
 
     sql.push_str(" AS ");
     sql.push_str(&view.definition);
+
+    // Add WITH DATA or WITH NO DATA based on is_populated
+    if view.is_populated {
+        sql.push_str(" WITH DATA");
+    } else {
+        sql.push_str(" WITH NO DATA");
+    }
 
     Ok(sql)
 }
@@ -1919,7 +1928,14 @@ fn generate_create_trigger(trigger: &Trigger) -> Result<String> {
 }
 
 fn generate_create_policy(policy: &Policy) -> Result<String> {
-    let mut sql = format!("CREATE POLICY {} ON {}", policy.name, policy.table);
+    if policy.name.is_none() {
+        // This is an ENABLE ROW LEVEL SECURITY policy
+        return Ok(format!("ALTER TABLE {}.{} ENABLE ROW LEVEL SECURITY;", 
+            policy.schema, policy.table_name));
+    }
+
+    let policy_name = policy.name.as_ref().unwrap();
+    let mut sql = format!("CREATE POLICY {} ON {}.{}", policy_name, policy.schema, policy.table_name);
 
     // Add command type
     let command_str = match policy.command {
@@ -2010,40 +2026,13 @@ fn generate_create_collation(collation: &Collation) -> Result<String> {
 }
 
 fn generate_create_rule(rule: &Rule) -> Result<String> {
-    let event_str = match rule.event {
-        RuleEvent::Select => "SELECT",
-        RuleEvent::Update => "UPDATE",
-        RuleEvent::Insert => "INSERT",
-        RuleEvent::Delete => "DELETE",
-    };
-
-    // Check if the action already contains INSTEAD to avoid duplication
-    let action_contains_instead = rule
-        .actions
-        .iter()
-        .any(|action| action.to_uppercase().contains("INSTEAD"));
-
-    let instead_str = if rule.instead && !action_contains_instead {
-        "INSTEAD "
-    } else {
-        ""
-    };
-
-    // Strip trailing semicolons from each action
-    let cleaned_actions: Vec<String> = rule
-        .actions
-        .iter()
-        .map(|a| a.trim_end_matches(';').trim().to_string())
-        .collect();
-
-    Ok(format!(
-        "CREATE RULE {} AS ON {} TO {} {}DO {}",
-        rule.name,
-        event_str,
-        rule.table,
-        instead_str,
-        cleaned_actions.join("; ")
-    ))
+    // The rule definition already contains the complete CREATE RULE statement
+    // We just need to ensure it ends with a semicolon
+    let mut sql = rule.definition.clone();
+    if !sql.trim_end().ends_with(';') {
+        sql.push(';');
+    }
+    Ok(sql)
 }
 
 fn generate_create_constraint_trigger(trigger: &ConstraintTrigger) -> Result<String> {

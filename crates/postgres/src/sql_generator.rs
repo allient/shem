@@ -690,8 +690,8 @@ impl SqlGenerator for PostgresSqlGenerator {
     fn create_materialized_view(&self, view: &MaterializedView) -> Result<String> {
         let view_name = Self::_quote_identifier(&view.name);
 
-        // Use the populate_with_data field to determine WITH DATA vs WITH NO DATA
-        let with_clause = if view.populate_with_data {
+        // Use the is_populated field to determine WITH DATA vs WITH NO DATA
+        let with_clause = if view.is_populated {
             "WITH DATA"
         } else {
             "WITH NO DATA"
@@ -957,19 +957,20 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_policy(&self, policy: &Policy) -> Result<String> {
-        let policy_name = Self::force_quote_identifier(&policy.name);
-        let table_name = Self::force_quote_identifier(&policy.table);
+        let policy_name = if let Some(name) = &policy.name {
+            Self::_quote_identifier(name)
+        } else {
+            return Ok(format!("ALTER TABLE {}.{} ENABLE ROW LEVEL SECURITY;", 
+                policy.schema, Self::_quote_identifier(&policy.table_name)));
+        };
+        let table_name = Self::_quote_identifier(&policy.table_name);
 
-        let mut sql = format!(
-            "CREATE POLICY {} ON {} AS {}",
-            policy_name,
-            table_name,
-            if policy.permissive {
-                "PERMISSIVE"
-            } else {
-                "RESTRICTIVE"
-            }
-        );
+        let mut sql = format!("CREATE POLICY {} ON {}", policy_name, table_name);
+
+        // Add permissive/restrictive only if not permissive (permissive is default)
+        if !policy.permissive {
+            sql.push_str(" AS RESTRICTIVE");
+        }
 
         // Add command type
         let command_str = match policy.command {
@@ -1039,10 +1040,10 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_materialized_view(&self, view: &MaterializedView) -> Result<String> {
-        let name = if let Some(schema) = &view.schema {
-            format!("{}.{}", schema, Self::_quote_identifier(&view.name))
-        } else {
+        let name = if view.schema == "public" {
             Self::_quote_identifier(&view.name)
+        } else {
+            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
         };
         Ok(format!(
             "DROP MATERIALIZED VIEW IF EXISTS {} CASCADE;",
@@ -1157,16 +1158,17 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn drop_policy(&self, policy: &Policy) -> Result<String> {
-        let policy_name = if let Some(schema) = &policy.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&policy.name))
-        } else {
-            Self::force_quote_identifier(&policy.name)
-        };
+        if policy.name.is_none() {
+            // This is an ENABLE ROW LEVEL SECURITY policy, so we disable RLS
+            return Ok(format!("ALTER TABLE {}.{} DISABLE ROW LEVEL SECURITY;", 
+                policy.schema, Self::_quote_identifier(&policy.table_name)));
+        }
 
-        let table_name = if let Some(schema) = &policy.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&policy.table))
+        let policy_name = Self::_quote_identifier(policy.name.as_ref().unwrap());
+        let table_name = if policy.schema != "public" {
+            format!("{}.{}", policy.schema, Self::_quote_identifier(&policy.table_name))
         } else {
-            Self::force_quote_identifier(&policy.table)
+            Self::_quote_identifier(&policy.table_name)
         };
 
         Ok(format!(
@@ -1335,68 +1337,21 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
 
     fn create_rule(&self, rule: &Rule) -> Result<String> {
-        let rule_name = if Self::is_reserved_keyword(&rule.name) {
-            format!("\"{}\"", rule.name)
-        } else {
-            Self::force_quote_identifier(&rule.name)
-        };
-
-        let table_name = if let Some(schema) = &rule.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&rule.table))
-        } else {
-            Self::force_quote_identifier(&rule.table)
-        };
-
-        let event_str = match rule.event {
-            RuleEvent::Select => "TO SELECT",
-            RuleEvent::Update => "TO UPDATE",
-            RuleEvent::Insert => "TO INSERT",
-            RuleEvent::Delete => "TO DELETE",
-        };
-
-        let mut sql = format!(
-            "CREATE RULE {} AS ON {} {}",
-            rule_name, table_name, event_str
-        );
-
-        if let Some(condition) = &rule.condition {
-            sql.push_str(&format!(" WHERE ({})", condition));
+        // The rule definition already contains the complete CREATE RULE statement
+        // We just need to ensure it ends with a semicolon
+        let mut sql = rule.definition.clone();
+        if !sql.trim_end().ends_with(';') {
+            sql.push(';');
         }
-
-        if rule.instead {
-            sql.push_str(" DO INSTEAD");
-        } else {
-            sql.push_str(" DO ALSO");
-        }
-
-        if rule.actions.len() == 1 {
-            let action = &rule.actions[0];
-            if action == "DO NOTHING" {
-                sql.push_str(" NOTHING");
-            } else {
-                sql.push_str(&format!(" {}", action));
-            }
-        } else {
-            sql.push_str(" (");
-            sql.push_str(&rule.actions.join("; "));
-            sql.push_str(")");
-        }
-
-        sql.push(';');
         Ok(sql)
     }
 
     fn drop_rule(&self, rule: &Rule) -> Result<String> {
-        let rule_name = if let Some(schema) = &rule.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&rule.name))
+        let rule_name = Self::_quote_identifier(&rule.name);
+        let table_name = if rule.schema != "public" {
+            format!("{}.{}", rule.schema, Self::_quote_identifier(&rule.table_name))
         } else {
-            Self::force_quote_identifier(&rule.name)
-        };
-
-        let table_name = if let Some(schema) = &rule.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&rule.table))
-        } else {
-            Self::force_quote_identifier(&rule.table)
+            Self::_quote_identifier(&rule.table_name)
         };
 
         Ok(format!(

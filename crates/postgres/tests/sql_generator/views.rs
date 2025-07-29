@@ -51,15 +51,20 @@ fn test_drop_view() {
 #[test]
 fn test_create_materialized_view_with_data() {
     let view = MaterializedView {
+        oid: 0,
         name: "my_view".to_string(),
-        schema: None,
+        schema: "public".to_string(),
+        owner: "postgres".to_string(),
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: CheckOption::None,
-        comment: None,
+        columns: vec![],
+        is_populated: true,
+        options: std::collections::HashMap::new(),
         tablespace: None,
-        storage_parameters: std::collections::HashMap::new(),
+        acl: None,
+        comment: None,
         indexes: vec![],
-        populate_with_data: true,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.create_materialized_view(&view).unwrap();
@@ -69,15 +74,20 @@ fn test_create_materialized_view_with_data() {
 #[test]
 fn test_create_materialized_view_with_no_data() {
     let view = MaterializedView {
+        oid: 0,
         name: "my_view".to_string(),
-        schema: None,
+        schema: "public".to_string(),
+        owner: "postgres".to_string(),
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: CheckOption::None,
-        comment: None,
+        columns: vec![],
+        is_populated: false,
+        options: std::collections::HashMap::new(),
         tablespace: None,
-        storage_parameters: std::collections::HashMap::new(),
+        acl: None,
+        comment: None,
         indexes: vec![],
-        populate_with_data: false,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.create_materialized_view(&view).unwrap();
@@ -87,15 +97,20 @@ fn test_create_materialized_view_with_no_data() {
 #[test]
 fn test_create_materialized_view_with_reserved_keyword() {
     let view = MaterializedView {
+        oid: 0,
         name: "order".to_string(), // Reserved keyword
-        schema: None,
+        schema: "public".to_string(),
+        owner: "postgres".to_string(),
         definition: "SELECT * FROM big_table".to_string(),
-        check_option: CheckOption::None,
-        comment: None,
+        columns: vec![],
+        is_populated: true,
+        options: std::collections::HashMap::new(),
         tablespace: None,
-        storage_parameters: std::collections::HashMap::new(),
+        acl: None,
+        comment: None,
         indexes: vec![],
-        populate_with_data: true,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.create_materialized_view(&view).unwrap();
@@ -105,15 +120,20 @@ fn test_create_materialized_view_with_reserved_keyword() {
 #[test]
 fn test_drop_materialized_view() {
     let view = MaterializedView {
+        oid: 0,
         name: "mat_view".to_string(),
-        schema: None,
+        schema: "public".to_string(),
+        owner: "postgres".to_string(),
         definition: "SELECT * FROM my_table".to_string(),
-        check_option: CheckOption::None,
-        comment: None,
+        columns: vec![],
+        is_populated: true,
+        options: std::collections::HashMap::new(),
         tablespace: None,
-        storage_parameters: std::collections::HashMap::new(),
+        acl: None,
+        comment: None,
         indexes: vec![],
-        populate_with_data: true,
+        is_user_defined: true,
+        is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
     let sql = generator.drop_materialized_view(&view).unwrap();

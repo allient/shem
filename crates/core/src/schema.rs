@@ -152,17 +152,22 @@ pub struct View {
     pub is_from_extension: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaterializedView {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
+    pub schema: String,
+    pub owner: String,
     pub definition: String,
-    pub check_option: CheckOption,
+    pub columns: Vec<Column>, // Matviews have columns, just like tables/views
+    pub is_populated: bool,   // Authoritative flag for WITH DATA / WITH NO DATA
+    pub options: HashMap<String, String>,
+    pub tablespace: Option<String>,
+    pub acl: Option<String>,
     pub comment: Option<String>,
-    pub tablespace: Option<String>, // Added: tablespace assignment
-    pub storage_parameters: HashMap<String, String>, // Added: WITH parameters
-    pub indexes: Vec<Index>,        // Added: materialized view indexes
-    pub populate_with_data: bool,   // Added: controls WITH DATA vs WITH NO DATA
+    pub indexes: Vec<Index>, // Indexes are important for matviews
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -263,14 +268,18 @@ pub struct Trigger {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Policy {
-    pub name: String,
-    pub table: String,
-    pub schema: Option<String>, // Added: schema field
-    pub command: PolicyCommand, // Enhanced: specific command type
+    pub oid: u32,
+    pub name: Option<String>, // None signifies 'ENABLE ROW LEVEL SECURITY'
+    pub table_oid: u32,
+    pub table_name: String,
+    pub schema: String,
+    pub command: PolicyCommand,
     pub permissive: bool,
-    pub roles: Vec<String>,
+    pub roles: Vec<String>, // List of role names
     pub using: Option<String>,
     pub check: Option<String>,
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -317,15 +326,17 @@ pub struct Collation {
     pub is_from_extension: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
+    pub oid: u32,
     pub name: String,
-    pub table: String,
-    pub schema: Option<String>,
-    pub event: RuleEvent,
-    pub instead: bool,
-    pub condition: Option<String>, // Added: WHERE condition
-    pub actions: Vec<String>,      // Enhanced: multiple actions
+    pub table_oid: u32,
+    pub table_name: String,
+    pub schema: String,
+    pub definition: String, // The full, raw CREATE RULE statement text
+    pub comment: Option<String>,
+    pub is_user_defined: bool, // Though all non-_RETURN rules are
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

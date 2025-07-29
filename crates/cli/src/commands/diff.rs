@@ -346,15 +346,20 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreateMaterializedView(create) => {
             let view = shem_core::MaterializedView {
+                oid: 0, // Will be assigned during introspection
                 name: create.name.clone(),
-                schema: create.schema.clone(),
+                schema: create.schema.clone().unwrap_or_else(|| "public".to_string()),
+                owner: "postgres".to_string(), // Default owner
                 definition: create.query.clone(),
-                check_option: shem_core::schema::CheckOption::None, // Materialized views don't have check options
-                comment: None,
+                columns: Vec::new(), // Will be populated during introspection
+                is_populated: true, // Default to WITH DATA for parsed statements
+                options: std::collections::HashMap::new(),
                 tablespace: None,
-                storage_parameters: std::collections::HashMap::new(),
+                acl: None,
+                comment: None,
                 indexes: Vec::new(),
-                populate_with_data: true, // Default to WITH DATA for parsed statements
+                is_user_defined: true,
+                is_from_extension: false,
             };
             schema.materialized_views.insert(view.name.clone(), view);
         }
@@ -565,9 +570,11 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
         }
         ParserStatement::CreatePolicy(create) => {
             let policy = shem_core::Policy {
-                name: create.name.clone(),
-                table: create.table.clone(),
-                schema: None,
+                oid: 0, // Will be assigned during introspection
+                name: Some(create.name.clone()),
+                table_oid: 0, // Will be assigned during introspection
+                table_name: create.table.clone(),
+                schema: "public".to_string(), // Default schema
                 command: match create.command {
                     PolicyCommand::All => shem_core::schema::PolicyCommand::All,
                     PolicyCommand::Select => shem_core::schema::PolicyCommand::Select,
@@ -579,8 +586,11 @@ fn add_statement_to_schema(schema: &mut Schema, stmt: &ParserStatement) -> Resul
                 roles: create.roles.clone(),
                 using: create.using.as_ref().map(|u| format!("{:?}", u)),
                 check: create.with_check.as_ref().map(|c| format!("{:?}", c)),
+                is_user_defined: true,
+                is_from_extension: false,
             };
-            schema.policies.insert(policy.name.clone(), policy);
+            let key = format!("{}.{}.{}", policy.schema, policy.table_name, policy.name.as_ref().unwrap());
+            schema.policies.insert(key, policy);
         }
         ParserStatement::CreateServer(create) => {
             let server = shem_core::Server {

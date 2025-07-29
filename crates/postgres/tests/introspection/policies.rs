@@ -29,9 +29,9 @@ async fn test_introspect_basic_policy() -> Result<(), Box<dyn std::error::Error>
     debug!("Introspected policies: {:?}", schema.policies);
 
     // Verify the policy exists
-    let policy = schema.policies.get("select_policy").expect("Policy should exist");
-    assert_eq!(policy.name, "select_policy");
-    assert_eq!(policy.table, "users");
+    let policy = schema.policies.get("public.users.select_policy").expect("Policy should exist");
+    assert_eq!(policy.name, Some("select_policy".to_string()));
+    assert_eq!(policy.table_name, "users");
     assert_eq!(policy.command, PolicyCommand::Select);
     assert!(policy.permissive); // Default is permissive
     assert_eq!(policy.using.as_deref(), Some("true"));
@@ -55,10 +55,10 @@ async fn test_introspect_policy_with_schema() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the policy exists in the schema
-    let policy = schema.policies.get("product_policy").expect("Policy should exist");
-    assert_eq!(policy.name, "product_policy");
-    assert_eq!(policy.table, "products");
-    assert_eq!(policy.schema, Some("app_schema".to_string()));
+    let policy = schema.policies.get("app_schema.products.product_policy").expect("Policy should exist");
+    assert_eq!(policy.name, Some("product_policy".to_string()));
+    assert_eq!(policy.table_name, "products");
+    assert_eq!(policy.schema, "app_schema".to_string());
     assert_eq!(policy.command, PolicyCommand::Select);
     assert_eq!(policy.using.as_deref(), Some("(id > 0)"));
 
@@ -80,9 +80,9 @@ async fn test_introspect_policy_with_roles() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the policy exists with roles
-    let policy = schema.policies.get("admin_policy").expect("Policy should exist");
-    assert_eq!(policy.name, "admin_policy");
-    assert_eq!(policy.table, "documents");
+    let policy = schema.policies.get("public.documents.admin_policy").expect("Policy should exist");
+    assert_eq!(policy.name, Some("admin_policy".to_string()));
+    assert_eq!(policy.table_name, "documents");
     assert_eq!(policy.command, PolicyCommand::All);
     assert_eq!(policy.roles, vec!["postgres"]);
     assert_eq!(policy.using.as_deref(), Some("true"));
@@ -105,9 +105,9 @@ async fn test_introspect_policy_with_check() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the policy exists with check condition
-    let policy = schema.policies.get("insert_policy").expect("Policy should exist");
-    assert_eq!(policy.name, "insert_policy");
-    assert_eq!(policy.table, "orders");
+    let policy = schema.policies.get("public.orders.insert_policy").expect("Policy should exist");
+    assert_eq!(policy.name, Some("insert_policy".to_string()));
+    assert_eq!(policy.table_name, "orders");
     assert_eq!(policy.command, PolicyCommand::Insert);
     // Check for substrings to handle PostgreSQL's normalization
     let check_condition = policy.check.as_deref().unwrap();
@@ -132,9 +132,9 @@ async fn test_introspect_restrictive_policy() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the restrictive policy exists
-    let policy = schema.policies.get("restrictive_policy").expect("Policy should exist");
-    assert_eq!(policy.name, "restrictive_policy");
-    assert_eq!(policy.table, "sensitive_data");
+    let policy = schema.policies.get("public.sensitive_data.restrictive_policy").expect("Policy should exist");
+    assert_eq!(policy.name, Some("restrictive_policy".to_string()));
+    assert_eq!(policy.table_name, "sensitive_data");
     assert_eq!(policy.command, PolicyCommand::Select);
     assert!(!policy.permissive); // Should be restrictive
     assert_eq!(policy.using.as_deref(), Some("false"));
@@ -166,23 +166,23 @@ async fn test_introspect_multiple_policies() -> Result<(), Box<dyn std::error::E
     assert_eq!(schema.policies.len(), 4);
 
     // Check select policy
-    let select_policy = schema.policies.get("select_employees").expect("Select policy should exist");
+    let select_policy = schema.policies.get("public.employees.select_employees").expect("Select policy should exist");
     assert_eq!(select_policy.command, PolicyCommand::Select);
     assert_eq!(select_policy.using.as_deref(), Some("(department = 'IT'::text)"));
 
     // Check insert policy
-    let insert_policy = schema.policies.get("insert_employees").expect("Insert policy should exist");
+    let insert_policy = schema.policies.get("public.employees.insert_employees").expect("Insert policy should exist");
     assert_eq!(insert_policy.command, PolicyCommand::Insert);
     assert_eq!(insert_policy.check.as_deref(), Some("(name IS NOT NULL)"));
 
     // Check update policy
-    let update_policy = schema.policies.get("update_employees").expect("Update policy should exist");
+    let update_policy = schema.policies.get("public.employees.update_employees").expect("Update policy should exist");
     assert_eq!(update_policy.command, PolicyCommand::Update);
     assert_eq!(update_policy.using.as_deref(), Some("(id > 0)"));
     assert_eq!(update_policy.check.as_deref(), Some("(department IS NOT NULL)"));
 
     // Check delete policy
-    let delete_policy = schema.policies.get("delete_employees").expect("Delete policy should exist");
+    let delete_policy = schema.policies.get("public.employees.delete_employees").expect("Delete policy should exist");
     assert_eq!(delete_policy.command, PolicyCommand::Delete);
     assert_eq!(delete_policy.using.as_deref(), Some("(id > 100)"));
 
@@ -204,9 +204,9 @@ async fn test_introspect_policy_with_complex_conditions() -> Result<(), Box<dyn 
     let schema = connection.introspect().await?;
 
     // Verify the policy with complex condition exists
-    let policy = schema.policies.get("user_logs").expect("Policy should exist");
-    assert_eq!(policy.name, "user_logs");
-    assert_eq!(policy.table, "logs");
+    let policy = schema.policies.get("public.logs.user_logs").expect("Policy should exist");
+    assert_eq!(policy.name, Some("user_logs".to_string()));
+    assert_eq!(policy.table_name, "logs");
     assert_eq!(policy.command, PolicyCommand::Select);
     let using_condition = policy.using.as_deref().unwrap();
     assert!(using_condition.contains("user_id = (current_setting('app.user_id'::text))::integer"));
@@ -230,12 +230,12 @@ async fn test_introspect_policy_consistency() -> Result<(), Box<dyn std::error::
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let policy1 = schema1.policies.get("test_policy").unwrap();
-    let policy2 = schema2.policies.get("test_policy").unwrap();
+    let policy1 = schema1.policies.get("public.test_table.test_policy").unwrap();
+    let policy2 = schema2.policies.get("public.test_table.test_policy").unwrap();
 
     // Verify consistency
     assert_eq!(policy1.name, policy2.name);
-    assert_eq!(policy1.table, policy2.table);
+    assert_eq!(policy1.table_name, policy2.table_name);
     assert_eq!(policy1.schema, policy2.schema);
     assert_eq!(policy1.command, policy2.command);
     assert_eq!(policy1.permissive, policy2.permissive);

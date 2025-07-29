@@ -5,14 +5,18 @@ use postgres::PostgresSqlGenerator;
 #[test]
 fn test_create_policy() {
     let policy = Policy {
-        name: "user_access_policy".to_string(),
-        table: "users".to_string(),
-        schema: Some("public".to_string()),
+        oid: 0,
+        name: Some("user_access_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::All,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("user_id = current_user_id()".to_string()),
         check: Some("user_id = current_user_id()".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -28,14 +32,18 @@ fn test_create_policy() {
 #[test]
 fn test_create_policy_select_only() {
     let policy = Policy {
-        name: "read_policy".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("read_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Select,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("active = true".to_string()),
         check: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -51,14 +59,18 @@ fn test_create_policy_select_only() {
 #[test]
 fn test_create_policy_insert_only() {
     let policy = Policy {
-        name: "insert_policy".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("insert_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Insert,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: None,
         check: Some("email IS NOT NULL".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -74,14 +86,18 @@ fn test_create_policy_insert_only() {
 #[test]
 fn test_create_policy_update_only() {
     let policy = Policy {
-        name: "update_policy".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("update_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Update,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("user_id = current_user_id()".to_string()),
         check: Some("user_id = current_user_id()".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -97,14 +113,18 @@ fn test_create_policy_update_only() {
 #[test]
 fn test_create_policy_delete_only() {
     let policy = Policy {
-        name: "delete_policy".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("delete_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Delete,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("user_id = current_user_id()".to_string()),
         check: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -120,14 +140,18 @@ fn test_create_policy_delete_only() {
 #[test]
 fn test_create_policy_specific_roles() {
     let policy = Policy {
-        name: "admin_policy".to_string(),
-        table: "users".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("admin_policy".to_string()),
+        table_oid: 0,
+        table_name: "users".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::All,
         permissive: true,
         roles: vec!["admin".to_string(), "superuser".to_string()],
         using: Some("true".to_string()),
         check: Some("true".to_string()),
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -143,14 +167,18 @@ fn test_create_policy_specific_roles() {
 #[test]
 fn test_create_policy_with_reserved_keyword() {
     let policy = Policy {
-        name: "order".to_string(), // Reserved keyword
-        table: "orders".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("order".to_string()),
+        table_oid: 0,
+        table_name: "orders".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Select,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("user_id = current_user_id()".to_string()),
         check: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -165,14 +193,18 @@ fn test_create_policy_with_reserved_keyword() {
 #[test]
 fn test_drop_policy() {
     let policy = Policy {
-        name: "my_policy".to_string(),
-        table: "my_table".to_string(),
-        schema: None,
+        oid: 0,
+        name: Some("my_policy".to_string()),
+        table_oid: 0,
+        table_name: "my_table".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Select,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("true".to_string()),
         check: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
@@ -184,18 +216,22 @@ fn test_drop_policy() {
 #[test]
 fn test_drop_policy_with_schema() {
     let policy = Policy {
-        name: "my_policy".to_string(),
-        table: "my_table".to_string(),
-        schema: Some("public".to_string()),
+        oid: 0,
+        name: Some("my_policy".to_string()),
+        table_oid: 0,
+        table_name: "my_table".to_string(),
+        schema: "public".to_string(),
         command: PolicyCommand::Select,
         permissive: true,
         roles: vec!["PUBLIC".to_string()],
         using: Some("true".to_string()),
         check: None,
+        is_user_defined: true,
+        is_from_extension: false,
     };
 
     let generator = PostgresSqlGenerator;
     let result = generator.drop_policy(&policy).unwrap();
     
-    assert_eq!(result, "DROP POLICY IF EXISTS public.my_policy ON public.my_table CASCADE;");
+    assert_eq!(result, "DROP POLICY IF EXISTS my_policy ON my_table CASCADE;");
 } 

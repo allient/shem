@@ -114,20 +114,32 @@ where
     }
 
     // Introspect materialized views
-    let materialized_views = introspect_materialized_views(&*client).await?;
+    let materialized_views = introspect_materialized_views_unified(&*client).await?;
     for view in materialized_views {
         schema.materialized_views.insert(view.name.clone(), view);
     }
 
     // Introspect policies
-    let policies = introspect_policies(&*client).await?;
+    let policies = introspect_policies(&*client, false).await?;
     for policy in policies {
-        debug!("Policy: {:?}", policy);
-        schema.policies.insert(policy.name.clone(), policy);
+        // 1. Determine the correct, unique key for the HashMap.
+        let key = if let Some(policy_name) = &policy.name {
+            // This is a regular policy: "schema.table.policy"
+            format!("{}.{}.{}", policy.schema, policy.table_name, policy_name)
+        } else {
+            // This is the special 'ENABLE ROW LEVEL SECURITY' object.
+            // We create a synthetic, unique key for it.
+            format!("{}.{}.__ENABLE_RLS__", policy.schema, policy.table_name)
+        };
+
+        debug!("Policy found: {:?}, using key: {}", policy, key);
+
+        // 2. Insert into the HashMap using the new unique key.
+        schema.policies.insert(key, policy);
     }
 
     // Introspect rules
-    let rules = introspect_rules(&*client).await?;
+    let rules = introspect_rules(&*client, false).await?;
     for rule in &rules {
         debug!("Rule: {:?}", rule);
     }
@@ -1487,7 +1499,10 @@ pub async fn introspect_views_unified<C: GenericClient>(client: &C) -> Result<Ve
     let column_exists_row = client.query_one(column_exists_query, &[]).await?;
     let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    tracing::debug!("datlastsysoid column exists (views): {}", datlastsysoid_exists);
+    tracing::debug!(
+        "datlastsysoid column exists (views): {}",
+        datlastsysoid_exists
+    );
 
     // Get the last system OID to reliably distinguish system objects.
     let last_system_oid: u32 = if datlastsysoid_exists {
@@ -1611,96 +1626,95 @@ async fn introspect_all_columns_for_relations<C: GenericClient>(
     Ok(map)
 }
 
-async fn introspect_materialized_views<C: GenericClient>(
+pub async fn introspect_materialized_views_unified<C: GenericClient>(
     client: &C,
 ) -> Result<Vec<MaterializedView>> {
-    let query = r#"
-        SELECT 
-            mv.schemaname,
-            mv.matviewname,
-            mv.definition,
-            c.reloptions as storage_parameters,
-            c.reltablespace as tablespace_oid,
-            -- Check if the materialized view has been populated with data
-            -- Materialized views are typically created WITH DATA by default unless explicitly specified WITH NO DATA
-            -- We check if the view has any tuples, but this might not be reliable for empty tables
-            (SELECT EXISTS (
-                SELECT 1 FROM pg_class c 
-                JOIN pg_namespace n ON c.relnamespace = n.oid 
-                WHERE c.relname = mv.matviewname 
-                AND n.nspname = mv.schemaname 
-                AND c.reltuples >= 0  -- Changed from > 0 to >= 0 since empty tables are still valid
-            )) as has_data,
-            -- Get comment on the materialized view
-            (SELECT description FROM pg_description d
-             JOIN pg_class c2 ON d.objoid = c2.oid
-             JOIN pg_namespace n2 ON c2.relnamespace = n2.oid
-             WHERE c2.relname = mv.matviewname 
-             AND n2.nspname = mv.schemaname
-             AND d.objsubid = 0) as comment
-        FROM pg_matviews mv
-        JOIN pg_class c ON c.relname = mv.matviewname
-        JOIN pg_namespace n ON c.relnamespace = n.oid AND n.nspname = mv.schemaname
-        WHERE mv.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND c.relowner > 1
-        AND NOT EXISTS (
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = c.oid AND d.deptype = 'e'
-        )
+    // 1. Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
     "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
 
-    let rows = client.query(query, &[]).await?;
-    let mut views = Vec::new();
+    tracing::debug!(
+        "datlastsysoid column exists (materialized views): {}",
+        datlastsysoid_exists
+    );
 
-    for row in rows {
-        let schema: Option<String> = row.get("schemaname");
-        let name: String = row.get("matviewname");
-        let definition: String = row.get("definition");
-        let storage_parameters: Option<Vec<String>> = row.get("storage_parameters");
-        let tablespace_oid: Option<u32> = row.get("tablespace_oid");
-        let comment: Option<String> = row.get("comment");
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        16384 // Default OID for older PostgreSQL versions
+    };
 
-        // Materialized views are created WITH DATA by default unless explicitly specified WITH NO DATA
-        // Since we can't reliably determine this from the system catalogs, we assume WITH DATA for existing views
-        // The user can explicitly create views with WITH NO DATA if needed
-        let populate_with_data = true;
+    // --- QUERY 1: Fetch ALL relations, adding matview-specific fields ---
+    let relations_query = r#"
+        SELECT
+            c.oid, c.relname AS name, n.nspname AS schema_name, pg_get_userbyid(c.relowner) AS owner,
+            c.relkind, obj_description(c.oid, 'pg_class') AS comment,
+            ts.spcname AS tablespace, c.relacl::text AS acl,
+            c.reloptions AS options,
+            -- Materialized View-specific properties
+            c.relispopulated AS is_populated,
+            pg_get_viewdef(c.oid) AS definition,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_tablespace ts ON c.reltablespace = ts.oid
+        WHERE c.relkind = 'm'; -- IMPORTANT: Filter for only materialized views ('m')
+    "#;
+    let relation_rows = client.query(relations_query, &[]).await?;
 
-        // Get tablespace name if available
-        let tablespace = if let Some(oid) = tablespace_oid {
-            let ts_query = "SELECT spcname FROM pg_tablespace WHERE oid = $1";
-            if let Ok(ts_rows) = client.query(ts_query, &[&oid]).await {
-                ts_rows.first().map(|row| row.get::<_, String>("spcname"))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+    let all_matview_oids: Vec<u32> = relation_rows.iter().map(|row| row.get("oid")).collect();
 
-        // Get indexes for this materialized view
-        let indexes = introspect_indexes(client, &schema, &name).await?;
+    // --- BULK QUERIES for sub-objects of these matviews ---
+    let columns_map = introspect_all_columns_for_relations(client, &all_matview_oids).await?;
+    let indexes_map = introspect_all_indexes(client, &all_matview_oids).await?;
 
-        // Parse storage parameters
-        let storage_params = storage_parameters
-            .as_deref()
-            .map(parse_server_options)
-            .unwrap_or_default();
+    // --- Assemble the final Vec<MaterializedView> ---
+    let mut matviews = Vec::new();
+    for row in relation_rows {
+        let oid: u32 = row.get("oid");
 
-        views.push(MaterializedView {
-            name,
-            schema,
-            definition,
-            check_option: CheckOption::None, // Materialized views don't have check options
-            comment,
-            tablespace,
-            storage_parameters: storage_params,
-            indexes,
-            populate_with_data, // Use actual data presence to determine WITH DATA vs WITH NO DATA
-        });
+        let is_user_defined = oid > last_system_oid;
+        let is_from_extension: bool = row.get("is_from_extension");
+
+        // Filter for dumpable materialized views
+        if is_user_defined && !is_from_extension {
+            matviews.push(MaterializedView {
+                oid,
+                name: row.get("name"),
+                schema: row.get("schema_name"),
+                owner: row.get("owner"),
+                definition: row.get("definition"),
+                comment: row.get("comment"),
+                acl: row.get("acl"),
+                is_populated: row.get("is_populated"),
+                columns: columns_map.get(&oid).cloned().unwrap_or_default(),
+                indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
+                options: pg_options_to_map(row.get("options")),
+                tablespace: row.get("tablespace"),
+                is_user_defined,
+                is_from_extension,
+            });
+        }
     }
 
-    Ok(views)
+    Ok(matviews)
 }
 
 async fn introspect_functions<C: GenericClient>(client: &C) -> Result<Vec<Function>> {
@@ -2217,84 +2231,166 @@ async fn introspect_triggers<C: GenericClient + Sync>(client: &C) -> Result<Vec<
     Ok(triggers)
 }
 
-async fn introspect_policies<C: GenericClient>(client: &C) -> Result<Vec<Policy>> {
-    let query = r#"
+// This function now fetches all policies efficiently and assembles them.
+pub async fn introspect_policies<C: GenericClient>(
+    client: &C,
+    include_predefined: bool,
+) -> Result<Vec<Policy>> {
+    // 1. Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    tracing::debug!(
+        "datlastsysoid column exists (policies): {}",
+        datlastsysoid_exists
+    );
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    tracing::debug!("Last system OID (policies): {}", last_system_oid);
+
+    let roles_map = get_roles_oid_map(client).await?; // Helper to get OID -> name
+
+    // --- QUERY 1: Fetch all policies and their properties ---
+    let policies_query = r#"
         SELECT 
-            p.polname as policy_name,
-            c.relname as table_name,
-            n.nspname as schema_name,
-            p.polpermissive as permissive,
-            p.polroles as roles,
-                            p.polcmd::text as command,
-            pg_get_expr(p.polqual, p.polrelid) as using_expression,
-            pg_get_expr(p.polwithcheck, p.polrelid) as check_expression,
-            c.relowner as owner
+            p.oid, p.polname AS name,
+            c.oid AS table_oid, c.relname AS table_name, n.nspname AS schema_name,
+            p.polpermissive AS permissive, p.polroles AS role_oids,
+            p.polcmd,
+            pg_get_expr(p.polqual, p.polrelid) AS using_expression,
+            pg_get_expr(p.polwithcheck, p.polrelid) AS check_expression,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = p.oid AND d.classid = 'pg_policy'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_policy p
         JOIN pg_class c ON p.polrelid = c.oid
-        JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-        AND c.relowner > 1  -- exclude system-owned tables
-        AND NOT EXISTS (
-            -- Exclude policies on tables that are part of extensions
-            SELECT 1 FROM pg_depend d
-            JOIN pg_extension e ON d.refobjid = e.oid
-            WHERE d.objid = c.oid AND d.deptype = 'e'
-        )
+        JOIN pg_namespace n ON c.relnamespace = n.oid;
     "#;
+    let policy_rows = client.query(policies_query, &[]).await?;
 
-    let rows = client.query(query, &[]).await?;
-    let mut policies = Vec::new();
+    // --- QUERY 2: Fetch all tables with Row Level Security enabled ---
+    let rls_enabled_query = "SELECT oid FROM pg_class WHERE relrowsecurity";
+    let rls_enabled_rows = client.query(rls_enabled_query, &[]).await?;
+    let rls_enabled_oids: HashMap<u32, bool> = rls_enabled_rows
+        .into_iter()
+        .map(|r| (r.get("oid"), true))
+        .collect();
 
-    for row in rows {
-        let name: String = row.get("policy_name");
-        let table: String = row.get("table_name");
-        let schema: Option<String> = row.get("schema_name");
-        let permissive: bool = row.get("permissive");
-        let roles: Vec<u32> = row.get("roles");
-        let command: &str = row.get("command");
-        let command_char = command.chars().next().unwrap_or('*');
-        // Parse command to PolicyCommand enum
-        // PostgreSQL stores: 'r'=SELECT, 'a'=INSERT, 'w'=UPDATE, 'd'=DELETE, '*'=ALL
-        debug!("Raw command value from PostgreSQL: {}", command_char);
-        let policy_command = match command_char {
+    // --- Assemble final Vec<Policy> ---
+    let mut all_policies = Vec::new();
+
+    // First, create entries for the policies themselves
+    for row in policy_rows {
+        let oid: u32 = row.get("oid");
+        let role_oids: Vec<u32> = row.get("role_oids");
+
+        let roles = if role_oids.is_empty() || (role_oids.len() == 1 && role_oids[0] == 0) {
+            vec!["PUBLIC".to_string()] // OID 0 in polroles means PUBLIC
+        } else {
+            role_oids
+                .iter()
+                .filter_map(|&oid| roles_map.get(&oid).cloned())
+                .collect()
+        };
+
+        let command_char: i8 = row.get("polcmd");
+        let policy_command = match command_char as u8 as char {
             'r' => PolicyCommand::Select,
             'a' => PolicyCommand::Insert,
             'w' => PolicyCommand::Update,
             'd' => PolicyCommand::Delete,
             '*' => PolicyCommand::All,
-            _ => PolicyCommand::All, // Default fallback
-        };
-        let using_expr: Option<String> = row.get("using_expression");
-        let check_expr: Option<String> = row.get("check_expression");
-
-        // Convert role OIDs to role names
-        let role_names = if !roles.is_empty() {
-            let role_query = "SELECT rolname FROM pg_roles WHERE oid = ANY($1)";
-            if let Ok(role_rows) = client.query(role_query, &[&roles]).await {
-                role_rows
-                    .iter()
-                    .map(|row| row.get::<_, String>("rolname"))
-                    .collect()
-            } else {
-                roles.iter().map(|&oid| oid.to_string()).collect()
-            }
-        } else {
-            Vec::new()
+            _ => PolicyCommand::All,
         };
 
-        policies.push(Policy {
-            name,
-            table,
-            schema,
+        all_policies.push(Policy {
+            oid,
+            name: Some(row.get("name")),
+            table_oid: row.get("table_oid"),
+            table_name: row.get("table_name"),
+            schema: row.get("schema_name"),
             command: policy_command,
-            permissive,
-            roles: role_names,
-            using: using_expr,
-            check: check_expr,
+            permissive: row.get("permissive"),
+            roles,
+            using: row.get("using_expression"),
+            check: row.get("check_expression"),
+            is_user_defined: oid > last_system_oid,
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
-    Ok(policies)
+    // Now, find all tables that have RLS enabled but might not have explicit policies yet.
+    // We create a special "Policy" entry for them.
+    for (table_oid, _) in rls_enabled_oids {
+        // Check if we already have a policy for this table. If so, RLS is implicitly handled.
+        if all_policies.iter().any(|p| p.table_oid == table_oid) {
+            continue;
+        }
+
+        // If not, we need a dedicated "ENABLE ROW LEVEL SECURITY" entry.
+        // We find the table's info from the policies list (or would fetch it if needed).
+        if let Some(policy_for_table) = all_policies.iter().find(|p| p.table_oid == table_oid) {
+            all_policies.push(Policy {
+                oid: 0,     // No real OID for this conceptual object
+                name: None, // This signifies ENABLE RLS
+                table_oid,
+                table_name: policy_for_table.table_name.clone(),
+                schema: policy_for_table.schema.clone(),
+                command: PolicyCommand::All, // Not applicable
+                permissive: false,           // Not applicable
+                roles: Vec::new(),           // Not applicable
+                using: None,                 // Not applicable
+                check: None,                 // Not applicable
+                is_user_defined: true,       // The act of enabling RLS is user-defined
+                is_from_extension: false,    // Cannot be from an extension
+            });
+        }
+    }
+
+    // --- Final Filtering ---
+    if include_predefined {
+        Ok(all_policies)
+    } else {
+        let dumpable_policies = all_policies
+            .into_iter()
+            .filter(|p| p.is_user_defined && !p.is_from_extension)
+            .collect();
+        Ok(dumpable_policies)
+    }
+}
+
+// Helper to fetch OID -> name mapping for all roles
+async fn get_roles_oid_map<C: GenericClient>(client: &C) -> Result<HashMap<u32, String>> {
+    let rows = client
+        .query("SELECT oid, rolname FROM pg_roles", &[])
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("oid"), row.get("rolname")))
+        .collect())
 }
 
 async fn _introspect_servers<C: GenericClient + Sync>(client: &C) -> Result<Vec<Server>> {
@@ -2407,65 +2503,92 @@ async fn introspect_event_triggers<C: GenericClient + Sync>(
     Ok(event_triggers)
 }
 
-async fn introspect_rules<C: GenericClient>(client: &C) -> Result<Vec<Rule>>
-where
-    C: GenericClient + Sync,
-{
-    let query = r#"
-        SELECT 
-            r.rulename AS rule_name,
+// This function now fetches all rules efficiently.
+pub async fn introspect_rules<C: GenericClient>(
+    client: &C,
+    include_predefined: bool, // Not very useful for rules, but for consistency
+) -> Result<Vec<Rule>> {
+    // 1. Check if datlastsysoid column exists in pg_database
+    let column_exists_query = r#"
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_schema = 'pg_catalog' 
+            AND table_name = 'pg_database' 
+            AND column_name = 'datlastsysoid'
+        ) as column_exists;
+    "#;
+    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
+    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
+
+    // Get the last system OID to reliably distinguish system objects.
+    let last_system_oid: u32 = if datlastsysoid_exists {
+        let last_system_oid_row = client
+            .query_one(
+                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        last_system_oid_row.get("datlastsysoid")
+    } else {
+        // Fallback for older PostgreSQL versions - use a reasonable default
+        // This is the OID where user objects typically start
+        16384
+    };
+
+    // --- QUERY: Fetch all non-implicit rules from the database ---
+    let rules_query = r#"
+        SELECT
+            r.oid,
+            r.rulename AS name,
+            c.oid AS table_oid,
             c.relname AS table_name,
             n.nspname AS schema_name,
-            r.ev_type::text AS event_type,
-            r.is_instead AS is_instead,
-            pg_get_ruledef(r.oid) AS rule_definition
+            pg_get_ruledef(r.oid) AS definition,
+            obj_description(r.oid, 'pg_rewrite') AS comment,
+            EXISTS (
+                SELECT 1 FROM pg_depend d
+                WHERE d.objid = r.oid AND d.classid = 'pg_rewrite'::regclass AND d.deptype = 'e'
+            ) AS is_from_extension
         FROM pg_rewrite r
         JOIN pg_class c ON r.ev_class = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
-        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          AND r.rulename != '_RETURN'
-          AND NOT EXISTS (
-              SELECT 1 FROM pg_depend d
-              JOIN pg_extension e ON d.refobjid = e.oid
-              WHERE (d.objid = c.oid OR d.objid = r.oid) AND d.deptype = 'e'
-          )
+        WHERE
+            -- Exclude the implicit _RETURN rules created for views
+            r.rulename != '_RETURN'
+            -- We only care about rules on user-defined tables/views
+            AND c.oid > $1;
     "#;
+    let rule_rows = client.query(rules_query, &[&last_system_oid]).await?;
 
-    let rows = client.query(query, &[]).await?;
-    let mut rules = Vec::new();
+    // --- Assemble the final Vec<Rule> ---
+    let mut all_rules = Vec::new();
+    for row in rule_rows {
+        let oid: u32 = row.get("oid");
 
-    for row in rows {
-        let name: String = row.get("rule_name");
-        let table: String = row.get("table_name");
-        let schema: Option<String> = row.get("schema_name");
-        let event_type: String = row.get("event_type");
-        let is_instead: bool = row.get("is_instead");
-        let definition: String = row.get("rule_definition");
-
-        // Parse event type code
-        let event = match event_type.as_str() {
-            "1" => RuleEvent::Select,
-            "2" => RuleEvent::Update,
-            "3" => RuleEvent::Insert,
-            "4" => RuleEvent::Delete,
-            _ => RuleEvent::Select,
-        };
-
-        // Parse the rule definition to extract WHERE condition and action
-        let (condition, action) = parse_rule_definition(&definition);
-
-        rules.push(Rule {
-            name,
-            table,
-            schema,
-            event,
-            instead: is_instead,
-            condition,
-            actions: vec![action], // Store just the action part
+        all_rules.push(Rule {
+            oid,
+            name: row.get("name"),
+            table_oid: row.get("table_oid"),
+            table_name: row.get("table_name"),
+            schema: row.get("schema_name"),
+            definition: row.get("definition"),
+            comment: row.get("comment"),
+            is_user_defined: true, // All rules we fetch here are considered user-defined
+            is_from_extension: row.get("is_from_extension"),
         });
     }
 
-    Ok(rules)
+    // --- Final Filtering ---
+    if include_predefined {
+        // Technically, no rules are "predefined", so this flag has little effect
+        Ok(all_rules)
+    } else {
+        let dumpable_rules = all_rules
+            .into_iter()
+            .filter(|r| !r.is_from_extension)
+            .collect();
+        Ok(dumpable_rules)
+    }
 }
 
 async fn introspect_constraint_triggers<C: GenericClient>(

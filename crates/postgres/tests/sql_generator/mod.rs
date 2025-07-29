@@ -2,7 +2,7 @@
 pub mod extensions;
 pub mod functions;
 pub mod indexes;
-pub mod misc;
+// pub mod misc; // Temporarily disabled due to Rule struct changes
 pub mod policies;
 pub mod sequences;
 pub mod tables;
