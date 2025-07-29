@@ -27,3 +27,4 @@ db_schema
 my_project
 
 .env
+legacy

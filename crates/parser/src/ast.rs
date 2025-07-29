@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use shared_types::*;
+use postgres::*;
 
 /// Schema definition containing all database objects
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4,7 +4,7 @@ use pg_query::{
     Node, ParseResult,
     protobuf::{self, node},
 };
-use shared_types::{
+use postgres::{
     CheckOption, DataType, Expression, FunctionBehavior, FunctionParameter, FunctionReturn,
     Literal, ParallelType, ParameterMode, PolicyCommand, RuleEvent, SecurityType, TableConstraint,
     TriggerEvent, TriggerWhen,

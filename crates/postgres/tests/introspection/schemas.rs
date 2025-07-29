@@ -41,7 +41,7 @@ async fn test_introspect_basic_schema() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[tokio::test]
-async fn test_introspect_schema_with_owner() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_database_model_with_owner() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;
@@ -77,7 +77,7 @@ async fn test_introspect_schema_with_owner() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio::test]
-async fn test_introspect_schema_with_comment() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_introspect_database_model_with_comment() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::try_init().ok();
     let db = TestDb::new().await?;
     let connection = &db.conn;

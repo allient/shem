@@ -1,5 +1,27 @@
-use crate::{error::Result, schema::Database};
+use crate::model::{
+    collation::Collation,
+    conversion::Conversion,
+    database::Database,
+    event_trigger::EventTrigger,
+    extension::Extension,
+    fdw::{ForeignDataWrapper, ForeignTable, Server},
+    global::{Role, Tablespace},
+    operator::{OpClass, OpFamily, Operator},
+    policy::Policy,
+    publication::{Publication, PublicationTable},
+    relation::Relation,
+    routine::Routine,
+    rule::Rule,
+    schema::NamedSchema,
+    sequence::Sequence,
+    subscription::Subscription,
+    types::{
+        BaseType, CheckOption, CollationProvider, CompositeType, IdentityGeneration, PolicyCommand,
+        RangeType, SortOrder, TriggerEvent, Type,
+    },
+};
 use async_trait::async_trait;
+use shem_core::error::Result;
 use std::fmt::Debug;
 
 /// Database driver trait

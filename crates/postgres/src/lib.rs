@@ -1,18 +1,23 @@
+use crate::traits::{
+    ConnectionMetadata, DatabaseConnection, DatabaseDriver, Feature, Result, Schema, SqlGenerator,
+    Transaction,
+};
 use async_trait::async_trait;
 use base64::engine::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use shem_core::traits::{ConnectionMetadata, Feature, SqlGenerator, Transaction};
-use shem_core::{DatabaseConnection, DatabaseDriver, Result, Schema};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_postgres::{Client, Config, GenericClient, NoTls};
 
 pub mod db_util;
+pub mod db_introspect;
 pub mod introspection;
+pub mod model;
 pub mod sql_generator;
+pub mod traits;
 pub use db_util::TestDb;
-pub use introspection::introspect_schema;
+pub use db_introspect::introspect_database_model;
 pub use sql_generator::PostgresSqlGenerator;
 
 /// PostgreSQL database driver
@@ -212,7 +217,7 @@ impl DatabaseConnection for PostgresConnection {
     async fn introspect(&self) -> Result<Schema> {
         let client = self.client.lock().await;
         let client_ref = &*client;
-        introspect_schema(client_ref).await
+        introspect_database_model(client_ref).await
     }
 
     async fn execute(&self, sql: &str) -> Result<()> {

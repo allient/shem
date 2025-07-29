@@ -2,10 +2,9 @@
 resolver = "3"
 members = [
     "crates/cli",
-    "crates/core",
+    "crates/common",
     "crates/parser",
-    "crates/postgres",
-    "crates/shared-types",
+    "crates/postgres"
 ]
 
 # Optional workspace metadata

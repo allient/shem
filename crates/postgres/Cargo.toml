@@ -5,7 +5,7 @@ edition = "2024"
 description = "PostgreSQL driver for database schema management"
 
 [dependencies]
-shem-core = { path = "../core" }
+shem-common = { path = "../common" }
 parser = { path = "../parser" }
 sqlx = { workspace = true }
 tokio = { workspace = true }

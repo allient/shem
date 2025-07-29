@@ -297,7 +297,7 @@ pub enum PartitionMethod {
 ```rust
 // Main database driver trait
 pub trait DatabaseDriver {
-    async fn introspect_schema(&self) -> Result<Schema>;
+    async fn introspect_database_model(&self) -> Result<Schema>;
     async fn apply_migration(&self, migration: &Migration) -> Result<()>;
     async fn get_migration_history(&self) -> Result<Vec<Migration>>;
 }

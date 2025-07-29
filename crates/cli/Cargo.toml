@@ -16,10 +16,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-shem-core = { path = "../core" }
+shem-common = { path = "../common" }
 postgres = { path = "../postgres" }
 parser = { path = "../parser" }
-shared-types = { path = "../shared-types" }
 
 # External dependencies
 clap = { workspace = true }

@@ -12,7 +12,6 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 pg_query = { workspace = true }
-shared-types = { path = "../shared-types" }
 
 [features]
 default = ["full"]
