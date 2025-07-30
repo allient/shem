@@ -1,4 +1,4 @@
-use crate::model::extension::Extension;
+use crate::{helpers::get_last_system_oid, model::extension::Extension};
 use common::error::Result;
 use tokio_postgres::GenericClient;
 
@@ -8,36 +8,7 @@ pub async fn introspect_extensions<C: GenericClient>(
     include_predefined: bool,
 ) -> Result<Vec<Extension>> {
     // Check if datlastsysoid column exists in pg_database
-    let column_exists_query = r#"
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_schema = 'pg_catalog' 
-            AND table_name = 'pg_database' 
-            AND column_name = 'datlastsysoid'
-        ) as column_exists;
-    "#;
-    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
-    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
-
-    tracing::debug!(
-        "datlastsysoid column exists (extensions): {}",
-        datlastsysoid_exists
-    );
-
-    // Get the last system OID to reliably distinguish system objects from user objects.
-    let last_system_oid: u32 = if datlastsysoid_exists {
-        let last_system_oid_row = client
-            .query_one(
-                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-                &[],
-            )
-            .await?;
-        last_system_oid_row.get("datlastsysoid")
-    } else {
-        // Fallback for older PostgreSQL versions - use a reasonable default
-        // This is the OID where user objects typically start
-        16384
-    };
+    let last_system_oid = get_last_system_oid(client).await?;
 
     tracing::debug!("Last system OID (extensions): {}", last_system_oid);
 

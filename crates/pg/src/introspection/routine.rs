@@ -1,46 +1,17 @@
 use crate::{
-    helpers::quote_ident,
+    helpers::{get_last_system_oid, quote_ident},
     model::routine::{Aggregate, Function, Procedure, Routine},
 };
 use common::error::Result;
-use tracing::debug;
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
+use tracing::debug;
 
 // This function now fetches all dumpable functions, procedures, and aggregates efficiently.
 pub async fn introspect_routines<C: GenericClient>(client: &C) -> Result<Vec<Routine>> {
     // 1. Get system OID threshold for reliable filtering
     // Use a more compatible approach that works across PostgreSQL versions
-    let last_system_oid: u32 = {
-        // Check if datlastsysoid column exists in pg_database
-        let column_exists_row = client
-            .query_one(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_schema = 'pg_catalog' 
-                    AND table_name = 'pg_database' 
-                    AND column_name = 'datlastsysoid'
-                ) as column_exists",
-                &[],
-            )
-            .await?;
-
-        let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
-
-        if datlastsysoid_exists {
-            let last_system_oid_row = client
-                .query_one(
-                    "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-                    &[],
-                )
-                .await?;
-            last_system_oid_row.get("datlastsysoid")
-        } else {
-            // Fallback for older PostgreSQL versions: use a reasonable default
-            // This is the OID of the last system object in older versions
-            16384
-        }
-    };
+    let last_system_oid = get_last_system_oid(client).await?;
 
     // 2. The main query to fetch all routines from pg_proc.
     // It filters out implicitly-created routines and system routines.

@@ -1,4 +1,7 @@
-use crate::model::sequence::{OwnedBy, Sequence};
+use crate::{
+    helpers::get_last_system_oid,
+    model::sequence::{OwnedBy, Sequence},
+};
 use common::error::Result;
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
@@ -12,36 +15,7 @@ pub async fn introspect_sequences<C: GenericClient>(
     let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
 
     // Check if datlastsysoid column exists (PostgreSQL 9.6+)
-    let column_exists_query = r#"
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_schema = 'pg_catalog' 
-            AND table_name = 'pg_database' 
-            AND column_name = 'datlastsysoid'
-        ) as column_exists;
-    "#;
-    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
-    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
-
-    tracing::debug!(
-        "datlastsysoid column exists (sequences): {}",
-        datlastsysoid_exists
-    );
-
-    // Get the last system OID to reliably distinguish system objects.
-    let last_system_oid: u32 = if datlastsysoid_exists {
-        let last_system_oid_row = client
-            .query_one(
-                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-                &[],
-            )
-            .await?;
-        last_system_oid_row.get("datlastsysoid")
-    } else {
-        // Fallback for older PostgreSQL versions - use a reasonable default
-        // This is the OID where user objects typically start
-        16384
-    };
+    let last_system_oid = get_last_system_oid(client).await?;
 
     tracing::debug!("Last system OID (sequences): {}", last_system_oid);
 

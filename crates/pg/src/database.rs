@@ -69,6 +69,8 @@ pub struct DatabaseModel {
     pub routines: HashMap<String, Routine>,
     pub collations: HashMap<String, Collation>,
     pub conversions: HashMap<String, Conversion>,
+    pub policies: HashMap<String, Policy>,
+    pub rules: HashMap<String, Rule>,
     pub operators: HashMap<String, Operator>,
     pub op_classes: HashMap<String, OpClass>,
     pub op_families: HashMap<String, OpFamily>,
@@ -92,7 +94,7 @@ impl DatabaseModel {
     where
         C: GenericClient + Sync,
     {
-        let mut schema = DatabaseModel::default();
+        let mut db_model = DatabaseModel::default();
 
         // Independent Objects (Standalone)
 
@@ -102,21 +104,21 @@ impl DatabaseModel {
         // GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst;
         let roles = introspect_roles(&*client, false).await?;
         for role in roles {
-            schema.roles.insert(role.name.clone(), role);
+            db_model.roles.insert(role.name.clone(), role);
         }
 
         // Introspect extensions
         let extensions = introspect_extensions(&*client, false).await?;
         for ext in extensions {
-            schema.extensions.insert(ext.name.clone(), ext);
+            db_model.extensions.insert(ext.name.clone(), ext);
         }
 
         // Introspect named schemas
         // Purpose: Namespace to organize objects (tables, functions, etc.).
         let named_schemas = introspect_named_schemas(&*client, false).await?;
         for named_schema in named_schemas {
-            schema
-                .named_schemas
+            db_model
+                .schemas
                 .insert(named_schema.name.clone(), named_schema);
         }
 
@@ -124,14 +126,16 @@ impl DatabaseModel {
         //Purpose: Define string sorting/rules (e.g., case-insensitive comparison).
         let collations = introspect_collations(&*client, false).await?;
         for collation in collations {
-            schema.collations.insert(collation.name.clone(), collation);
+            db_model
+                .collations
+                .insert(collation.name.clone(), collation);
         }
 
         // Introspect tablespaces
         // Purpose: Control physical storage locations on disk.
         let tablespaces = introspect_tablespaces(&*client).await?;
         for tablespace in tablespaces {
-            schema
+            db_model
                 .tablespaces
                 .insert(tablespace.name.clone(), tablespace);
         }
@@ -167,14 +171,14 @@ impl DatabaseModel {
                 Type::Range(t) => t.info.name.clone(),
                 Type::Pseudo(t) => t.info.name.clone(),
             };
-            schema.types.insert(type_name, postgres_type);
+            db_model.types.insert(type_name, postgres_type);
         }
 
         // Introspect sequences
         //Purpose: Generate auto-incrementing IDs.
         let sequences = introspect_sequences(&*client, false).await?;
         for seq in sequences {
-            schema.sequences.insert(seq.name.clone(), seq);
+            db_model.sequences.insert(seq.name.clone(), seq);
         }
 
         // Semi-Independent Objects
@@ -190,44 +194,7 @@ impl DatabaseModel {
 
         // 2. Iterate over the results and use a `match` to sort them into the correct HashMaps.
         for relation in all_relations {
-            match relation {
-                Relation::Table(table) => {
-                    let key = if table.schema == "public" {
-                        table.name.clone()
-                    } else {
-                        format!("{}.{}", table.schema, table.name)
-                    };
-                    debug!("Found Table: {:?}, using key: {}", table, key);
-                    schema.tables.insert(key, table);
-                }
-                Relation::View(view) => {
-                    let key = if view.schema == "public" {
-                        view.name.clone()
-                    } else {
-                        format!("{}.{}", view.schema, view.name)
-                    };
-                    debug!("Found View: {:?}, using key: {}", view, key);
-                    schema.views.insert(key, view);
-                }
-                Relation::MaterializedView(matview) => {
-                    let key = if matview.schema == "public" {
-                        matview.name.clone()
-                    } else {
-                        format!("{}.{}", matview.schema, matview.name)
-                    };
-                    debug!("Found Materialized View: {:?}, using key: {}", matview, key);
-                    schema.materialized_views.insert(key, matview);
-                }
-                Relation::ForeignTable(ftable) => {
-                    let key = format!(
-                        "{}.{}",
-                        ftable.schema.as_deref().unwrap_or("public"),
-                        ftable.name
-                    );
-                    debug!("Found Foreign Table: {:?}, using key: {}", ftable, key);
-                    schema.foreign_tables.insert(key, ftable);
-                }
-            }
+            db_model.relations.insert(relation.name.clone(), relation);
         }
 
         // Introspect policies
@@ -246,7 +213,7 @@ impl DatabaseModel {
             debug!("Policy found: {:?}, using key: {}", policy, key);
 
             // 2. Insert into the HashMap using the new unique key.
-            schema.policies.insert(key, policy);
+            db_model.policies.insert(key, policy);
         }
 
         // Introspect rules
@@ -255,13 +222,13 @@ impl DatabaseModel {
             debug!("Rule: {:?}", rule);
         }
         for rule in rules {
-            schema.rules.insert(rule.name.clone(), rule);
+            db_model.rules.insert(rule.name.clone(), rule);
         }
 
         // Introspect publications
         let publications = introspect_publications(&*client).await?;
         for publication in publications {
-            schema
+            db_model
                 .publications
                 .insert(publication.name.clone(), publication);
         }
@@ -270,7 +237,7 @@ impl DatabaseModel {
         let publication_tables = introspect_publication_tables(&*client).await?;
         for table in publication_tables {
             let key = format!("{}.{}", table.table_schema, table.table_name);
-            schema.publication_tables.insert(key, table);
+            db_model.publication_tables.insert(key, table);
         }
 
         // Introspect routines
@@ -287,17 +254,17 @@ impl DatabaseModel {
             } else {
                 format!("{}.{}", schema_name, name)
             };
-            schema.routines.insert(key, routine);
+            db_model.routines.insert(key, routine);
         }
 
         // Introspect triggers
         // Get the OIDs of all tables that can have triggers
-        let table_oids: Vec<u32> = schema.tables.values().map(|t| t.oid).collect();
+        let table_oids: Vec<u32> = db_model.relations.values().map(|t| t.oid).collect();
         let triggers_map = introspect_triggers(client, &table_oids).await?;
 
         // Distribute the fetched triggers into their parent Table objects and schema-level triggers.
         tracing::debug!("Triggers map: {:?}", triggers_map);
-        for (_, table) in schema.tables.iter_mut() {
+        for (_, table) in db_model.relations.iter_mut() {
             tracing::debug!(
                 "Checking table {} (OID: {}) for triggers",
                 table.name,
@@ -314,7 +281,7 @@ impl DatabaseModel {
 
                 // Also add triggers to the schema-level triggers HashMap
                 for trigger in triggers_for_this_table {
-                    schema
+                    db_model
                         .triggers
                         .insert(trigger.name.clone(), trigger.clone());
                 }
@@ -326,7 +293,9 @@ impl DatabaseModel {
         // Introspect event triggers
         let event_triggers = introspect_event_triggers(&*client).await?;
         for trigger in event_triggers {
-            schema.event_triggers.insert(trigger.name.clone(), trigger);
+            db_model
+                .event_triggers
+                .insert(trigger.name.clone(), trigger);
         }
 
         // // Introspect servers
@@ -355,6 +324,6 @@ impl DatabaseModel {
         //     schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
         // }
 
-        Ok(schema)
+        Ok(db_model)
     }
 }

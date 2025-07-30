@@ -1,5 +1,5 @@
 use crate::{
-    helpers::{get_qualified_name_map, pg_options_to_map},
+    helpers::{get_last_system_oid, get_qualified_name_map, pg_options_to_map},
     model::relation::{
         CheckOption, Column, ColumnStorage, Constraint, ConstraintType, ForeignKeyDetail,
         Generated, Identity, IdentityGeneration, Index, MaterializedView, ReferentialAction,
@@ -451,33 +451,7 @@ async fn introspect_all_partition_keys<C: GenericClient>(
 // This is the new, unified function.
 pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Result<Vec<Relation>> {
     // 1. Get system OID threshold for filtering
-    let last_system_oid: u32 = {
-        // Check if datlastsysoid column exists in pg_database
-        let column_exists_row = client
-            .query_one(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_schema = 'pg_catalog' 
-                    AND table_name = 'pg_database' 
-                    AND column_name = 'datlastsysoid'
-                ) as column_exists",
-                &[],
-            )
-            .await?;
-        let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
-
-        if datlastsysoid_exists {
-            let last_system_oid_row = client
-                .query_one(
-                    "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-                    &[],
-                )
-                .await?;
-            last_system_oid_row.get("datlastsysoid")
-        } else {
-            16384 // Default system OID threshold for older PostgreSQL versions
-        }
-    };
+    let last_system_oid = get_last_system_oid(client).await?;
 
     // --- QUERY 1: Fetch ALL relation-like objects at once ---
     let relations_query = r#"

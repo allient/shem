@@ -1,4 +1,7 @@
-use crate::model::collation::{Collation, CollationProvider};
+use crate::{
+    helpers::get_last_system_oid,
+    model::collation::{Collation, CollationProvider},
+};
 use common::error::Result;
 use tokio_postgres::GenericClient;
 
@@ -9,32 +12,7 @@ pub async fn introspect_collations<C: GenericClient>(
     // 1. Get server version and last system OID for robust filtering
     let version_row = client.query_one("SHOW server_version_num", &[]).await?;
     let server_version_num: i32 = version_row.get::<_, String>(0).parse().unwrap_or(0);
-
-    // Check if datlastsysoid column exists in pg_database
-    let column_exists_query = r#"
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_schema = 'pg_catalog' 
-            AND table_name = 'pg_database' 
-            AND column_name = 'datlastsysoid'
-        ) as column_exists;
-    "#;
-    let column_exists_row = client.query_one(column_exists_query, &[]).await?;
-    let datlastsysoid_exists: bool = column_exists_row.get("column_exists");
-
-    // Get the last system OID to reliably distinguish user-defined from system objects
-    let last_system_oid: u32 = if datlastsysoid_exists {
-        let last_system_oid_row = client
-            .query_one(
-                "SELECT datlastsysoid FROM pg_database WHERE datname = current_database()",
-                &[],
-            )
-            .await?;
-        last_system_oid_row.get("datlastsysoid")
-    } else {
-        // Fallback for older versions: use a reasonable default
-        16384
-    };
+    let last_system_oid = get_last_system_oid(client).await?;
 
     // 2. Build a version-aware query to fetch ALL collations
     let mut query = String::from(

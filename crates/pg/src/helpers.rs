@@ -4,21 +4,6 @@ use common::error::Result;
 use tokio_postgres::GenericClient;
 
 /// Fetches the last system OID for the current database.
-///
-/// This OID serves as a boundary marker. Any object with an OID greater than
-/// this value is considered a "user-defined" object and is a candidate for
-/// being dumped. This is the most reliable method for filtering out built-in
-/// system objects.
-///
-/// This function checks for the existence of the `datlastsysoid` column, which
-/// was introduced in PostgreSQL 9.6. For older versions, it returns a safe,
-/// hardcoded fallback value.
-///
-/// # Arguments
-/// * `client`: A generic `tokio-postgres` client.
-///
-/// # Returns
-/// A `Result` containing the last system OID as a `u32`.
 pub async fn get_last_system_oid<C: GenericClient>(client: &C) -> Result<u32> {
     // First, check if the `datlastsysoid` column exists. It was added in PostgreSQL 9.6.
     let column_exists_query = r#"

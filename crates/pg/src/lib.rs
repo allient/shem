@@ -10,16 +10,14 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_postgres::{Client, Config, GenericClient, NoTls};
 
+pub mod database;
 pub mod db_util;
 pub mod helpers;
-pub mod database;
-pub mod db_introspect;
 pub mod introspection;
 pub mod model;
 pub mod sql_generator;
 pub mod traits;
 pub use db_util::TestDb;
-pub use db_introspect::introspect_database_model;
 pub use sql_generator::PostgresSqlGenerator;
 
 /// PostgreSQL database driver
@@ -391,7 +389,6 @@ impl Transaction for PostgresTransaction {
     }
 }
 
-
 // Helper function to get a map of all collations for name resolution
 async fn get_collations_map<C: GenericClient>(client: &C) -> Result<HashMap<u32, String>> {
     let rows = client.query(
@@ -412,4 +409,3 @@ async fn get_collations_map<C: GenericClient>(client: &C) -> Result<HashMap<u32,
         })
         .collect())
 }
-
