@@ -1,6 +1,6 @@
-use shem_core::schema::{Function, Procedure, Parameter, ReturnType, ReturnKind, Volatility, ParallelSafety, ParameterMode};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::routine::{Function, Procedure, Routine};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_function() {
@@ -17,7 +17,8 @@ fn test_create_function() {
     };
 
     let generator = PostgresSqlGenerator;
-    let result = generator.create_function(&function).unwrap();
+    let routine = Routine::Function(function);
+    let result = generator.create_routine(&routine).unwrap();
     
     assert!(result.contains("CREATE OR REPLACE FUNCTION public.calculate_total"));
     assert!(result.contains("IN price numeric"));
@@ -41,7 +42,8 @@ fn test_drop_function() {
         is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
-    let sql = generator.drop_function(&func).unwrap();
+    let routine = Routine::Function(func);
+    let sql = generator.drop_routine(&routine).unwrap();
     assert_eq!(sql, "DROP FUNCTION IF EXISTS \"my_func\"(param1 integer) CASCADE;");
 }
 
@@ -60,7 +62,8 @@ fn test_create_procedure() {
     };
 
     let generator = PostgresSqlGenerator;
-    let result = generator.create_procedure(&procedure).unwrap();
+    let routine = Routine::Procedure(procedure);
+    let result = generator.create_routine(&routine).unwrap();
     
     assert!(result.contains("CREATE OR REPLACE PROCEDURE public.update_user_status"));
     assert!(result.contains("IN user_id integer"));
@@ -83,6 +86,7 @@ fn test_drop_procedure() {
         is_from_extension: false,
     };
     let generator = PostgresSqlGenerator;
-    let sql = generator.drop_procedure(&proc).unwrap();
+    let routine = Routine::Procedure(proc);
+    let sql = generator.drop_routine(&routine).unwrap();
     assert_eq!(sql, "DROP PROCEDURE IF EXISTS \"my_proc\"(param1 integer) CASCADE;");
 } 

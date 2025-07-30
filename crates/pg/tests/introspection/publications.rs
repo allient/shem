@@ -1,5 +1,5 @@
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
 
 #[tokio::test]
 async fn test_introspect_publication_basic() -> Result<(), Box<dyn std::error::Error>> {

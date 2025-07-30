@@ -3,7 +3,6 @@ use common::error::Result;
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 
-
 pub async fn introspect_triggers<C: GenericClient>(
     client: &C,
     table_oids: &[u32],
@@ -34,7 +33,7 @@ pub async fn introspect_triggers<C: GenericClient>(
         JOIN pg_class c ON t.tgrelid = c.oid
         JOIN pg_namespace n ON c.relnamespace = n.oid
         WHERE t.tgrelid = ANY($1)
-          AND NOT t.tgisinternal; -- Exclude internal triggers
+        AND NOT t.tgisinternal; -- Exclude internal triggers
     "#;
     let rows = client.query(query, &[&table_oids]).await?;
 

@@ -1,6 +1,6 @@
-use shem_core::schema::{EnumType, EnumValue, TypeInfo};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::types::{EnumType, EnumValue, TypeInfo, Type};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_generate_create_enum_type() {
@@ -24,7 +24,7 @@ fn test_generate_create_enum_type() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(
@@ -55,7 +55,7 @@ fn test_generate_create_enum_type_no_schema() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(
@@ -86,7 +86,7 @@ fn test_generate_create_enum_with_schema() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(
@@ -115,7 +115,7 @@ fn test_generate_create_enum_single_value() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(
@@ -146,7 +146,7 @@ fn test_generate_create_enum_with_special_characters() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     // The generator should properly escape special characters
@@ -176,7 +176,7 @@ fn test_drop_enum() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.drop_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(result, "DROP TYPE \"public\".\"status\";\n");
@@ -203,7 +203,7 @@ fn test_drop_enum_no_schema() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.drop_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(result, "DROP TYPE \"public\".\"priority\";\n");
@@ -230,7 +230,7 @@ fn test_drop_enum_with_schema() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.drop_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(result, "DROP TYPE \"custom_schema\".\"color\";\n");
@@ -257,7 +257,7 @@ fn test_enum_with_comment() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     // The result should include the CREATE TYPE statement
@@ -290,7 +290,7 @@ fn test_enum_with_acl() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     // The result should include the CREATE TYPE statement
@@ -320,7 +320,7 @@ fn test_enum_empty_values() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     // PostgreSQL doesn't allow empty enums, so this should either error or handle gracefully
@@ -349,7 +349,7 @@ fn test_enum_case_sensitivity() {
     };
 
     let generator = PostgresSqlGenerator;
-    let enum_type_wrapped = shem_core::schema::Type::Enum(enum_type);
+    let enum_type_wrapped = Type::Enum(enum_type);
     let result = generator.create_type(&enum_type_wrapped).unwrap();
     
     assert_eq!(

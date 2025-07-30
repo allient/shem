@@ -1,25 +1,57 @@
 use crate::model::{
     collation::Collation,
     conversion::Conversion,
+    // Assuming models are accessible from this crate
     event_trigger::EventTrigger,
     extension::Extension,
-    fdw::ForeignDataWrapper,
+    fdw::{ForeignDataWrapper, Server},
     global::{Role, Tablespace},
-    operator::{OpClass, OpFamily, Operator},
-    policy::Policy,
+    operator::OpClass,
+    operator::OpFamily,
+    operator::Operator,
     publication::Publication,
-    relation::{MaterializedView, Table, View},
-    routine::{Aggregate, Function, Procedure},
-    rule::Rule,
+    publication::PublicationTable,
+    relation::Relation,
+    routine::Routine,
     schema::Schema,
     sequence::Sequence,
     subscription::Subscription,
-    trigger::Trigger,
-    types::{BaseType, CompositeType, Domain, EnumType, RangeType, Type},
+    types::Type,
 };
+use crate::database::DatabaseModel;
 use async_trait::async_trait;
 use common::error::Result;
 use std::fmt::Debug;
+
+/// Supported PostgreSQL features
+#[derive(Debug, Clone, PartialEq)]
+pub enum Feature {
+    Tables,
+    Views,
+    MaterializedViews,
+    Functions,
+    Procedures,
+    Enums,
+    Domains,
+    Sequences,
+    Extensions,
+    Triggers,
+    Policies,
+    ForeignServers,
+    Partitions,
+    Inheritance,
+    RowLevelSecurity,
+    GeneratedColumns,
+    IdentityColumns,
+    CheckConstraints,
+    ExclusionConstraints,
+    ForeignKeys,
+    Indexes,
+    Schemas,
+    Roles,
+    Grants,
+    Comments,
+}
 
 /// Database driver trait
 #[async_trait]
@@ -50,7 +82,7 @@ pub trait DatabaseConnection: Send + Sync {
     fn driver(&self) -> &dyn DatabaseDriver;
 
     /// Introspect the database schema
-    async fn introspect(&self) -> Result<Schema>;
+    async fn introspect(&self) -> Result<DatabaseModel>;
 
     /// Execute SQL statement
     async fn execute(&self, sql: &str) -> Result<()>;
@@ -84,198 +116,103 @@ pub trait Transaction: Send + Sync {
     async fn rollback(self: Box<Self>) -> Result<()>;
 }
 
-/// SQL generator trait
+/// A trait for generating dialect-specific SQL from introspected schema models.
+///
+/// This trait defines the public API for converting the in-memory `Database`
+/// model into a series of executable SQL statements. Each method corresponds
+/// to a top-level, dumpable object. The unified enums (`Relation`, `Type`, `Routine`)
+/// are used to handle different kinds of related objects through a single interface.
 #[async_trait]
 pub trait SqlGenerator: Send + Sync {
-    /// Generate CREATE SQL for any kind of type.
+    // --- Core Unified Object Generators ---
+
+    /// Generates the `CREATE` statement(s) for any kind of relation.
+    /// This includes the base `CREATE` (TABLE/VIEW/etc.) and all dependent
+    /// objects like indexes, triggers, constraints, rules, and policies.
+    fn create_relation(&self, relation: &Relation) -> Result<String>;
+
+    /// Generates the `DROP` statement for any kind of relation.
+    fn drop_relation(&self, relation: &Relation) -> Result<String>;
+
+    /// Generates the `CREATE` statement for any kind of type.
     fn create_type(&self, t: &Type) -> Result<String>;
 
-    /// Generate DROP SQL for any kind of type.
+    /// Generates the `DROP` statement for any kind of type.
     fn drop_type(&self, t: &Type) -> Result<String>;
 
-    /// Generate CREATE TABLE SQL
-    fn generate_create_table(&self, table: &Table) -> Result<String>;
+    /// Generates the `CREATE` statement for any kind of routine.
+    fn create_routine(&self, routine: &Routine) -> Result<String>;
 
-    /// Generate ALTER TABLE SQL
-    fn generate_alter_table(&self, old: &Table, new: &Table) -> Result<(Vec<String>, Vec<String>)>;
+    /// Generates the `DROP` statement for any kind of routine.
+    fn drop_routine(&self, routine: &Routine) -> Result<String>;
 
-    /// Generate DROP TABLE SQL
-    fn generate_drop_table(&self, table: &Table) -> Result<String>;
+    // --- Top-Level, Non-Unified Object Generators ---
 
-    /// Generate CREATE VIEW SQL
-    fn create_view(&self, view: &View) -> Result<String>;
+    fn create_schema(&self, schema: &Schema) -> Result<String>;
+    fn drop_schema(&self, schema: &Schema) -> Result<String>;
 
-    /// Generate DROP VIEW SQL
-    fn drop_view(&self, view: &View) -> Result<String>;
-
-    /// Generate CREATE MATERIALIZED VIEW SQL
-    fn create_materialized_view(&self, view: &MaterializedView) -> Result<String>;
-
-    /// Generate DROP MATERIALIZED VIEW SQL
-    fn drop_materialized_view(&self, view: &MaterializedView) -> Result<String>;
-
-    /// Generate CREATE FUNCTION SQL
-    fn create_function(&self, func: &Function) -> Result<String>;
-
-    /// Generate DROP FUNCTION SQL
-    fn drop_function(&self, func: &Function) -> Result<String>;
-
-    /// Generate CREATE PROCEDURE SQL
-    fn create_procedure(&self, proc: &Procedure) -> Result<String>;
-
-    /// Generate DROP PROCEDURE SQL
-    fn drop_procedure(&self, proc: &Procedure) -> Result<String>;
-
-    /// Generate CREATE SEQUENCE SQL
-    fn create_sequence(&self, seq: &Sequence) -> Result<String>;
-
-    /// Generate ALTER SEQUENCE SQL
-    fn alter_sequence(&self, old: &Sequence, new: &Sequence) -> Result<(Vec<String>, Vec<String>)>;
-
-    /// Generate DROP SEQUENCE SQL
-    fn drop_sequence(&self, seq: &Sequence) -> Result<String>;
-
-    /// Generate CREATE EXTENSION SQL
     fn create_extension(&self, ext: &Extension) -> Result<String>;
-
-    /// Generate ALTER EXTENSION SQL
-    fn alter_extension(&self, ext: &Extension) -> Result<String>;
-
-    /// Generate DROP EXTENSION SQL
     fn drop_extension(&self, ext: &Extension) -> Result<String>;
 
-    /// Generate CREATE TRIGGER SQL
-    fn create_trigger(&self, trigger: &Trigger) -> Result<String>;
+    fn create_sequence(&self, seq: &Sequence) -> Result<String>;
+    fn drop_sequence(&self, seq: &Sequence) -> Result<String>;
 
-    /// Generate DROP TRIGGER SQL
-    fn drop_trigger(&self, trigger: &Trigger) -> Result<String>;
-
-    /// Generate CREATE POLICY SQL
-    fn create_policy(&self, policy: &Policy) -> Result<String>;
-
-    /// Generate DROP POLICY SQL
-    fn drop_policy(&self, policy: &Policy) -> Result<String>;
-
-    /// Generate CREATE SERVER SQL
-    fn create_server(&self, server: &Server) -> Result<String>;
-
-    /// Generate DROP SERVER SQL
-    fn drop_server(&self, server: &Server) -> Result<String>;
-
-    /// Generate CREATE INDEX SQL
-    fn create_index(&self, index: &Index) -> Result<String>;
-
-    /// Generate DROP INDEX SQL
-    fn drop_index(&self, index: &Index) -> Result<String>;
-
-    /// Generate CREATE COLLATION SQL
     fn create_collation(&self, collation: &Collation) -> Result<String>;
-
-    /// Generate DROP COLLATION SQL
     fn drop_collation(&self, collation: &Collation) -> Result<String>;
 
-    /// Generate CREATE RULE SQL
-    fn create_rule(&self, rule: &Rule) -> Result<String>;
+    fn create_conversion(&self, conversion: &Conversion) -> Result<String>;
+    fn drop_conversion(&self, conversion: &Conversion) -> Result<String>;
 
-    /// Generate DROP RULE SQL
-    fn drop_rule(&self, rule: &Rule) -> Result<String>;
+    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
+    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
 
-    /// Generate CREATE EVENT TRIGGER SQL
-    fn create_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
+    fn create_server(&self, server: &Server) -> Result<String>;
+    fn drop_server(&self, server: &Server) -> Result<String>;
 
-    /// Generate DROP EVENT TRIGGER SQL
-    fn drop_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
-
-    /// Generate CREATE CONSTRAINT TRIGGER SQL
-    fn create_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String>;
-
-    /// Generate DROP CONSTRAINT TRIGGER SQL
-    fn drop_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String>;
-
-    /// Generate COMMENT ON object SQL
-    fn comment_on(&self, object_type: &str, object_name: &str, comment: &str) -> Result<String>;
-
-    /// Generate GRANT privileges SQL
-    fn grant_privileges(
-        &self,
-        privileges: &[String],
-        on_object: &str,
-        to_roles: &[String],
-    ) -> Result<String>;
-
-    /// Generate REVOKE privileges SQL
-    fn revoke_privileges(
-        &self,
-        privileges: &[String],
-        on_object: &str,
-        from_roles: &[String],
-    ) -> Result<String>;
-
-    /// Generate CREATE ROLE SQL
-    fn create_role(&self, role: &Role) -> Result<String>;
-
-    /// Generate DROP ROLE SQL
-    fn drop_role(&self, role: &Role) -> Result<String>;
-
-    /// Generate CREATE TABLESPACE SQL
-    fn create_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
-
-    /// Generate DROP TABLESPACE SQL
-    fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
-
-    /// Generate CREATE PUBLICATION SQL
     fn create_publication(&self, publication: &Publication) -> Result<String>;
-
-    /// Generate DROP PUBLICATION SQL
     fn drop_publication(&self, publication: &Publication) -> Result<String>;
 
-    /// Generate CREATE SUBSCRIPTION SQL
     fn create_subscription(&self, subscription: &Subscription) -> Result<String>;
-
-    /// Generate DROP SUBSCRIPTION SQL
     fn drop_subscription(&self, subscription: &Subscription) -> Result<String>;
 
-    /// Generate CREATE FOREIGN TABLE SQL
-    fn create_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String>;
+    fn create_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
+    fn drop_event_trigger(&self, trigger: &EventTrigger) -> Result<String>;
 
-    /// Generate DROP FOREIGN TABLE SQL
-    fn drop_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String>;
+    fn create_operator(&self, operator: &Operator) -> Result<String>;
+    fn drop_operator(&self, operator: &Operator) -> Result<String>;
 
-    /// Generate CREATE FOREIGN DATA WRAPPER SQL
-    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
+    fn create_op_class(&self, op_class: &OpClass) -> Result<String>;
+    fn drop_op_class(&self, op_class: &OpClass) -> Result<String>;
 
-    /// Generate DROP FOREIGN DATA WRAPPER SQL
-    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String>;
-}
+    fn create_op_family(&self, op_family: &OpFamily) -> Result<String>;
+    fn drop_op_family(&self, op_family: &OpFamily) -> Result<String>;
 
-/// Database features
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Feature {
-    Tables,
-    Views,
-    MaterializedViews,
-    Functions,
-    Procedures,
-    Enums,
-    Domains,
-    Sequences,
-    Extensions,
-    Triggers,
-    Policies,
-    ForeignServers,
-    Partitions,
-    Inheritance,
-    RowLevelSecurity,
-    GeneratedColumns,
-    IdentityColumns,
-    CheckConstraints,
-    ExclusionConstraints,
-    ForeignKeys,
-    Indexes,
-    Schemas,
-    Roles,
-    Grants,
-    Comments,
+    // --- Global Object Generators ---
+
+    fn create_role(&self, role: &Role) -> Result<String>;
+    fn drop_role(&self, role: &Role) -> Result<String>;
+
+    fn create_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
+    fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String>;
+
+    // --- Relationship and Metadata Generators ---
+
+    /// Generates the `ALTER PUBLICATION ... ADD TABLE ...` statement.
+    fn add_table_to_publication(&self, pub_table: &PublicationTable) -> Result<String>;
+
+    /// Generates `COMMENT ON ...` statements. This is a generic helper.
+    fn comment_on(&self, object_type: &str, qualified_name: &str, comment: &str) -> Result<String>;
+
+    /// Generates `GRANT` and `REVOKE` statements based on an ACL string.
+    /// A real implementation would likely need a more structured input than just strings.
+    fn grant_revoke(&self, object_type: &str, qualified_name: &str, acl: &str) -> Result<String>;
+
+    /// Generates `ALTER ... OWNER TO ...` statements.
+    fn alter_owner(&self, object_type: &str, qualified_name: &str, owner: &str) -> Result<String>;
+
+    // --- Migration-Specific Methods (for the future) ---
+
+    // async fn generate_migration(&self, from: &Database, to: &Database) -> Result<Migration>;
 }
 
 /// Connection metadata
@@ -321,54 +258,13 @@ pub struct ConnectionMetadata {
     pub maintenance_work_mem: Option<String>,
 }
 
-/// Schema serializer trait
-#[async_trait]
-pub trait SchemaSerializer: Send + Sync {
-    /// Serialize schema to string
-    async fn serialize(&self, schema: &Database) -> Result<String>;
-
-    /// Deserialize schema from string
-    async fn deserialize(&self, content: &str) -> Result<Database>;
-
-    /// Get file extension
-    fn extension(&self) -> &'static str;
-}
-
-/// Migration generator trait
-#[async_trait]
-pub trait MigrationGenerator: Send + Sync {
-    /// Generate migration from schema diff
-    async fn generate(&self, from: &Database, to: &Database) -> Result<Migration>;
-}
-
-/// Migration representation
-#[derive(Debug, Clone)]
-pub struct Migration {
-    pub id: String,
-    pub name: String,
-    pub up: Vec<String>,
-    pub down: Vec<String>,
-    pub dependencies: Vec<String>,
-}
-
-#[async_trait]
-pub trait AsyncSqlGenerator: Send + Sync {
-    async fn generate_create_table_async(&self, table: &Table) -> Result<String>;
-    async fn generate_alter_table_async(
-        &self,
-        old: &Table,
-        new: &Table,
-    ) -> Result<(Vec<String>, Vec<String>)>;
-    async fn generate_drop_table_async(&self, table: &Table) -> Result<String>;
-}
-
 #[async_trait]
 impl DatabaseConnection for Box<dyn DatabaseConnection> {
     fn driver(&self) -> &dyn DatabaseDriver {
         self.as_ref().driver()
     }
 
-    async fn introspect(&self) -> Result<Database> {
+    async fn introspect(&self) -> Result<DatabaseModel> {
         self.as_ref().introspect().await
     }
 

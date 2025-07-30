@@ -1,6 +1,6 @@
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(

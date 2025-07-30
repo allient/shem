@@ -534,6 +534,8 @@ pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Resul
                     constraints: constraints_map.get(&oid).cloned().unwrap_or_default(),
                     indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
                     triggers: Vec::new(), // Will be populated later
+                    rules: Vec::new(),    // Will be populated later
+                    policies: Vec::new(), // Will be populated later
                     inherits: inheritance_map.get(&oid).cloned().unwrap_or_default(),
                     partition_key: partition_key_map.get(&oid).cloned(),
                     replica_identity,
@@ -564,6 +566,8 @@ pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Resul
                         _ => CheckOption::None,
                     },
                     options: pg_options_to_map(row.get("options")),
+                    rules: Vec::new(),    // Will be populated later
+                    policies: Vec::new(), // Will be populated later
                     is_user_defined,
                     is_from_extension,
                 })
@@ -581,6 +585,7 @@ pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Resul
                 indexes: indexes_map.get(&oid).cloned().unwrap_or_default(),
                 options: pg_options_to_map(row.get("options")),
                 tablespace: row.get("tablespace"),
+                triggers: Vec::new(), // Will be populated later
                 is_user_defined,
                 is_from_extension,
             }),
@@ -590,43 +595,4 @@ pub async fn introspect_relations_unified<C: GenericClient>(client: &C) -> Resul
     }
 
     Ok(relations)
-}
-
-// --- Helper Functions ---
-// We can reuse the column introspector, slightly generalized
-async fn introspect_all_columns_for_relations<C: GenericClient>(
-    client: &C,
-    relation_oids: &[u32],
-) -> Result<HashMap<u32, Vec<Column>>> {
-    if relation_oids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    // This query works for both tables and views
-    let query = "SELECT attrelid, attname, pg_catalog.format_type(atttypid, atttypmod) as type_name FROM pg_attribute WHERE attrelid = ANY($1) AND attnum > 0 AND NOT attisdropped ORDER BY attrelid, attnum";
-    let rows = client.query(query, &[&relation_oids]).await?;
-
-    let mut map: HashMap<u32, Vec<Column>> = HashMap::new();
-    for row in rows {
-        let table_oid: u32 = row.get("attrelid");
-        // For views, many column properties aren't applicable, so we create a simplified Column
-        map.entry(table_oid).or_default().push(Column {
-            name: row.get("attname"),
-            type_name: row.get("type_name"),
-            // Fill with default/None for fields that don't apply to views
-            is_not_null: false,
-            has_default: false,
-            collation: None,
-            storage: ColumnStorage::Plain, // Doesn't matter for views
-            compression: None,
-            identity: None,
-            generated: None,
-            comment: None, // Can be fetched with another bulk query if needed
-            acl: None,
-            is_dropped: false,
-            is_local: true,
-            stats_target: None,
-            fdw_options: HashMap::new(),
-        });
-    }
-    Ok(map)
 }

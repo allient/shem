@@ -1,12 +1,12 @@
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, Volatility, ParallelSafety, ReturnKind};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
 use tracing::debug;
 
 // Helper function to extract functions from routines
-fn get_functions_from_schema(schema: &shem_core::Schema) -> Vec<&shem_core::Function> {
+fn get_functions_from_schema(schema: &pg::model::schema::Schema) -> Vec<&pg::model::routine::Function> {
     schema.routines.values()
         .filter_map(|r| match r {
-            shem_core::schema::Routine::Function(f) => Some(f),
+            pg::model::routine::Routine::Function(f) => Some(f),
             _ => None,
         })
         .collect()
@@ -42,7 +42,7 @@ async fn test_introspect_function_with_comment() -> Result<(), Box<dyn std::erro
     
     let func = routines.iter()
         .filter_map(|r| match r {
-            shem_core::schema::Routine::Function(f) => Some(f),
+            pg::model::routine::Routine::Function(f) => Some(f),
             _ => None,
         })
         .find(|f| f.name == "test_function_with_comment")

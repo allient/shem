@@ -1,14 +1,17 @@
-use crate::traits::{
-    ConnectionMetadata, DatabaseConnection, DatabaseDriver, Feature, Result, Schema, SqlGenerator,
-    Transaction,
+use crate::{
+    database::DatabaseModel,
+    helpers::quote_ident,
+    traits::{
+        ConnectionMetadata, DatabaseConnection, DatabaseDriver, Feature, SqlGenerator, Transaction,
+    },
 };
 use async_trait::async_trait;
 use base64::engine::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use std::collections::HashMap;
+use common::error::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_postgres::{Client, Config, GenericClient, NoTls};
+use tokio_postgres::{Client, Config, NoTls};
 
 pub mod database;
 pub mod db_util;
@@ -214,10 +217,10 @@ impl DatabaseConnection for PostgresConnection {
         })
     }
 
-    async fn introspect(&self) -> Result<Schema> {
+    async fn introspect(&self) -> Result<DatabaseModel> {
         let client = self.client.lock().await;
         let client_ref = &*client;
-        introspect_database_model(client_ref).await
+        DatabaseModel::introspect_database_model(client_ref).await
     }
 
     async fn execute(&self, sql: &str) -> Result<()> {
@@ -387,25 +390,4 @@ impl Transaction for PostgresTransaction {
         }
         Ok(())
     }
-}
-
-// Helper function to get a map of all collations for name resolution
-async fn get_collations_map<C: GenericClient>(client: &C) -> Result<HashMap<u32, String>> {
-    let rows = client.query(
-        "SELECT c.oid, n.nspname, c.collname FROM pg_collation c JOIN pg_namespace n ON c.collnamespace = n.oid",
-        &[],
-    ).await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let oid: u32 = row.get(0);
-            let schema: String = row.get(1);
-            let name: String = row.get(2);
-            (
-                oid,
-                format!("{}.{}", quote_ident(&schema), quote_ident(&name)),
-            )
-        })
-        .collect())
 }

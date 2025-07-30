@@ -1,4 +1,7 @@
-use crate::model::publication::{Publication, PublicationTable};
+use crate::{
+    helpers::get_last_system_oid,
+    model::publication::{Publication, PublicationTable},
+};
 use common::error::Result;
 use tokio_postgres::GenericClient;
 

@@ -1,6 +1,6 @@
 # Shem CLI Tests
 
-This directory contains comprehensive tests for the Shem CLI tool, organized by command and object type.
+This directory contains comprehensive tests for the Shem CLI tool, organized by command and object type. The tests are designed to work with the new unified model architecture.
 
 ## Test Structure
 
@@ -18,18 +18,29 @@ tests/
     ├── mod.rs                   # Introspect test organization
     ├── tables.rs                # Table introspection tests
     ├── views.rs                 # View introspection tests
-    ├── functions.rs             # Function introspection tests (TODO)
-    ├── triggers.rs              # Trigger introspection tests (TODO)
-    ├── types.rs                 # Type introspection tests (TODO)
-    ├── sequences.rs             # Sequence introspection tests (TODO)
-    ├── extensions.rs            # Extension introspection tests (TODO)
-    ├── domains.rs               # Domain introspection tests (TODO)
-    ├── policies.rs              # Policy introspection tests (TODO)
-    ├── rules.rs                 # Rule introspection tests (TODO)
-    ├── event_triggers.rs        # Event trigger introspection tests (TODO)
-    ├── materialized_views.rs    # Materialized view introspection tests (TODO)
-    ├── procedures.rs            # Procedure introspection tests (TODO)
-    ├── collations.rs            # Collation introspection tests (TODO)
+    ├── functions.rs             # Function introspection tests
+    ├── triggers.rs              # Trigger introspection tests
+    ├── types.rs                 # Type introspection tests (enums, domains, etc.)
+    ├── sequences.rs             # Sequence introspection tests
+    ├── extensions.rs            # Extension introspection tests
+    ├── domains.rs               # Domain introspection tests
+    ├── policies.rs              # Policy introspection tests
+    ├── rules.rs                 # Rule introspection tests
+    ├── event_triggers.rs        # Event trigger introspection tests
+    ├── materialized_views.rs    # Materialized view introspection tests
+    ├── procedures.rs            # Procedure introspection tests
+    ├── collations.rs            # Collation introspection tests
+    ├── foreign_tables.rs        # Foreign table introspection tests
+    ├── publications.rs          # Publication introspection tests
+    ├── subscriptions.rs         # Subscription introspection tests
+    ├── roles.rs                 # Role introspection tests
+    ├── tablespaces.rs           # Tablespace introspection tests
+    ├── foreign_data_wrappers.rs # FDW introspection tests
+    ├── servers.rs               # Server introspection tests
+    ├── operators.rs             # Operator introspection tests
+    ├── operator_classes.rs      # Operator class introspection tests
+    ├── operator_families.rs     # Operator family introspection tests
+    ├── conversions.rs           # Conversion introspection tests
     └── integration.rs           # Introspect integration tests
 ```
 
@@ -85,14 +96,12 @@ cargo test --test integration_tests test_basic_introspect
 # Run tests with specific features
 cargo test --features test-db
 
-# 
-cargo test --test integration_tests test_introspect_with_extensions -- --nocapture
-cargo test --test integration_tests test_introspect_simple_extension -- --nocapture
+# Run with debug logging
+RUST_LOG=debug cargo test --test integration_tests test_introspect_with_extensions -- --nocapture
+RUST_LOG=debug cargo test --test integration_tests test_introspect_simple_extension -- --nocapture
 RUST_LOG=debug bacon test -- -p cli --test generator test_introspect_simple_extension -- --nocapture
 RUST_LOG=debug cargo test -p cli --test generator comprehensive_integration -- --nocapture
 ```
-
-
 
 ### Running Individual Test Modules
 
@@ -104,12 +113,15 @@ cargo test --test integration_tests -- tables
 
 # Run only view introspection tests
 cargo test --test integration_tests -- views
+
+# Run only type introspection tests (enums, domains, etc.)
+cargo test --test integration_tests -- types
 ```
 
 ## Test Categories
 
 ### 1. Table Tests (`tables.rs`)
-Tests for introspecting various table types:
+Tests for introspecting various table types using the unified `Relation::Table` model:
 - Simple tables with basic columns
 - Tables with foreign keys
 - Tables with enums and domains
@@ -120,9 +132,13 @@ Tests for introspecting various table types:
 - Tables with NOT NULL constraints
 - Tables with unique constraints
 - Tables with composite primary keys
+- Tables with identity columns
+- Tables with generated columns
+- Tables with partitioning
+- Tables with inheritance
 
 ### 2. View Tests (`views.rs`)
-Tests for introspecting various view types:
+Tests for introspecting various view types using the unified `Relation::View` model:
 - Simple views
 - Views with joins
 - Views with aggregation
@@ -133,9 +149,71 @@ Tests for introspecting various view types:
 - Views with security barriers
 - Views with check options
 
-### 3. Integration Tests (`integration.rs`)
+### 3. Materialized View Tests (`materialized_views.rs`)
+Tests for introspecting materialized views using the unified `Relation::MaterializedView` model:
+- Simple materialized views
+- Materialized views with indexes
+- Materialized views with storage parameters
+- Materialized views with refresh options
+
+### 4. Foreign Table Tests (`foreign_tables.rs`)
+Tests for introspecting foreign tables using the unified `Relation::ForeignTable` model:
+- Foreign tables with server connections
+- Foreign tables with column options
+- Foreign tables with constraints
+
+### 5. Type Tests (`types.rs`)
+Tests for introspecting various type objects using the unified `Type` enum:
+- **Enum Types** (`Type::Enum`): Custom enumerated types
+- **Composite Types** (`Type::Composite`): User-defined structured types
+- **Domain Types** (`Type::Domain`): Constrained base types
+- **Range Types** (`Type::Range`): Custom range types
+- **Base Types** (`Type::Base`): Fundamental types
+- **Pseudo Types** (`Type::Pseudo`): Special types like 'any', 'void'
+
+### 6. Routine Tests (`functions.rs`, `procedures.rs`)
+Tests for introspecting functions and procedures using the unified `Routine` enum:
+- **Functions** (`Routine::Function`): User-defined functions
+- **Procedures** (`Routine::Procedure`): Stored procedures
+- **Aggregates** (`Routine::Aggregate`): Custom aggregation functions
+
+### 7. Infrastructure Tests
+Tests for various infrastructure objects:
+- **Sequences** (`sequences.rs`): Auto-incrementing number generators
+- **Extensions** (`extensions.rs`): PostgreSQL extensions
+- **Schemas** (`schemas.rs`): Schema namespaces
+- **Collations** (`collations.rs`): Text sorting rules
+- **Conversions** (`conversions.rs`): Character set conversions
+
+### 8. Security Tests
+Tests for security-related objects:
+- **Policies** (`policies.rs`): Row-level security policies
+- **Roles** (`roles.rs`): Database users and roles
+
+### 9. Replication Tests
+Tests for replication objects:
+- **Publications** (`publications.rs`): Logical replication publications
+- **Subscriptions** (`subscriptions.rs`): Logical replication subscriptions
+
+### 10. Foreign Data Tests
+Tests for foreign data wrapper objects:
+- **Foreign Data Wrappers** (`foreign_data_wrappers.rs`): External data source connectors
+- **Servers** (`servers.rs`): Foreign data wrapper servers
+
+### 11. Operator Tests
+Tests for operator-related objects:
+- **Operators** (`operators.rs`): Custom operators
+- **Operator Classes** (`operator_classes.rs`): Index behavior definitions
+- **Operator Families** (`operator_families.rs`): Operator family groupings
+
+### 12. Trigger Tests
+Tests for trigger objects:
+- **Triggers** (`triggers.rs`): Row and statement-level triggers
+- **Event Triggers** (`event_triggers.rs`): Database-level event triggers
+
+### 13. Integration Tests (`integration.rs`)
 End-to-end tests that verify:
-- Complete schema introspection
+- Complete schema introspection using unified models
 - Custom output directories
 - Configuration file usage
 - Verbose output
@@ -144,6 +222,7 @@ End-to-end tests that verify:
 - Dependency ordering
 - System object exclusion
 - Comment preservation
+- Unified model serialization
 
 ## Test Utilities
 
@@ -172,21 +251,22 @@ The `fixtures` module provides:
 - **SQL Fixtures**: Pre-defined SQL statements for creating test objects
 - **Expected Outputs**: Expected schema output for comparison
 - **Configuration Fixtures**: Test configuration files
+- **Unified Model Fixtures**: Test data for the new unified model architecture
 
 ## Adding New Tests
 
 ### 1. Create Test Module
-Create a new file in the appropriate directory (e.g., `introspect/functions.rs`)
+Create a new file in the appropriate directory (e.g., `introspect/new_object.rs`)
 
 ### 2. Write Test Function
 ```rust
 #[tokio::test]
-async fn test_introspect_simple_function() -> Result<()> {
+async fn test_introspect_simple_new_object() -> Result<()> {
     let env = TestEnv::new()?;
     let pool = db::setup_test_db().await?;
     
     // Setup test data
-    db::execute_sql(&pool, "CREATE FUNCTION test_func() RETURNS INTEGER AS 'SELECT 1' LANGUAGE SQL;").await?;
+    db::execute_sql(&pool, "CREATE NEW_OBJECT test_obj(...);").await?;
     
     // Run introspect command
     let output = cli::run_shem_command_in_dir(
@@ -196,9 +276,9 @@ async fn test_introspect_simple_function() -> Result<()> {
     
     cli::assert_command_success(&output);
     
-    // Verify results
+    // Verify results using unified model
     let schema_content = std::fs::read_to_string(env.temp_path().join("schema/schema.sql"))?;
-    assert!(schema_content.contains("CREATE FUNCTION test_func"));
+    assert!(schema_content.contains("CREATE NEW_OBJECT test_obj"));
     
     Ok(())
 }
@@ -209,6 +289,28 @@ Update the appropriate `mod.rs` file to include your new test module.
 
 ### 4. Add Fixtures
 If needed, add SQL fixtures to `fixtures/mod.rs`.
+
+## Testing Unified Model Architecture
+
+The tests now verify the new unified model architecture:
+
+### 1. Unified Object Models
+Tests verify that objects are correctly represented using the unified enums:
+- `Relation` enum for tables, views, materialized views, foreign tables
+- `Type` enum for all type variants
+- `Routine` enum for functions, procedures, aggregates
+
+### 2. Database Model Organization
+Tests verify that objects are correctly organized by scope in the `DatabaseModel`:
+- Global objects (roles, tablespaces)
+- Database-scoped objects (schemas, extensions, publications)
+- Schema-scoped objects (relations, types, routines)
+
+### 3. Unified SQL Generation
+Tests verify that the unified SQL generator correctly handles all object variants:
+- `create_relation()` handles all relation types
+- `create_type()` handles all type variants
+- `create_routine()` handles all routine types
 
 ## Troubleshooting
 
@@ -225,6 +327,7 @@ If needed, add SQL fixtures to `fixtures/mod.rs`.
 - Check the test output for specific error messages
 - Verify that the CLI binary can be built: `cargo build --bin shem`
 - Run tests with verbose output to see more details
+- Check that the unified model architecture is working correctly
 
 ## Contributing
 
@@ -233,4 +336,6 @@ When adding new tests:
 2. Use the provided test utilities
 3. Add appropriate fixtures
 4. Document any new test patterns
-5. Ensure tests are isolated and don't interfere with each other 
+5. Ensure tests are isolated and don't interfere with each other
+6. Test the unified model architecture for new object types
+7. Verify that objects are correctly organized by scope in the DatabaseModel 

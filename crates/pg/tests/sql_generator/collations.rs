@@ -1,6 +1,6 @@
-use shem_core::schema::{Collation, CollationProvider};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::collation::{Collation, CollationProvider};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_collation() {

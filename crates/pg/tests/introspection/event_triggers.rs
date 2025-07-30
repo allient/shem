@@ -3,9 +3,9 @@
 //! Tests for introspecting various types of event triggers.
 
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
-use shem_core::schema::EventTriggerEvent;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(

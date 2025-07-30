@@ -206,6 +206,37 @@ The parser is used by multiple Shem commands:
 - **`shem inspect`**: Parses schema files to analyze and count objects
 - **`shem introspect`**: Parses generated SQL during serialization
 
+## Integration with Unified Model Architecture
+
+The parser works alongside the new unified model architecture in the pg crate:
+
+- **Complementary Roles**: Parser handles SQL → AST, while pg crate handles Database → Unified Models
+- **Consistent Object Types**: Both use similar object representations for consistency
+- **Shared Type Definitions**: Common types are shared between parser and pg crate
+- **End-to-End Workflow**: SQL files → Parser → AST → Comparison with Database → Unified Models
+
+### Data Flow
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   SQL Files     │───▶│  shem-parser     │───▶│  Structured     │
+│   or Strings    │    │                  │    │   Schema Data   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌──────────────────┐
+                       │   pg_query       │
+                       │ (PostgreSQL      │
+                       │  parser)         │
+                       └──────────────────┘
+                              │
+                              ▼
+                       ┌──────────────────┐
+                       │  shem-pg         │
+                       │ (Unified Models) │
+                       └──────────────────┘
+```
+
 ## Architecture
 
 ```

@@ -1,22 +1,3 @@
-use crate::introspection::{
-    collation::introspect_collations,
-    conversion::introspect_conversions,
-    event_trigger::introspect_event_triggers,
-    extension::introspect_extensions,
-    fdw::{introspect_fdws, introspect_servers},
-    global::{introspect_roles, introspect_tablespaces},
-    operator::{introspect_op_classes, introspect_op_families, introspect_operators},
-    policy::introspect_policies,
-    publication::{introspect_publication_tables, introspect_publications},
-    relation::introspect_relations_unified,
-    routine::introspect_routines,
-    rule::introspect_rules,
-    schema::introspect_named_schemas,
-    sequence::introspect_sequences,
-    subscription::introspect_subscriptions,
-    trigger::introspect_triggers,
-    types::introspect_types,
-};
 use crate::model::{
     collation::Collation,
     conversion::Conversion,
@@ -27,14 +8,34 @@ use crate::model::{
     operator::{OpClass, OpFamily, Operator},
     policy::Policy,
     publication::{Publication, PublicationTable},
-    relation::{MaterializedView, Relation, Table, View},
-    routine::{Aggregate, Function, Procedure, Routine},
+    relation::Relation,
+    routine::Routine,
     rule::Rule,
     schema::Schema,
     sequence::Sequence,
     subscription::Subscription,
-    trigger::Trigger,
-    types::{BaseType, CompositeType, Domain, EnumType, RangeType, Type},
+    types::Type,
+};
+use crate::{
+    introspection::{
+        collation::introspect_collations,
+        conversion::introspect_conversions,
+        event_trigger::introspect_event_triggers,
+        extension::introspect_extensions,
+        fdw::{introspect_fdws, introspect_servers},
+        global::{introspect_roles, introspect_tablespaces},
+        operator::{introspect_op_classes, introspect_op_families, introspect_operators},
+        policy::introspect_policies,
+        publication::{introspect_publication_tables, introspect_publications},
+        relation::introspect_relations_unified,
+        routine::introspect_routines,
+        rule::introspect_rules,
+        schema::introspect_named_schemas,
+        sequence::introspect_sequences,
+        subscription::introspect_subscriptions,
+        trigger::introspect_triggers,
+        types::introspect_types,
+    },
 };
 use common::error::Result;
 use serde::{Deserialize, Serialize};
@@ -77,7 +78,7 @@ pub struct DatabaseModel {
 
     // --- Relationship Objects ---
     /// Links Publications to the Tables they contain. Stored as a Vec as it's a list of relations.
-    pub publication_tables: Vec<PublicationTable>,
+    pub publication_tables: HashMap<String, PublicationTable>,
 }
 
 // The `#[derive(Default)]` gives you `Database::default()`.
@@ -191,10 +192,15 @@ impl DatabaseModel {
         // Constraint
         // 1. Make a single call to the unified function to get ALL relations.
         let all_relations: Vec<Relation> = introspect_relations_unified(client).await?;
-
         // 2. Iterate over the results and use a `match` to sort them into the correct HashMaps.
         for relation in all_relations {
-            db_model.relations.insert(relation.name.clone(), relation);
+            let relation_name = match &relation {
+                Relation::Table(t) => t.name.clone(),
+                Relation::View(t) => t.name.clone(),
+                Relation::MaterializedView(t) => t.name.clone(),
+                Relation::ForeignTable(t) => t.name.clone(),
+            };
+            db_model.relations.insert(relation_name, relation);
         }
 
         // Introspect policies
@@ -259,37 +265,55 @@ impl DatabaseModel {
 
         // Introspect triggers
         // Get the OIDs of all tables that can have triggers
-        let table_oids: Vec<u32> = db_model.relations.values().map(|t| t.oid).collect();
-        let triggers_map = introspect_triggers(client, &table_oids).await?;
-
+        let trigger_parent_oids: Vec<u32> = db_model
+            .relations
+            .values()
+            .filter_map(|rel| match rel {
+                Relation::Table(t) => Some(t.oid),
+                Relation::MaterializedView(m) => Some(m.oid),
+                Relation::ForeignTable(f) => Some(f.oid),
+                Relation::View(_) => None, // Views don't have triggers, they have rules.
+            })
+            .collect();
+        let mut triggers_map = introspect_triggers(client, &trigger_parent_oids).await?;
         // Distribute the fetched triggers into their parent Table objects and schema-level triggers.
         tracing::debug!("Triggers map: {:?}", triggers_map);
-        for (_, table) in db_model.relations.iter_mut() {
-            tracing::debug!(
-                "Checking table {} (OID: {}) for triggers",
-                table.name,
-                table.oid
-            );
-            if let Some(triggers_for_this_table) = triggers_map.get(&table.oid) {
-                tracing::debug!(
-                    "Found {} triggers for table {}",
-                    triggers_for_this_table.len(),
-                    table.name
-                );
-                // Clone the triggers into the table's `triggers` field.
-                table.triggers = triggers_for_this_table.clone();
+        // We no longer need the key from iter_mut(), only the relation object itself.
+        for relation in db_model.relations.values_mut() {
+            // 1. Get the OID from the relation object itself.
+            let relation_oid = relation.get_oid(); // Using the helper method we defined
 
-                // Also add triggers to the schema-level triggers HashMap
-                for trigger in triggers_for_this_table {
-                    db_model
-                        .triggers
-                        .insert(trigger.name.clone(), trigger.clone());
+            // 2. Use the OID (a u32) to look up in the triggers_map.
+            if let Some(triggers_for_this_relation) = triggers_map.remove(&relation_oid) {
+                tracing::debug!(
+                    "Found {} triggers for relation '{}' (OID: {})",
+                    triggers_for_this_relation.len(),
+                    relation.get_name(),
+                    relation_oid
+                );
+
+                // 3. Match and move the triggers into the correct field.
+                match relation {
+                    Relation::Table(t) => t.triggers = triggers_for_this_relation,
+                    Relation::MaterializedView(m) => m.triggers = triggers_for_this_relation,
+                    Relation::ForeignTable(f) => f.triggers = triggers_for_this_relation,
+                    Relation::View(_) => {
+                        tracing::warn!(
+                            "Found triggers for a View with OID {}, which is unexpected.",
+                            relation_oid
+                        );
+                    }
                 }
-            } else {
-                tracing::debug!("No triggers found for table {}", table.name);
             }
         }
 
+        // Any remaining triggers in the map are orphans (their parent table wasn't in our list).
+        if !triggers_map.is_empty() {
+            tracing::warn!(
+                "Found orphaned triggers that could not be assigned to a relation: {:?}",
+                triggers_map.keys()
+            );
+        }
         // Introspect event triggers
         let event_triggers = introspect_event_triggers(&*client).await?;
         for trigger in event_triggers {
@@ -298,31 +322,53 @@ impl DatabaseModel {
                 .insert(trigger.name.clone(), trigger);
         }
 
-        // // Introspect servers
-        // let servers = introspect_servers(&*client).await?;
-        // for server in servers {
-        //     schema.servers.insert(server.name.clone(), server);
-        // }
+        // Introspect conversions
+        let conversions = introspect_conversions(&*client).await?;
+        for conversion in conversions {
+            db_model
+                .conversions
+                .insert(conversion.name.clone(), conversion);
+        }
 
-        // // Introspect foreign tables
-        // let foreign_tables = introspect_foreign_tables(&*client).await?;
-        // for table in foreign_tables {
-        //     schema.foreign_tables.insert(table.name.clone(), table);
-        // }
+        // Introspect operators
+        let operators = introspect_operators(&*client).await?;
+        for operator in operators {
+            db_model.operators.insert(operator.name.clone(), operator);
+        }
 
-        // // Introspect subscriptions
-        // let subscriptions = introspect_subscriptions(&*client).await?;
-        // for subscription in subscriptions {
-        //     schema
-        //         .subscriptions
-        //         .insert(subscription.name.clone(), subscription);
-        // }
+        // Introspect op classes
+        let op_classes = introspect_op_classes(&*client).await?;
+        for op_class in op_classes {
+            db_model.op_classes.insert(op_class.name.clone(), op_class);
+        }
 
-        // // Introspect foreign data wrappers
-        // let foreign_data_wrappers = introspect_foreign_data_wrappers(&*client).await?;
-        // for fdw in foreign_data_wrappers {
-        //     schema.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
-        // }
+        // Introspect op families
+        let op_families = introspect_op_families(&*client).await?;
+        for op_family in op_families {
+            db_model
+                .op_families
+                .insert(op_family.name.clone(), op_family);
+        }
+
+        // Introspect subscriptions
+        let subscriptions = introspect_subscriptions(&*client).await?;
+        for subscription in subscriptions {
+            db_model
+                .subscriptions
+                .insert(subscription.name.clone(), subscription);
+        }
+
+        // Introspect servers
+        let servers = introspect_servers(&*client).await?;
+        for server in servers {
+            db_model.servers.insert(server.name.clone(), server);
+        }
+
+        // Introspect foreign data wrappers
+        let foreign_data_wrappers = introspect_fdws(&*client).await?;
+        for fdw in foreign_data_wrappers {
+            db_model.foreign_data_wrappers.insert(fdw.name.clone(), fdw);
+        }
 
         Ok(db_model)
     }

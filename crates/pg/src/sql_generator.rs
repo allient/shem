@@ -12,353 +12,319 @@
  * The SQL generator is used for schema migration, introspection/export, reverse generation,
  * and automation of database changes, allowing tools to programmatically manage PostgreSQL schemas.
  */
+use std::collections::HashMap;
+use common::error::Result;
 use crate::model::{
     collation::Collation,
     conversion::Conversion,
     event_trigger::EventTrigger,
     extension::Extension,
-    fdw::ForeignDataWrapper,
+    fdw::{ForeignDataWrapper, Server},
     global::{Role, Tablespace},
     operator::{OpClass, OpFamily, Operator},
-    policy::Policy,
-    publication::Publication,
-    relation::{MaterializedView, Table, View},
-    routine::{Aggregate, Function, Procedure},
-    rule::Rule,
+    publication::{Publication, PublicationTable},
+    relation::{ConstraintType, ForeignTable, MaterializedView, Relation, Table, View},
+    routine::Routine,
     schema::Schema,
     sequence::Sequence,
     subscription::Subscription,
-    trigger::Trigger,
     types::{BaseType, CompositeType, Domain, EnumType, RangeType, Type},
 };
 use crate::quote_ident;
 use crate::traits::SqlGenerator;
-use anyhow::Result;
 
-/// PostgreSQL SQL generator
-#[derive(Debug, Clone)]
+
+/// A SQL generator for the PostgreSQL dialect.
+///
+/// This struct implements the `SqlGenerator` trait to convert the platform-agnostic
+/// in-memory `Database` model into concrete `CREATE`, `ALTER`, and `DROP` statements
+/// for PostgreSQL.
+#[derive(Debug, Clone, Default)]
 pub struct PostgresSqlGenerator;
 
+// ===================================================================
+//  Private Helper Methods
+// ===================================================================
+
 impl PostgresSqlGenerator {
-    /// Quote an identifier to handle reserved keywords and preserve case sensitivity
-    fn _quote_identifier(identifier: &str) -> String {
-        // Check if quoting is needed
-        let needs_quoting = identifier.chars().any(|c| !c.is_alphanumeric() && c != '_')
-            || {
-                // Check if it's a reserved keyword (simplified list)
-                let lower = identifier.to_lowercase();
-                matches!(
-                    lower.as_str(),
-                    "all"
-                        | "analyse"
-                        | "analyze"
-                        | "and"
-                        | "any"
-                        | "array"
-                        | "as"
-                        | "asc"
-                        | "asymmetric"
-                        | "authorization"
-                        | "binary"
-                        | "both"
-                        | "case"
-                        | "cast"
-                        | "check"
-                        | "collate"
-                        | "column"
-                        | "constraint"
-                        | "create"
-                        | "cross"
-                        | "current_date"
-                        | "current_role"
-                        | "current_time"
-                        | "current_timestamp"
-                        | "current_user"
-                        | "default"
-                        | "deferrable"
-                        | "desc"
-                        | "distinct"
-                        | "do"
-                        | "else"
-                        | "end"
-                        | "except"
-                        | "false"
-                        | "for"
-                        | "foreign"
-                        | "freeze"
-                        | "from"
-                        | "full"
-                        | "grant"
-                        | "group"
-                        | "having"
-                        | "in"
-                        | "initially"
-                        | "inner"
-                        | "intersect"
-                        | "into"
-                        | "is"
-                        | "isnull"
-                        | "join"
-                        | "leading"
-                        | "left"
-                        | "like"
-                        | "limit"
-                        | "localtime"
-                        | "localtimestamp"
-                        | "natural"
-                        | "not"
-                        | "notnull"
-                        | "null"
-                        | "offset"
-                        | "on"
-                        | "only"
-                        | "or"
-                        | "order"
-                        | "outer"
-                        | "overlaps"
-                        | "placing"
-                        | "primary"
-                        | "references"
-                        | "right"
-                        | "select"
-                        | "session_user"
-                        | "similar"
-                        | "some"
-                        | "symmetric"
-                        | "table"
-                        | "then"
-                        | "to"
-                        | "trailing"
-                        | "true"
-                        | "union"
-                        | "unique"
-                        | "user"
-                        | "using"
-                        | "when"
-                        | "where"
-                        | "with"
-                )
-            }
-            || {
-                // Check if it starts with a number
-                identifier.chars().next().map_or(false, |c| c.is_numeric())
-            };
+    /// Quotes an identifier to handle reserved keywords, special characters, and preserve case sensitivity.
+    fn quote_ident(identifier: &str) -> String {
+        quote_ident(identifier)
+    }
+    
+    /// Qualifies an object's name with its schema, e.g., "public"."users".
+    fn qualified_name(schema: &str, name: &str) -> String {
+        format!("{}.{}", Self::quote_ident(schema), Self::quote_ident(name))
+    }
+    
+    /// Formats an options HashMap into a "(key = 'value', ...)" string.
+    fn format_options(options: &HashMap<String, String>) -> String {
+        if options.is_empty() {
+            return String::new();
+        }
+        let options_str = options
+            .iter()
+            .map(|(k, v)| format!("{} = '{}'", k, v.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" WITH ({})", options_str)
+    }
 
-        if needs_quoting {
-            format!("\"{}\"", identifier.replace("\"", "\"\""))
+    // --- Relation Generation Helpers ---
+
+    fn generate_create_table(&self, table: &Table) -> Result<String> {
+        let mut sql = String::new();
+        let table_name = Self::qualified_name(&table.schema, &table.name);
+
+        // 1. Main CREATE TABLE statement
+        sql.push_str(&format!("CREATE TABLE {} (\n", table_name));
+        let mut parts = Vec::new();
+
+        // Columns
+        for col in &table.columns {
+            // Skip dropped columns
+            if col.is_dropped { continue; }
+            let mut col_def = format!("    {} {}", Self::quote_ident(&col.name), col.type_name);
+            if let Some(collation) = &col.collation { col_def.push_str(&format!(" COLLATE {}", collation)); }
+            if col.is_not_null { col_def.push_str(" NOT NULL"); }
+            // Note: default_value is not stored in Column struct, only has_default flag
+            // Default values would need to be retrieved separately if needed
+            if let Some(identity) = &col.identity {
+                let generation = match identity.generation {
+                    crate::model::relation::IdentityGeneration::Always => "ALWAYS",
+                    crate::model::relation::IdentityGeneration::ByDefault => "BY DEFAULT",
+                };
+                col_def.push_str(&format!(" GENERATED {} AS IDENTITY", generation));
+            }
+            if let Some(generated) = &col.generated {
+                col_def.push_str(&format!(" GENERATED ALWAYS AS ({}) STORED", generated.expression));
+            }
+            parts.push(col_def);
+        }
+
+        // Table-level constraints (PK, UNIQUE, CHECK, EXCLUDE). FKs are deferred.
+        for constraint in &table.constraints {
+            if let ConstraintType::ForeignKey(_) = &constraint.r#type { continue; }
+            parts.push(format!("    CONSTRAINT {} {}", Self::quote_ident(&constraint.name), constraint.definition));
+        }
+        sql.push_str(&parts.join(",\n"));
+        sql.push_str("\n)");
+
+        // INHERITS clause
+        if !table.inherits.is_empty() {
+            sql.push_str(&format!("\nINHERITS ({})", table.inherits.join(", ")));
+        }
+
+        // PARTITION BY clause
+        if let Some(pkey) = &table.partition_key {
+            sql.push_str(&format!("\nPARTITION BY {}", pkey));
+        }
+
+        // TABLESPACE clause
+        if let Some(ts) = &table.tablespace {
+            sql.push_str(&format!("\nTABLESPACE {}", Self::quote_ident(ts)));
+        }
+        
+        sql.push_str(";\n");
+
+        // 2. Post-CREATE statements for ownership, comments, and dependent objects.
+        sql.push_str(&format!("\nALTER TABLE {} OWNER TO {};", table_name, Self::quote_ident(&table.owner)));
+        if let Some(comment) = &table.comment {
+            sql.push_str(&format!("\nCOMMENT ON TABLE {} IS '{}';", table_name, comment.replace('\'', "''")));
+        }
+        // ... Column comments, ACLs, etc. would be generated here ...
+
+        // 3. Dependent objects (Indexes, Triggers, Rules, Policies, deferred FKs)
+        // These are typically applied in the "post-data" section of a dump.
+        for index in &table.indexes {
+            sql.push_str("\n");
+            sql.push_str(&index.definition);
+            sql.push_str(";\n");
+        }
+        for trigger in &table.triggers {
+            sql.push_str("\n");
+            sql.push_str(&trigger.definition); // pg_get_triggerdef is a full statement
+        }
+        for rule in &table.rules {
+            sql.push_str("\n");
+            sql.push_str(&rule.definition); // pg_get_ruledef is a full statement
+        }
+        for policy in &table.policies {
+            // The definition for policies needs to be constructed
+            if let Some(name) = &policy.name {
+                // ... logic to build CREATE POLICY ...
+            } else {
+                // This is the special "ENABLE RLS" object
+                sql.push_str(&format!("\nALTER TABLE {} ENABLE ROW LEVEL SECURITY;", table_name));
+            }
+        }
+        for constraint in &table.constraints {
+            if let ConstraintType::ForeignKey(_) = &constraint.r#type {
+                sql.push_str(&format!("\nALTER TABLE ONLY {} ADD CONSTRAINT {} {};", table_name, Self::quote_ident(&constraint.name), constraint.definition));
+            }
+        }
+        
+        Ok(sql)
+    }
+
+    fn generate_create_view(&self, view: &View) -> Result<String> {
+        // The `definition` from pg_get_viewdef is a complete `CREATE VIEW` statement.
+        // We just need to add ownership and comments.
+        let view_name = Self::qualified_name(&view.schema, &view.name);
+        let mut sql = view.definition.clone();
+        if !sql.ends_with(';') { sql.push(';'); }
+        sql.push_str(&format!("\nALTER VIEW {} OWNER TO {};", view_name, Self::quote_ident(&view.owner)));
+        if let Some(comment) = &view.comment {
+            sql.push_str(&format!("\nCOMMENT ON VIEW {} IS '{}';", view_name, comment.replace('\'', "''")));
+        }
+        Ok(sql)
+    }
+
+    fn generate_create_materialized_view(&self, matview: &MaterializedView) -> Result<String> {
+        let view_name = Self::qualified_name(&matview.schema, &matview.name);
+        // The `definition` from pg_get_viewdef needs the WITH [NO] DATA clause appended.
+        let with_clause = if matview.is_populated { "WITH DATA" } else { "WITH NO DATA" };
+        let mut sql = format!("{} {};", matview.definition, with_clause);
+        sql.push_str(&format!("\nALTER MATERIALIZED VIEW {} OWNER TO {};", view_name, Self::quote_ident(&matview.owner)));
+        if let Some(comment) = &matview.comment {
+            sql.push_str(&format!("\nCOMMENT ON MATERIALIZED VIEW {} IS '{}';", view_name, comment.replace('\'', "''")));
+        }
+        Ok(sql)
+    }
+
+    fn generate_create_foreign_table(&self, ftable: &ForeignTable) -> Result<String> {
+        let table_name = Self::qualified_name(&ftable.schema, &ftable.name);
+        let mut sql = format!("CREATE FOREIGN TABLE {} (\n", table_name);
+        let mut parts = Vec::new();
+        for col in &ftable.columns {
+            parts.push(format!("    {} {}", Self::quote_ident(&col.name), col.type_name));
+        }
+        sql.push_str(&parts.join(",\n"));
+        sql.push_str(&format!("\n) SERVER {}", Self::quote_ident(&ftable.server_name)));
+        sql.push_str(&Self::format_options(&ftable.options));
+        sql.push_str(";\n");
+        sql.push_str(&format!("\nALTER FOREIGN TABLE {} OWNER TO {};", table_name, Self::quote_ident(&ftable.owner)));
+        Ok(sql)
+    }
+
+    // --- Type Generation Helpers ---
+    
+    fn generate_create_enum_type(&self, enum_type: &EnumType) -> Result<String> {
+        let type_name = Self::qualified_name(&enum_type.info.schema, &enum_type.info.name);
+        let values = enum_type.values.iter()
+            .map(|v| format!("'{}'", v.label.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!("CREATE TYPE {} AS ENUM ({});", type_name, values))
+    }
+
+    fn generate_create_domain(&self, domain: &Domain) -> Result<String> {
+        let domain_name = Self::qualified_name(&domain.info.schema, &domain.info.name);
+        let mut sql = format!("CREATE DOMAIN {} AS {}", domain_name, domain.base_type);
+        if domain.not_null { sql.push_str(" NOT NULL"); }
+        if let Some(default) = &domain.default { sql.push_str(&format!(" DEFAULT {}", default)); }
+        if let Some(collation) = &domain.collation { sql.push_str(&format!(" COLLATE {}", collation)); }
+        for constraint in &domain.constraints {
+            sql.push_str(&format!("\n    CONSTRAINT {} {}", Self::quote_ident(&constraint.name), constraint.definition));
+        }
+        sql.push(';');
+        Ok(sql)
+    }
+    
+    fn generate_create_base_type(&self, base: &BaseType) -> Result<String> {
+        let type_name = Self::qualified_name(&base.info.schema, &base.info.name);
+        let mut sql = format!("CREATE TYPE {} AS (", type_name);
+        sql.push_str(&format!("\n    INPUT = {}", base.input_fn));
+        sql.push_str(&format!("\n    OUTPUT = {}", base.output_fn));
+        if let Some(receive_fn) = &base.receive_fn {
+            sql.push_str(&format!("\n    RECEIVE = {}", receive_fn));
+        }
+        if let Some(send_fn) = &base.send_fn {
+            sql.push_str(&format!("\n    SEND = {}", send_fn));
+        }
+        if let Some(typmod_in_fn) = &base.typmod_in_fn {
+            sql.push_str(&format!("\n    TYPMOD_IN = {}", typmod_in_fn));
+        }
+        if let Some(typmod_out_fn) = &base.typmod_out_fn {
+            sql.push_str(&format!("\n    TYPMOD_OUT = {}", typmod_out_fn));
+        }
+        if let Some(analyze_fn) = &base.analyze_fn {
+            sql.push_str(&format!("\n    ANALYZE = {}", analyze_fn));
+        }
+        if base.is_collatable {
+            sql.push_str("\n    COLLATABLE = true");
         } else {
-            identifier.to_string()
+            sql.push_str("\n    COLLATABLE = false");
         }
+        sql.push_str("\n);");
+        Ok(sql)
     }
 
-    fn force_quote_identifier(identifier: &str) -> String {
-        format!("\"{}\"", identifier.replace("\"", "\"\""))
-    }
-
-    fn is_reserved_keyword(name: &str) -> bool {
-        // Add more reserved keywords as needed
-        matches!(name.to_ascii_lowercase().as_str(), "order")
-    }
-
-    fn generate_create_base_type(&self, base_type: &BaseType) -> Result<String> {
-        let type_name = Self::force_quote_identifier(&base_type.info.name);
-        let mut sql = format!("CREATE TYPE {} (", type_name);
-
-        // Add input and output functions (required)
-        sql.push_str(&format!(
-            "INPUT = {}, OUTPUT = {}",
-            base_type.input_fn, base_type.output_fn
-        ));
-
-        // Add internal length
-        sql.push_str(&format!(", INTERNALLENGTH = {}", base_type.internal_length));
-
-        // Add passed by value
-        sql.push_str(&format!(
-            ", PASSEDBYVALUE = {}",
-            base_type.is_passed_by_value
-        ));
-
-        // Add alignment
-        sql.push_str(&format!(", ALIGNMENT = {}", base_type.alignment));
-
-        // Add storage
-        sql.push_str(&format!(", STORAGE = {}", base_type.storage));
-
-        // Add category
-        sql.push_str(&format!(", CATEGORY = '{}'", base_type.category));
-
-        // Add preferred flag
-        if base_type.is_preferred {
-            sql.push_str(", PREFERRED = true");
-        }
-
-        // Add default value if specified
-        if let Some(default) = &base_type.default_value {
-            sql.push_str(&format!(", DEFAULT = {}", default));
-        }
-
-        // Add element type if it's an array type
-        if let Some(element_oid) = base_type.element_type_oid {
-            if element_oid > 0 {
-                sql.push_str(&format!(", ELEMENT = {}", element_oid));
-            }
-        }
-
-        // Add delimiter
-        sql.push_str(&format!(", DELIMITER = '{}'", base_type.delimiter));
-
-        // Add collatable flag
-        sql.push_str(&format!(", COLLATABLE = {}", base_type.is_collatable));
-
-        // Add receive function if specified
-        if let Some(receive_fn) = &base_type.receive_fn {
-            sql.push_str(&format!(", RECEIVE = {}", receive_fn));
-        }
-
-        // Add send function if specified
-        if let Some(send_fn) = &base_type.send_fn {
-            sql.push_str(&format!(", SEND = {}", send_fn));
-        }
-
-        // Add typmod in function if specified
-        if let Some(typmod_in_fn) = &base_type.typmod_in_fn {
-            sql.push_str(&format!(", TYPMOD_IN = {}", typmod_in_fn));
-        }
-
-        // Add typmod out function if specified
-        if let Some(typmod_out_fn) = &base_type.typmod_out_fn {
-            sql.push_str(&format!(", TYPMOD_OUT = {}", typmod_out_fn));
-        }
-
-        // Add analyze function if specified
-        if let Some(analyze_fn) = &base_type.analyze_fn {
-            sql.push_str(&format!(", ANALYZE = {}", analyze_fn));
-        }
-
+    fn generate_create_composite_type(&self, comp: &CompositeType) -> Result<String> {
+        let type_name = Self::qualified_name(&comp.info.schema, &comp.info.name);
+        let mut sql = format!("CREATE TYPE {} AS (", type_name);
+        let attributes = comp.attributes.iter()
+            .map(|attr| format!("{} {}", Self::quote_ident(&attr.name), attr.type_name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&attributes);
         sql.push_str(");");
         Ok(sql)
     }
 
-    fn generate_create_composite_type(&self, composite_type: &CompositeType) -> Result<String> {
-        let type_name = Self::force_quote_identifier(&composite_type.info.name);
-        let mut attributes = Vec::new();
-
-        for attr in &composite_type.attributes {
-            let attr_name = Self::force_quote_identifier(&attr.name);
-            let mut attr_def = format!("{} {}", attr_name, attr.type_name);
-
-            // Add collation if specified
-            if let Some(collation) = &attr.collation {
-                attr_def.push_str(&format!(" COLLATE {}", collation));
-            }
-
-            attributes.push(attr_def);
-        }
-
-        Ok(format!(
-            "CREATE TYPE {} AS ({});",
-            type_name,
-            attributes.join(", ")
-        ))
-    }
-
-    fn generate_create_domain(&self, domain: &Domain) -> Result<String> {
-        let domain_name = Self::force_quote_identifier(&domain.info.name);
-        let mut sql = format!("CREATE DOMAIN {} AS {}", domain_name, domain.base_type);
-
-        // Add collation if specified
-        if let Some(collation) = &domain.collation {
-            sql.push_str(&format!(" COLLATE {}", collation));
-        }
-
-        // Add NOT NULL if specified
-        if domain.not_null {
-            sql.push_str(" NOT NULL");
-        }
-
-        // Add default value if specified
-        if let Some(default) = &domain.default {
-            sql.push_str(&format!(" DEFAULT {}", default));
-        }
-
-        // Add constraints
-        for constraint in &domain.constraints {
-            sql.push_str(&format!(" {}", constraint.definition));
-        }
-
-        sql.push_str(";");
-        Ok(sql)
-    }
-
-    fn generate_create_enum_type(&self, enum_type: &EnumType) -> Result<String> {
-        let type_name = Self::force_quote_identifier(&enum_type.info.name);
-        let values: Vec<String> = enum_type
-            .values
-            .iter()
-            .map(|v| format!("'{}'", v.label))
-            .collect();
-
-        Ok(format!(
-            "CREATE TYPE {} AS ENUM ({});",
-            type_name,
-            values.join(", ")
-        ))
-    }
-
-    fn generate_create_range_type(&self, range_type: &RangeType) -> Result<String> {
-        let type_name = Self::force_quote_identifier(&range_type.info.name);
-        let mut sql = format!(
-            "CREATE TYPE {} AS RANGE (SUBTYPE = {})",
-            type_name, range_type.subtype
-        );
-
-        // Add subtype operator class if specified
-        if !range_type.subtype_opclass.is_empty() {
-            sql.push_str(&format!(
-                ", SUBTYPE_OPCLASS = {}",
-                range_type.subtype_opclass
-            ));
-        }
-
-        // Add collation if specified
-        if let Some(collation) = &range_type.collation {
-            sql.push_str(&format!(", COLLATION = {}", collation));
-        }
-
-        // Add canonical function if specified
-        if let Some(canonical_fn) = &range_type.canonical_fn {
+    fn generate_create_range_type(&self, range: &RangeType) -> Result<String> {
+        let type_name = Self::qualified_name(&range.info.schema, &range.info.name);
+        let mut sql = format!("CREATE TYPE {} AS RANGE (", type_name);
+        sql.push_str(&format!("SUBTYPE = {}", range.subtype));
+        sql.push_str(&format!(", SUBTYPE_OPCLASS = {}", range.subtype_opclass));
+        if let Some(canonical_fn) = &range.canonical_fn {
             sql.push_str(&format!(", CANONICAL = {}", canonical_fn));
         }
-
-        // Add subtype diff function if specified
-        if let Some(subtype_diff_fn) = &range_type.subtype_diff_fn {
+        if let Some(subtype_diff_fn) = &range.subtype_diff_fn {
             sql.push_str(&format!(", SUBTYPE_DIFF = {}", subtype_diff_fn));
         }
-
-        sql.push_str(";");
+        sql.push_str(");");
         Ok(sql)
     }
 }
 
+
+// ===================================================================
+//  The Main Trait Implementation - Mostly Dispatching to Helpers
+// ===================================================================
+
 impl SqlGenerator for PostgresSqlGenerator {
-    fn create_type(&self, t: &Type) -> Result<String> {
-        match t {
-            Type::Base(base_type) => self.generate_create_base_type(base_type),
-            Type::Composite(composite_type) => self.generate_create_composite_type(composite_type),
-            Type::Domain(domain) => self.generate_create_domain(domain),
-            Type::Enum(enum_type) => self.generate_create_enum_type(enum_type),
-            Type::Range(range_type) => self.generate_create_range_type(range_type),
-            Type::Pseudo(pseudo_type) => {
-                // For pseudo types, generate a simple CREATE TYPE statement
-                let type_name = Self::force_quote_identifier(&pseudo_type.info.name);
-                Ok(format!("CREATE TYPE {};", type_name))
-            }
+    fn create_relation(&self, relation: &Relation) -> Result<String> {
+        match relation {
+            Relation::Table(t) => self.generate_create_table(t),
+            Relation::View(v) => self.generate_create_view(v),
+            Relation::MaterializedView(m) => self.generate_create_materialized_view(m),
+            Relation::ForeignTable(f) => self.generate_create_foreign_table(f),
         }
     }
 
+    fn drop_relation(&self, relation: &Relation) -> Result<String> {
+        let (kind, schema, name) = match relation {
+            Relation::Table(t) => ("TABLE", &t.schema, &t.name),
+            Relation::View(v) => ("VIEW", &v.schema, &v.name),
+            Relation::MaterializedView(m) => ("MATERIALIZED VIEW", &m.schema, &m.name),
+            Relation::ForeignTable(f) => ("FOREIGN TABLE", &f.schema, &f.name),
+        };
+        Ok(format!("DROP {} IF EXISTS {} CASCADE;", kind, Self::qualified_name(schema, name)))
+    }
+
+    fn create_type(&self, t: &Type) -> Result<String> {
+        match t {
+            Type::Base(inner) => self.generate_create_base_type(inner),
+            Type::Composite(inner) => self.generate_create_composite_type(inner),
+            Type::Domain(inner) => self.generate_create_domain(inner),
+            Type::Enum(inner) => self.generate_create_enum_type(inner),
+            Type::Range(inner) => self.generate_create_range_type(inner),
+            Type::Pseudo(_) => Ok(String::new()),
+        }
+    }
+    
     fn drop_type(&self, t: &Type) -> Result<String> {
-        // The DROP statement is simpler and often more uniform
         let (info, kind) = match t {
             Type::Base(t) => (&t.info, "TYPE"),
             Type::Composite(t) => (&t.info, "TYPE"),
@@ -367,1404 +333,367 @@ impl SqlGenerator for PostgresSqlGenerator {
             Type::Range(t) => (&t.info, "TYPE"),
             Type::Pseudo(_) => return Ok(String::new()),
         };
+        let cascade = if matches!(t, Type::Base(_)) { " CASCADE" } else { "" };
+        Ok(format!("DROP {} IF EXISTS {}{};", kind, Self::qualified_name(&info.schema, &info.name), cascade))
+    }
 
-        // Note: Base types need CASCADE due to their I/O functions.
-        let cascade = if let Type::Base(_) = t {
-            " CASCADE"
-        } else {
-            ""
+    fn create_routine(&self, routine: &Routine) -> Result<String> {
+        let definition = match routine {
+            Routine::Function(f) => &f.definition,
+            Routine::Procedure(p) => &p.definition,
+            Routine::Aggregate(a) => &a.definition,
         };
+        Ok(definition.clone())
+    }
 
-        Ok(format!(
-            "DROP {} {}.{}{};\n",
-            kind,
-            quote_ident(&info.schema),
-            quote_ident(&info.name),
-            cascade
+    fn drop_routine(&self, routine: &Routine) -> Result<String> {
+        let (kind, schema, name, identity_args) = match routine {
+            Routine::Function(f) => ("FUNCTION", &f.schema, &f.name, &f.identity_arguments),
+            Routine::Procedure(p) => ("PROCEDURE", &p.schema, &p.name, &p.identity_arguments),
+            Routine::Aggregate(a) => ("AGGREGATE", &a.schema, &a.name, &a.identity_arguments),
+        };
+        Ok(format!("DROP {} IF EXISTS {}({}) CASCADE;", 
+            kind, 
+            Self::qualified_name(schema, name),
+            identity_args
         ))
     }
 
-    fn generate_create_table(&self, table: &Table) -> Result<String> {
-        let table_name = Self::_quote_identifier(&table.name);
-        let mut sql = format!("CREATE TABLE {} (\n    ", table_name);
-        let mut columns = Vec::new();
-
-        // Add columns
-        for column in &table.columns {
-            let column_name = Self::_quote_identifier(&column.name);
-            let mut col_def = format!("{} {}", column_name, column.type_name);
-            if column.is_not_null {
-                col_def.push_str(" NOT NULL");
-            }
-            // Note: Column struct doesn't store actual default values, only has_default flag
-            if let Some(identity) = &column.identity {
-                col_def.push_str(match identity.generation {
-                    IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
-                    IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
-                });
-            }
-            if let Some(generated) = &column.generated {
-                col_def.push_str(&format!(
-                    " GENERATED ALWAYS AS ({}) STORED",
-                    generated.expression
-                ));
-            }
-            columns.push(col_def);
-        }
-
-        // Add constraints
-        for constraint in &table.constraints {
-            columns.push(constraint.definition.clone());
-        }
-
-        sql.push_str(&columns.join(",\n    "));
-        sql.push_str("\n);");
-
+    // --- Implementations for other top-level objects ---
+    fn create_schema(&self, schema: &Schema) -> Result<String> {
+        let mut sql = format!("CREATE SCHEMA {};", Self::quote_ident(&schema.name));
+        sql.push_str(&format!("\nALTER SCHEMA {} OWNER TO {};", Self::quote_ident(&schema.name), Self::quote_ident(&schema.owner)));
         Ok(sql)
     }
 
-    fn generate_alter_table(&self, old: &Table, new: &Table) -> Result<(Vec<String>, Vec<String>)> {
-        let mut up_statements = Vec::new();
-        let mut down_statements = Vec::new();
-
-        let old_table_name = Self::_quote_identifier(&old.name);
-        let new_table_name = Self::_quote_identifier(&new.name);
-
-        // Handle column changes
-        let old_columns: std::collections::HashMap<&str, &shem_core::Column> =
-            old.columns.iter().map(|c| (c.name.as_str(), c)).collect();
-        let new_columns: std::collections::HashMap<&str, &shem_core::Column> =
-            new.columns.iter().map(|c| (c.name.as_str(), c)).collect();
-
-        // Find dropped columns (in old but not in new)
-        for (col_name, old_col) in &old_columns {
-            if !new_columns.contains_key(col_name) {
-                let column_name = Self::_quote_identifier(col_name);
-                up_statements.push(format!(
-                    "ALTER TABLE {} DROP COLUMN {}",
-                    new_table_name, column_name
-                ));
-                // Down migration: add the column back
-                let mut col_def = format!(
-                    "ALTER TABLE {} ADD COLUMN {} {}",
-                    old_table_name, column_name, old_col.type_name
-                );
-                if old_col.is_not_null {
-                    col_def.push_str(" NOT NULL");
-                }
-                // Note: Column struct doesn't store actual default values, only has_default flag
-                if let Some(identity) = &old_col.identity {
-                    col_def.push_str(match identity.generation {
-                        IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
-                        IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
-                    });
-                }
-                if let Some(generated) = &old_col.generated {
-                    col_def.push_str(&format!(
-                        " GENERATED ALWAYS AS ({}) STORED",
-                        generated.expression
-                    ));
-                }
-                down_statements.push(col_def);
-            }
-        }
-
-        // Find added columns (in new but not in old)
-        for (col_name, new_col) in &new_columns {
-            if !old_columns.contains_key(col_name) {
-                let column_name = Self::_quote_identifier(col_name);
-                let mut col_def = format!(
-                    "ALTER TABLE {} ADD COLUMN {} {}",
-                    new_table_name, column_name, new_col.type_name
-                );
-                if new_col.is_not_null {
-                    col_def.push_str(" NOT NULL");
-                }
-                // Note: Column struct doesn't store actual default values, only has_default flag
-                if let Some(identity) = &new_col.identity {
-                    col_def.push_str(match identity.generation {
-                        IdentityGeneration::Always => " GENERATED ALWAYS AS IDENTITY",
-                        IdentityGeneration::ByDefault => " GENERATED BY DEFAULT AS IDENTITY",
-                    });
-                }
-                if let Some(generated) = &new_col.generated {
-                    col_def.push_str(&format!(
-                        " GENERATED ALWAYS AS ({}) STORED",
-                        generated.expression
-                    ));
-                }
-                up_statements.push(col_def);
-                down_statements.push(format!(
-                    "ALTER TABLE {} DROP COLUMN {}",
-                    old_table_name, column_name
-                ));
-            }
-        }
-
-        // Find modified columns (in both old and new but different)
-        for (col_name, new_col) in &new_columns {
-            if let Some(old_col) = old_columns.get(col_name) {
-                let column_name = Self::_quote_identifier(col_name);
-
-                // Check for type changes
-                if old_col.type_name != new_col.type_name {
-                    up_statements.push(format!(
-                        "ALTER TABLE {} ALTER COLUMN {} TYPE {}",
-                        new_table_name, column_name, new_col.type_name
-                    ));
-                    down_statements.push(format!(
-                        "ALTER TABLE {} ALTER COLUMN {} TYPE {}",
-                        old_table_name, column_name, old_col.type_name
-                    ));
-                }
-
-                // Check for nullability changes
-                if old_col.is_not_null != new_col.is_not_null {
-                    if new_col.is_not_null {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
-                            new_table_name, column_name
-                        ));
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
-                            old_table_name, column_name
-                        ));
-                    } else {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP NOT NULL",
-                            new_table_name, column_name
-                        ));
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET NOT NULL",
-                            old_table_name, column_name
-                        ));
-                    }
-                }
-
-                // Note: Column struct doesn't store actual default values, only has_default flag
-                // Default value changes would need to be handled separately with actual default expressions
-
-                // Check for identity changes
-                if old_col.identity != new_col.identity {
-                    // Drop old identity if it exists
-                    if old_col.identity.is_some() {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP IDENTITY",
-                            new_table_name, column_name
-                        ));
-                    }
-                    // Add new identity if it exists
-                    if let Some(identity) = &new_col.identity {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} ADD GENERATED {} AS IDENTITY",
-                            new_table_name,
-                            column_name,
-                            match identity.generation {
-                                IdentityGeneration::Always => "ALWAYS",
-                                IdentityGeneration::ByDefault => "BY DEFAULT",
-                            }
-                        ));
-                    }
-
-                    // Down migration: restore old identity
-                    if new_col.identity.is_some() {
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP IDENTITY",
-                            old_table_name, column_name
-                        ));
-                    }
-                    if let Some(identity) = &old_col.identity {
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} ADD GENERATED {} AS IDENTITY",
-                            old_table_name,
-                            column_name,
-                            match identity.generation {
-                                IdentityGeneration::Always => "ALWAYS",
-                                IdentityGeneration::ByDefault => "BY DEFAULT",
-                            }
-                        ));
-                    }
-                }
-
-                // Check for generated column changes
-                if old_col.generated != new_col.generated {
-                    // Drop old generated column if it exists
-                    if old_col.generated.is_some() {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP EXPRESSION",
-                            new_table_name, column_name
-                        ));
-                    }
-                    // Add new generated column if it exists
-                    if let Some(generated) = &new_col.generated {
-                        up_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET GENERATED ALWAYS AS ({}) STORED",
-                            new_table_name, column_name, generated.expression
-                        ));
-                    }
-
-                    // Down migration: restore old generated column
-                    if new_col.generated.is_some() {
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} DROP EXPRESSION",
-                            old_table_name, column_name
-                        ));
-                    }
-                    if let Some(generated) = &old_col.generated {
-                        down_statements.push(format!(
-                            "ALTER TABLE {} ALTER COLUMN {} SET GENERATED ALWAYS AS ({}) STORED",
-                            old_table_name, column_name, generated.expression
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Handle constraint changes
-        let old_constraints: std::collections::HashMap<&str, &shem_core::Constraint> = old
-            .constraints
-            .iter()
-            .map(|c| (c.name.as_str(), c))
-            .collect();
-        let new_constraints: std::collections::HashMap<&str, &shem_core::Constraint> = new
-            .constraints
-            .iter()
-            .map(|c| (c.name.as_str(), c))
-            .collect();
-
-        // Find dropped constraints (in old but not in new)
-        for (constraint_name, old_constraint) in &old_constraints {
-            if !new_constraints.contains_key(constraint_name) {
-                up_statements.push(format!(
-                    "ALTER TABLE {} DROP CONSTRAINT {}",
-                    new_table_name, constraint_name
-                ));
-                down_statements.push(format!(
-                    "ALTER TABLE {} ADD CONSTRAINT {} {}",
-                    old_table_name, constraint_name, old_constraint.definition
-                ));
-            }
-        }
-
-        // Find added constraints (in new but not in old)
-        for (constraint_name, new_constraint) in &new_constraints {
-            if !old_constraints.contains_key(constraint_name) {
-                up_statements.push(format!(
-                    "ALTER TABLE {} ADD CONSTRAINT {} {}",
-                    new_table_name, constraint_name, new_constraint.definition
-                ));
-                down_statements.push(format!(
-                    "ALTER TABLE {} DROP CONSTRAINT {}",
-                    old_table_name, constraint_name
-                ));
-            }
-        }
-
-        // Find modified constraints (in both old and new but different)
-        for (constraint_name, new_constraint) in &new_constraints {
-            if let Some(old_constraint) = old_constraints.get(constraint_name) {
-                if old_constraint.definition != new_constraint.definition {
-                    // Drop and recreate the constraint
-                    up_statements.push(format!(
-                        "ALTER TABLE {} DROP CONSTRAINT {}",
-                        new_table_name, constraint_name
-                    ));
-                    up_statements.push(format!(
-                        "ALTER TABLE {} ADD CONSTRAINT {} {}",
-                        new_table_name, constraint_name, new_constraint.definition
-                    ));
-
-                    down_statements.push(format!(
-                        "ALTER TABLE {} DROP CONSTRAINT {}",
-                        old_table_name, constraint_name
-                    ));
-                    down_statements.push(format!(
-                        "ALTER TABLE {} ADD CONSTRAINT {} {}",
-                        old_table_name, constraint_name, old_constraint.definition
-                    ));
-                }
-            }
-        }
-
-        Ok((up_statements, down_statements))
+    fn drop_schema(&self, schema: &Schema) -> Result<String> {
+        Ok(format!("DROP SCHEMA IF EXISTS {} CASCADE;", Self::quote_ident(&schema.name)))
     }
-
-    fn generate_drop_table(&self, table: &Table) -> Result<String> {
-        let table_name = Self::force_quote_identifier(&table.name);
-        Ok(format!("DROP TABLE IF EXISTS {} CASCADE;", table_name))
-    }
-
-    fn create_view(&self, view: &View) -> Result<String> {
-        let view_name = if view.schema == "public" {
-            Self::_quote_identifier(&view.name)
-        } else {
-            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
-        };
-        let mut sql = format!("CREATE VIEW {} AS {}", view_name, view.definition);
-        match view.check_option {
-            CheckOption::None => {}
-            CheckOption::Local => sql.push_str(" WITH LOCAL CHECK OPTION"),
-            CheckOption::Cascaded => sql.push_str(" WITH CASCADED CHECK OPTION"),
-        }
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn create_materialized_view(&self, view: &MaterializedView) -> Result<String> {
-        let view_name = Self::_quote_identifier(&view.name);
-
-        // Use the is_populated field to determine WITH DATA vs WITH NO DATA
-        let with_clause = if view.is_populated {
-            "WITH DATA"
-        } else {
-            "WITH NO DATA"
-        };
-
-        Ok(format!(
-            "CREATE MATERIALIZED VIEW {} AS {}\n{};",
-            view_name, view.definition, with_clause
-        ))
-    }
-
-    fn create_function(&self, function: &Function) -> Result<String> {
-        // The definition field already contains the complete CREATE FUNCTION statement
-        Ok(function.definition.clone())
-    }
-
-    fn create_procedure(&self, procedure: &Procedure) -> Result<String> {
-        // The definition field already contains the complete CREATE PROCEDURE statement
-        Ok(procedure.definition.clone())
-    }
-
+    
     fn create_sequence(&self, seq: &Sequence) -> Result<String> {
-        let sequence_name = Self::_quote_identifier(&seq.name);
+        let schema = seq.schema.as_deref().unwrap_or("public");
+        let seq_name = Self::qualified_name(schema, &seq.name);
+        let mut sql = format!("CREATE SEQUENCE {}\n    AS {}\n    START WITH {}\n    INCREMENT BY {}\n",
+            seq_name, seq.data_type, seq.start, seq.increment);
+        
+        if let Some(min_val) = seq.min_value {
+            if min_val != 1 {
+                sql.push_str(&format!("    MINVALUE {}\n", min_val));
+            } else {
+                sql.push_str("    NO MINVALUE\n");
+            }
+        } else {
+            sql.push_str("    NO MINVALUE\n");
+        }
+        
+        if let Some(max_val) = seq.max_value {
+            if max_val != i64::MAX {
+                sql.push_str(&format!("    MAXVALUE {}\n", max_val));
+            } else {
+                sql.push_str("    NO MAXVALUE\n");
+            }
+        } else {
+            sql.push_str("    NO MAXVALUE\n");
+        }
+        sql.push_str(&format!("    CACHE {}", seq.cache));
+        if seq.cycle { sql.push_str("\n    CYCLE"); }
+        sql.push_str(";\n");
 
-        let mut sql = format!("CREATE SEQUENCE {}", sequence_name);
-
-        // AS <datatype>
-        if !seq.data_type.is_empty() {
-            sql.push_str(&format!(" AS {}", seq.data_type));
+        if let Some(owned_by) = &seq.owned_by {
+            // owned_by is in format "schema.table.column"
+            let parts: Vec<&str> = owned_by.split('.').collect();
+            if parts.len() == 3 {
+                let schema = parts[0];
+                let table = parts[1];
+                let column = parts[2];
+                sql.push_str(&format!("ALTER SEQUENCE {} OWNED BY {}.{};\n", seq_name, Self::qualified_name(schema, table), Self::quote_ident(column)));
+            }
         }
 
-        sql.push_str(&format!(" START {}", seq.start));
-        sql.push_str(&format!(" INCREMENT {}", seq.increment));
-
-        // Only include MINVALUE/MAXVALUE if they are explicitly set
-        if let Some(min) = seq.min_value {
-            sql.push_str(&format!(" MINVALUE {}", min));
-        }
-        if let Some(max) = seq.max_value {
-            sql.push_str(&format!(" MAXVALUE {}", max));
-        }
-
-        sql.push_str(&format!(" CACHE {}", seq.cache));
-        if seq.cycle {
-            sql.push_str(" CYCLE");
-        }
-
-        // OWNED BY
-        if let Some(ref owned_by) = seq.owned_by {
-            sql.push_str(&format!(" OWNED BY {}", owned_by));
-        }
-
-        sql.push(';');
-
-        // COMMENT
-        if let Some(ref comment) = seq.comment {
-            sql.push_str(&format!(
-                "\nCOMMENT ON SEQUENCE {} IS '{}';",
-                sequence_name,
-                comment.replace('\'', "''")
-            ));
-        }
-
+        sql.push_str(&format!("ALTER SEQUENCE {} OWNER TO {};", seq_name, Self::quote_ident(&seq.owner)));
+        
         Ok(sql)
-    }
-
-    fn alter_sequence(&self, old: &Sequence, new: &Sequence) -> Result<(Vec<String>, Vec<String>)> {
-        let mut up_statements = Vec::new();
-        let mut down_statements = Vec::new();
-
-        let old_name = Self::_quote_identifier(&old.name);
-        let new_name = Self::_quote_identifier(&new.name);
-
-        // Handle start value changes
-        if old.start != new.start {
-            up_statements.push(format!(
-                "ALTER SEQUENCE {} RESTART WITH {};",
-                new_name, new.start
-            ));
-            down_statements.push(format!(
-                "ALTER SEQUENCE {} RESTART WITH {};",
-                old_name, old.start
-            ));
-        }
-
-        // Handle increment changes
-        if old.increment != new.increment {
-            up_statements.push(format!(
-                "ALTER SEQUENCE {} INCREMENT BY {};",
-                new_name, new.increment
-            ));
-            down_statements.push(format!(
-                "ALTER SEQUENCE {} INCREMENT BY {};",
-                old_name, old.increment
-            ));
-        }
-
-        // Handle min value changes
-        if old.min_value != new.min_value {
-            let up_min = match new.min_value {
-                Some(min) => format!("SET MINVALUE {}", min),
-                None => "SET NO MINVALUE".to_string(),
-            };
-            let down_min = match old.min_value {
-                Some(min) => format!("SET MINVALUE {}", min),
-                None => "SET NO MINVALUE".to_string(),
-            };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, up_min));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, down_min));
-        }
-
-        // Handle max value changes
-        if old.max_value != new.max_value {
-            let up_max = match new.max_value {
-                Some(max) => format!("SET MAXVALUE {}", max),
-                None => "SET NO MAXVALUE".to_string(),
-            };
-            let down_max = match old.max_value {
-                Some(max) => format!("SET MAXVALUE {}", max),
-                None => "SET NO MAXVALUE".to_string(),
-            };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, up_max));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, down_max));
-        }
-
-        // Handle cache changes
-        if old.cache != new.cache {
-            up_statements.push(format!("ALTER SEQUENCE {} CACHE {};", new_name, new.cache));
-            down_statements.push(format!("ALTER SEQUENCE {} CACHE {};", old_name, old.cache));
-        }
-
-        // Handle cycle changes
-        if old.cycle != new.cycle {
-            let cycle_str = if new.cycle { "CYCLE" } else { "NO CYCLE" };
-            let old_cycle_str = if old.cycle { "CYCLE" } else { "NO CYCLE" };
-            up_statements.push(format!("ALTER SEQUENCE {} {};", new_name, cycle_str));
-            down_statements.push(format!("ALTER SEQUENCE {} {};", old_name, old_cycle_str));
-        }
-
-        Ok((up_statements, down_statements))
-    }
-
-    fn create_extension(&self, ext: &Extension) -> Result<String> {
-        let name = if ext.name.contains('-') || Self::is_reserved_keyword(&ext.name) {
-            format!("\"{}\"", ext.name)
-        } else {
-            ext.name.clone()
-        };
-
-        let mut sql = format!("CREATE EXTENSION IF NOT EXISTS {}", name);
-
-        if !ext.version.trim().is_empty() {
-            sql.push_str(&format!(" VERSION '{}'", ext.version));
-        }
-
-        if !ext.schema.is_empty() && ext.schema != "public" {
-            sql.push_str(&format!(" SCHEMA {}", ext.schema));
-        }
-
-        if ext.relocatable {
-            sql.push_str(" CASCADE");
-        }
-
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn create_trigger(&self, trigger: &Trigger) -> Result<String> {
-        // Parse the trigger definition to extract components and generate proper SQL
-        let definition = &trigger.definition;
-
-        // Extract the trigger name and table name from the definition
-        // The definition format is typically: "CREATE TRIGGER name timing events ON table FOR EACH level EXECUTE FUNCTION func"
-
-        // For now, we'll do a simple replacement approach
-        let mut sql = definition.clone();
-
-        // Replace unquoted identifiers with quoted ones
-        // This is a simplified approach - in a real implementation, you'd want to parse the SQL properly
-
-        // Replace trigger name
-        let trigger_name_pattern = format!("CREATE TRIGGER {}", trigger.name);
-        let trigger_name_replacement = format!("CREATE TRIGGER \"{}\"", trigger.name);
-        sql = sql.replace(&trigger_name_pattern, &trigger_name_replacement);
-
-        // Replace table name - handle both with and without schema prefix
-        if trigger.schema == "public" {
-            // For public schema, just quote the table name
-            let table_name_pattern = format!("ON {}", trigger.table_name);
-            let table_name_replacement = format!("ON \"{}\"", trigger.table_name);
-            sql = sql.replace(&table_name_pattern, &table_name_replacement);
-        } else {
-            // For non-public schema, handle both cases:
-            // 1. ON table_name -> ON "schema"."table_name"
-            // 2. ON schema.table_name -> ON "schema"."table_name"
-
-            // First, try to replace the schema-prefixed version
-            let schema_table_pattern = format!("ON {}.{}", trigger.schema, trigger.table_name);
-            let schema_table_replacement =
-                format!("ON \"{}\".\"{}\"", trigger.schema, trigger.table_name);
-            sql = sql.replace(&schema_table_pattern, &schema_table_replacement);
-
-            // Then, try to replace the non-schema-prefixed version
-            let table_name_pattern = format!("ON {}", trigger.table_name);
-            let table_name_replacement =
-                format!("ON \"{}\".\"{}\"", trigger.schema, trigger.table_name);
-            sql = sql.replace(&table_name_pattern, &table_name_replacement);
-        }
-
-        Ok(sql)
-    }
-
-    fn create_policy(&self, policy: &Policy) -> Result<String> {
-        let policy_name = if let Some(name) = &policy.name {
-            Self::_quote_identifier(name)
-        } else {
-            return Ok(format!(
-                "ALTER TABLE {}.{} ENABLE ROW LEVEL SECURITY;",
-                policy.schema,
-                Self::_quote_identifier(&policy.table_name)
-            ));
-        };
-        let table_name = Self::_quote_identifier(&policy.table_name);
-
-        let mut sql = format!("CREATE POLICY {} ON {}", policy_name, table_name);
-
-        // Add permissive/restrictive only if not permissive (permissive is default)
-        if !policy.permissive {
-            sql.push_str(" AS RESTRICTIVE");
-        }
-
-        // Add command type
-        let command_str = match policy.command {
-            PolicyCommand::All => "ALL",
-            PolicyCommand::Select => "SELECT",
-            PolicyCommand::Insert => "INSERT",
-            PolicyCommand::Update => "UPDATE",
-            PolicyCommand::Delete => "DELETE",
-        };
-        sql.push_str(&format!(" FOR {}", command_str));
-
-        if !policy.roles.is_empty() {
-            sql.push_str(&format!(" TO {}", policy.roles.join(", ")));
-        }
-
-        if let Some(using) = &policy.using {
-            sql.push_str(&format!(" USING ({})", using));
-        }
-
-        if let Some(check) = &policy.check {
-            sql.push_str(&format!(" WITH CHECK ({})", check));
-        }
-
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn create_server(&self, server: &Server) -> Result<String> {
-        let server_name = Self::force_quote_identifier(&server.name);
-        let fdw = Self::force_quote_identifier(&server.foreign_data_wrapper);
-
-        let mut sql = format!("CREATE SERVER {} FOREIGN DATA WRAPPER {}", server_name, fdw);
-
-        // Add VERSION if present
-        if let Some(version) = &server.version {
-            sql.push_str(&format!(" VERSION '{}'", version.replace('\'', "''")));
-        }
-
-        // Add OPTIONS if present
-        if !server.options.is_empty() {
-            let options = server
-                .options
-                .iter()
-                .map(|(k, v)| {
-                    format!(
-                        "{} '{}'",
-                        Self::force_quote_identifier(k),
-                        v.replace('\'', "''")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" OPTIONS ({})", options));
-        }
-
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn drop_view(&self, view: &View) -> Result<String> {
-        let name = if view.schema == "public" {
-            Self::_quote_identifier(&view.name)
-        } else {
-            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
-        };
-        Ok(format!("DROP VIEW IF EXISTS {} CASCADE;", name))
-    }
-
-    fn drop_materialized_view(&self, view: &MaterializedView) -> Result<String> {
-        let name = if view.schema == "public" {
-            Self::_quote_identifier(&view.name)
-        } else {
-            format!("{}.{}", view.schema, Self::_quote_identifier(&view.name))
-        };
-        Ok(format!(
-            "DROP MATERIALIZED VIEW IF EXISTS {} CASCADE;",
-            name
-        ))
-    }
-
-    fn drop_function(&self, func: &Function) -> Result<String> {
-        let name = if func.schema == "public" {
-            Self::force_quote_identifier(&func.name)
-        } else {
-            format!(
-                "{}.{}",
-                func.schema,
-                Self::force_quote_identifier(&func.name)
-            )
-        };
-
-        // Use identity_arguments for function identification
-        let signature = if func.identity_arguments.is_empty() {
-            "()".to_string()
-        } else {
-            format!("({})", func.identity_arguments)
-        };
-
-        Ok(format!(
-            "DROP FUNCTION IF EXISTS {}{} CASCADE;",
-            name, signature
-        ))
-    }
-
-    fn drop_procedure(&self, proc: &Procedure) -> Result<String> {
-        let name = if proc.schema == "public" {
-            Self::force_quote_identifier(&proc.name)
-        } else {
-            format!(
-                "{}.{}",
-                proc.schema,
-                Self::force_quote_identifier(&proc.name)
-            )
-        };
-
-        // Use identity_arguments for procedure identification
-        let signature = if proc.identity_arguments.is_empty() {
-            "()".to_string()
-        } else {
-            format!("({})", proc.identity_arguments)
-        };
-
-        Ok(format!(
-            "DROP PROCEDURE IF EXISTS {}{} CASCADE;",
-            name, signature
-        ))
     }
 
     fn drop_sequence(&self, seq: &Sequence) -> Result<String> {
-        let name = if let Some(schema) = &seq.schema {
-            format!("{}.{}", schema, Self::_quote_identifier(&seq.name))
-        } else {
-            Self::_quote_identifier(&seq.name)
-        };
-        Ok(format!("DROP SEQUENCE IF EXISTS {} CASCADE;", name))
+        let schema = seq.schema.as_deref().unwrap_or("public");
+        Ok(format!("DROP SEQUENCE IF EXISTS {} CASCADE;", Self::qualified_name(schema, &seq.name)))
     }
 
-    fn alter_extension(&self, ext: &Extension) -> Result<String> {
-        let mut sql = format!("ALTER EXTENSION \"{}\"", ext.name);
-
-        if !ext.version.trim().is_empty() {
-            sql.push_str(&format!(" UPDATE TO '{}'", ext.version));
+    // --- Implementations for all other trait methods ---
+    fn create_extension(&self, ext: &Extension) -> Result<String> {
+        // Only quote if it's a reserved keyword or contains special characters
+        let name = if ext.name == "order" || ext.name.contains('-') {
+            Self::quote_ident(&ext.name)
+        } else {
+            ext.name.clone()
+        };
+        
+        let mut sql = format!("CREATE EXTENSION IF NOT EXISTS {}", name);
+        
+        // Only include schema if it's not "public" (default schema)
+        if ext.schema != "public" {
+            sql.push_str(&format!(" SCHEMA {}", Self::quote_ident(&ext.schema)));
         }
-
+        
+        // Only include version if it's not empty
+        if !ext.version.is_empty() {
+            sql.push_str(&format!(" VERSION '{}'", ext.version));
+        }
+        
         sql.push(';');
         Ok(sql)
     }
-
+    
     fn drop_extension(&self, ext: &Extension) -> Result<String> {
-        let name = if ext.name.contains('-') || Self::is_reserved_keyword(&ext.name) {
-            format!("\"{}\"", ext.name)
+        // Only quote if it's a reserved keyword or contains special characters
+        let name = if ext.name == "order" || ext.name.contains('-') {
+            Self::quote_ident(&ext.name)
         } else {
             ext.name.clone()
         };
         Ok(format!("DROP EXTENSION IF EXISTS {} CASCADE;", name))
     }
-
-    fn drop_trigger(&self, trigger: &Trigger) -> Result<String> {
-        let trigger_name = Self::force_quote_identifier(&trigger.name);
-        let table_name = if trigger.schema == "public" {
-            Self::force_quote_identifier(&trigger.table_name)
-        } else {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(&trigger.schema),
-                Self::force_quote_identifier(&trigger.table_name)
-            )
-        };
-
-        Ok(format!(
-            "DROP TRIGGER IF EXISTS {} ON {} CASCADE;",
-            trigger_name, table_name
-        ))
-    }
-
-    fn drop_policy(&self, policy: &Policy) -> Result<String> {
-        if policy.name.is_none() {
-            // This is an ENABLE ROW LEVEL SECURITY policy, so we disable RLS
-            return Ok(format!(
-                "ALTER TABLE {}.{} DISABLE ROW LEVEL SECURITY;",
-                policy.schema,
-                Self::_quote_identifier(&policy.table_name)
-            ));
-        }
-
-        let policy_name = Self::_quote_identifier(policy.name.as_ref().unwrap());
-        let table_name = if policy.schema != "public" {
-            format!(
-                "{}.{}",
-                policy.schema,
-                Self::_quote_identifier(&policy.table_name)
-            )
-        } else {
-            Self::_quote_identifier(&policy.table_name)
-        };
-
-        Ok(format!(
-            "DROP POLICY IF EXISTS {} ON {} CASCADE;",
-            policy_name, table_name
-        ))
-    }
-
-    fn drop_server(&self, server: &Server) -> Result<String> {
-        Ok(format!(
-            "DROP SERVER IF EXISTS {} CASCADE;",
-            Self::force_quote_identifier(&server.name)
-        ))
-    }
-
-    fn create_index(&self, index: &Index) -> Result<String> {
-        let mut sql = String::new();
-
-        if index.unique {
-            sql.push_str("CREATE UNIQUE INDEX ");
-        } else {
-            sql.push_str("CREATE INDEX ");
-        }
-
-        // Only quote the index name if it's a reserved keyword or contains special characters
-        let index_name = if Self::is_reserved_keyword(&index.name) || index.name.contains('-') {
-            format!("\"{}\"", index.name)
-        } else {
-            index.name.clone()
-        };
-        sql.push_str(&index_name);
-        sql.push_str(" ON ");
-
-        // Use table information from the index struct
-        let table_name = if let (Some(schema), Some(table)) = (&index.schema, &index.table_name) {
-            if schema == "public" {
-                table.clone()
-            } else {
-                format!("{}.{}", schema, table)
-            }
-        } else {
-            // Fallback to placeholder if table info is not available
-            "table_name".to_string()
-        };
-        sql.push_str(&table_name);
-
-        sql.push_str(" USING ");
-        sql.push_str(match index.method {
-            IndexMethod::Btree => "btree",
-            IndexMethod::Hash => "hash",
-            IndexMethod::Gist => "gist",
-            IndexMethod::Spgist => "spgist",
-            IndexMethod::Gin => "gin",
-            IndexMethod::Brin => "brin",
-        });
-
-        sql.push_str(" (");
-        let columns = index
-            .columns
-            .iter()
-            .map(|col| {
-                let mut col_def = if Self::is_reserved_keyword(&col.name) || col.name.contains('-')
-                {
-                    format!("\"{}\"", col.name)
-                } else {
-                    col.name.clone()
-                };
-                if let Some(expr) = &col.expression {
-                    col_def = format!("({})", expr);
-                }
-                if col.order == SortOrder::Descending {
-                    col_def.push_str(" DESC");
-                }
-                if col.nulls_first {
-                    col_def.push_str(" NULLS FIRST");
-                }
-                if let Some(opclass) = &col.opclass {
-                    col_def.push_str(&format!(" {}", opclass));
-                }
-                col_def
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        sql.push_str(&columns);
-        sql.push_str(")");
-
-        if let Some(where_clause) = &index.where_clause {
-            sql.push_str(&format!(" WHERE {}", where_clause));
-        }
-
-        if let Some(tablespace) = &index.tablespace {
-            sql.push_str(&format!(" TABLESPACE {}", tablespace));
-        }
-
-        if !index.storage_parameters.is_empty() {
-            sql.push_str(" WITH (");
-            let params = index
-                .storage_parameters
-                .iter()
-                .map(|(k, v)| format!("{} = {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&params);
-            sql.push_str(")");
-        }
-
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn drop_index(&self, index: &Index) -> Result<String> {
-        // Only quote the index name if it's a reserved keyword or contains special characters
-        let index_name = if Self::is_reserved_keyword(&index.name) || index.name.contains('-') {
-            format!("\"{}\"", index.name)
-        } else {
-            index.name.clone()
-        };
-        Ok(format!("DROP INDEX IF EXISTS {} CASCADE;", index_name))
-    }
-
+    
     fn create_collation(&self, collation: &Collation) -> Result<String> {
-        let collation_name = Self::force_quote_identifier(&collation.name);
+        let collation_name = Self::qualified_name(&collation.schema, &collation.name);
         let mut sql = format!("CREATE COLLATION {}", collation_name);
-
-        // Add schema if not "public"
-        if collation.schema != "public" {
-            sql = format!("CREATE COLLATION {}.{}", collation.schema, collation_name);
+        
+        // Handle different provider types
+        match &collation.provider {
+            crate::model::collation::CollationProvider::Libc => {
+                if let Some(lc_collate) = &collation.lc_collate {
+                    sql.push_str(&format!(" (lc_collate = '{}'", lc_collate));
+                    if let Some(lc_ctype) = &collation.lc_ctype {
+                        sql.push_str(&format!(", lc_ctype = '{}'", lc_ctype));
+                    }
+                    sql.push(')');
+                }
+            }
+            crate::model::collation::CollationProvider::Icu => {
+                if let Some(icu_locale) = &collation.icu_locale {
+                    sql.push_str(&format!(" (locale = '{}'", icu_locale));
+                    if let Some(icu_rules) = &collation.icu_rules {
+                        sql.push_str(&format!(", rules = '{}'", icu_rules));
+                    }
+                    sql.push(')');
+                }
+            }
+            _ => {
+                // Builtin and Default providers don't need additional parameters
+            }
         }
-
-        // Build the options part
-        let mut options = Vec::new();
-
-        // Handle locale/ICU locale
-        if let Some(icu_locale) = &collation.icu_locale {
-            options.push(format!("LOCALE = '{}'", icu_locale));
-        } else if let (Some(lc_collate), Some(lc_ctype)) =
-            (&collation.lc_collate, &collation.lc_ctype)
-        {
-            options.push(format!("LC_COLLATE = '{}'", lc_collate));
-            options.push(format!("LC_CTYPE = '{}'", lc_ctype));
-        }
-
-        // Add provider
-        let provider_str = match collation.provider {
-            CollationProvider::Libc => "libc",
-            CollationProvider::Icu => "icu",
-            CollationProvider::Builtin => "builtin",
-            CollationProvider::Default => "default",
-        };
-        options.push(format!("PROVIDER = '{}'", provider_str));
-
-        // Add deterministic flag
+        
         if !collation.deterministic {
-            options.push("DETERMINISTIC = false".to_string());
+            sql.push_str(" (deterministic = false)");
         }
-
-        // Add ICU rules if available
-        if let Some(icu_rules) = &collation.icu_rules {
-            options.push(format!("RULES = '{}'", icu_rules));
-        }
-
-        // Add version if available
-        if let Some(version) = &collation.version {
-            options.push(format!("VERSION = '{}'", version));
-        }
-
-        // Combine options
-        if !options.is_empty() {
-            sql.push_str(&format!(" ({})", options.join(", ")));
-        }
-
+        
         sql.push(';');
         Ok(sql)
     }
-
+    
     fn drop_collation(&self, collation: &Collation) -> Result<String> {
-        let collation_name = if Self::is_reserved_keyword(&collation.name) {
-            format!("\"{}\"", collation.name)
-        } else {
-            collation.name.clone()
-        };
-
-        let name = if collation.schema != "public" {
-            format!("{}.{}", collation.schema, collation_name)
-        } else {
-            collation_name
-        };
-        Ok(format!("DROP COLLATION IF EXISTS {} CASCADE;", name))
+        let collation_name = Self::qualified_name(&collation.schema, &collation.name);
+        Ok(format!("DROP COLLATION IF EXISTS {} CASCADE;", collation_name))
     }
-
-    fn create_rule(&self, rule: &Rule) -> Result<String> {
-        // The rule definition already contains the complete CREATE RULE statement
-        // We just need to ensure it ends with a semicolon
-        let mut sql = rule.definition.clone();
-        if !sql.trim_end().ends_with(';') {
-            sql.push(';');
-        }
+    
+    fn create_conversion(&self, conversion: &Conversion) -> Result<String> {
+        let conversion_name = Self::qualified_name(&conversion.schema, &conversion.name);
+        let mut sql = format!("CREATE CONVERSION {} FOR '{}' TO '{}' FROM {}", 
+            conversion_name, conversion.for_encoding, conversion.to_encoding, conversion.function_name);
+        sql.push(';');
         Ok(sql)
     }
-
-    fn drop_rule(&self, rule: &Rule) -> Result<String> {
-        let rule_name = Self::_quote_identifier(&rule.name);
-        let table_name = if rule.schema != "public" {
-            format!(
-                "{}.{}",
-                rule.schema,
-                Self::_quote_identifier(&rule.table_name)
-            )
-        } else {
-            Self::_quote_identifier(&rule.table_name)
-        };
-
-        Ok(format!(
-            "DROP RULE IF EXISTS {} ON {} CASCADE;",
-            rule_name, table_name
-        ))
+    
+    fn drop_conversion(&self, conversion: &Conversion) -> Result<String> {
+        let conversion_name = Self::qualified_name(&conversion.schema, &conversion.name);
+        Ok(format!("DROP CONVERSION IF EXISTS {} CASCADE;", conversion_name))
     }
-
+    
+    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
+        let fdw_name = Self::quote_ident(&fdw.name);
+        let mut sql = format!("CREATE FOREIGN DATA WRAPPER {}", fdw_name);
+        if let Some(handler) = &fdw.handler {
+            sql.push_str(&format!(" HANDLER {}", handler));
+        }
+        if let Some(validator) = &fdw.validator {
+            sql.push_str(&format!(" VALIDATOR {}", validator));
+        }
+        if !fdw.options.is_empty() {
+            sql.push_str(&Self::format_options(&fdw.options));
+        }
+        sql.push(';');
+        Ok(sql)
+    }
+    
+    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
+        Ok(format!("DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;", Self::quote_ident(&fdw.name)))
+    }
+    
+    fn create_server(&self, server: &Server) -> Result<String> {
+        let server_name = Self::quote_ident(&server.name);
+        let mut sql = format!("CREATE SERVER {}", server_name);
+        sql.push_str(&format!(" FOREIGN DATA WRAPPER {}", Self::quote_ident(&server.fdw_name)));
+        if !server.options.is_empty() {
+            sql.push_str(&Self::format_options(&server.options));
+        }
+        sql.push(';');
+        Ok(sql)
+    }
+    
+    fn drop_server(&self, server: &Server) -> Result<String> {
+        Ok(format!("DROP SERVER IF EXISTS {} CASCADE;", Self::quote_ident(&server.name)))
+    }
+    
+    fn create_publication(&self, publication: &Publication) -> Result<String> {
+        let pub_name = Self::quote_ident(&publication.name);
+        let mut sql = format!("CREATE PUBLICATION {}", pub_name);
+        if publication.insert { sql.push_str(" INSERT"); }
+        if publication.update { sql.push_str(" UPDATE"); }
+        if publication.delete { sql.push_str(" DELETE"); }
+        if publication.truncate { sql.push_str(" TRUNCATE"); }
+        if !publication.insert && !publication.update && !publication.delete && !publication.truncate {
+            sql.push_str(" ALL");
+        }
+        sql.push(';');
+        Ok(sql)
+    }
+    
+    fn drop_publication(&self, publication: &Publication) -> Result<String> {
+        Ok(format!("DROP PUBLICATION IF EXISTS {} CASCADE;", Self::quote_ident(&publication.name)))
+    }
+    
+    fn create_subscription(&self, subscription: &Subscription) -> Result<String> {
+        let sub_name = Self::quote_ident(&subscription.name);
+        let mut sql = format!("CREATE SUBSCRIPTION {} CONNECTION '{}' PUBLICATION {}", 
+            sub_name, subscription.connection_info, subscription.publication_names.join(", "));
+        if let Some(slot_name) = &subscription.slot_name {
+            sql.push_str(&format!(" WITH (slot_name = {})", Self::quote_ident(slot_name)));
+        }
+        if subscription.is_enabled {
+            sql.push_str(" ENABLED");
+        } else {
+            sql.push_str(" DISABLED");
+        }
+        sql.push(';');
+        Ok(sql)
+    }
+    
+    fn drop_subscription(&self, subscription: &Subscription) -> Result<String> {
+        Ok(format!("DROP SUBSCRIPTION IF EXISTS {} CASCADE;", Self::quote_ident(&subscription.name)))
+    }
+    
     fn create_event_trigger(&self, trigger: &EventTrigger) -> Result<String> {
-        // The event trigger definition already contains the full CREATE EVENT TRIGGER statement
+        // EventTrigger stores the full definition, so we can just return it
         Ok(trigger.definition.clone())
     }
-
+    
     fn drop_event_trigger(&self, trigger: &EventTrigger) -> Result<String> {
-        Ok(format!(
-            "DROP EVENT TRIGGER IF EXISTS {} CASCADE;",
-            Self::force_quote_identifier(&trigger.name)
-        ))
+        Ok(format!("DROP EVENT TRIGGER IF EXISTS {} CASCADE;", Self::quote_ident(&trigger.name)))
     }
-
-    fn create_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String> {
-        let trigger_name = if Self::is_reserved_keyword(&trigger.name) {
-            format!("\"{}\"", trigger.name)
-        } else {
-            Self::force_quote_identifier(&trigger.name)
-        };
-        let table_name = if let Some(schema) = &trigger.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&trigger.table)
-            )
-        } else {
-            Self::force_quote_identifier(&trigger.table)
-        };
-
-        let events: Vec<&str> = trigger
-            .events
-            .iter()
-            .map(|e| match e {
-                TriggerEvent::Insert => "INSERT",
-                TriggerEvent::Update { .. } => "UPDATE",
-                TriggerEvent::Delete => "DELETE",
-                TriggerEvent::Truncate => "TRUNCATE",
-            })
-            .collect();
-
-        let events_str = events.join(" OR ");
-
-        let args = if !trigger.arguments.is_empty() {
-            format!("({})", trigger.arguments.join(", "))
-        } else {
-            "()".to_string()
-        };
-
-        let mut sql = format!("CREATE CONSTRAINT TRIGGER {}", trigger_name);
-        if !trigger.constraint_name.is_empty() {
-            sql.push_str(&format!(" CONSTRAINT {}", trigger.constraint_name));
-        }
-        sql.push_str(&format!(" AFTER {} ON {}", events_str, table_name));
-
-        if trigger.deferrable {
-            sql.push_str(" DEFERRABLE");
-            if trigger.initially_deferred {
-                sql.push_str(" INITIALLY DEFERRED");
-            } else {
-                sql.push_str(" INITIALLY IMMEDIATE");
-            }
-        }
-
-        sql.push_str(" FOR EACH ROW");
-        sql.push_str(&format!(" EXECUTE FUNCTION {}{};", trigger.function, args));
-
-        Ok(sql)
+    
+    fn create_operator(&self, operator: &Operator) -> Result<String> {
+        // Operator stores the full definition, so we can just return it
+        Ok(operator.definition.clone())
     }
-
-    fn drop_constraint_trigger(&self, trigger: &ConstraintTrigger) -> Result<String> {
-        let trigger_name = if let Some(schema) = &trigger.schema {
-            format!("{}.{}", schema, Self::force_quote_identifier(&trigger.name))
-        } else {
-            Self::force_quote_identifier(&trigger.name)
-        };
-
-        let table_name = if let Some(schema) = &trigger.schema {
-            format!(
-                "{}.{}",
-                schema,
-                Self::force_quote_identifier(&trigger.table)
-            )
-        } else {
-            Self::force_quote_identifier(&trigger.table)
-        };
-
-        Ok(format!(
-            "DROP TRIGGER IF EXISTS {} ON {} CASCADE;",
-            trigger_name, table_name
-        ))
+    
+    fn drop_operator(&self, operator: &Operator) -> Result<String> {
+        let operator_name = Self::qualified_name(&operator.schema, &operator.name);
+        Ok(format!("DROP OPERATOR IF EXISTS {} CASCADE;", operator_name))
     }
-
-    fn comment_on(&self, object_type: &str, object_name: &str, comment: &str) -> Result<String> {
-        // Escape single quotes in comment
-        let escaped_comment = comment.replace("'", "''");
-        Ok(format!(
-            "COMMENT ON {} {} IS '{}';",
-            object_type, object_name, escaped_comment
-        ))
+    
+    fn create_op_class(&self, op_class: &OpClass) -> Result<String> {
+        // OpClass stores the full definition, so we can just return it
+        Ok(op_class.definition.clone())
     }
-
-    fn grant_privileges(
-        &self,
-        privileges: &[String],
-        on_object: &str,
-        to_roles: &[String],
-    ) -> Result<String> {
-        let privs = privileges.join(", ");
-        let roles = to_roles.join(", ");
-        Ok(format!("GRANT {} ON {} TO {};", privs, on_object, roles))
+    
+    fn drop_op_class(&self, op_class: &OpClass) -> Result<String> {
+        let op_class_name = Self::qualified_name(&op_class.schema, &op_class.name);
+        Ok(format!("DROP OPERATOR CLASS IF EXISTS {} CASCADE;", op_class_name))
     }
-
-    fn revoke_privileges(
-        &self,
-        privileges: &[String],
-        on_object: &str,
-        from_roles: &[String],
-    ) -> Result<String> {
-        let privs = privileges.join(", ");
-        let roles = from_roles.join(", ");
-        Ok(format!("REVOKE {} ON {} FROM {};", privs, on_object, roles))
+    
+    fn create_op_family(&self, op_family: &OpFamily) -> Result<String> {
+        let op_family_name = Self::qualified_name(&op_family.schema, &op_family.name);
+        Ok(format!("CREATE OPERATOR FAMILY {} USING {};", op_family_name, op_family.index_method))
     }
-
+    
+    fn drop_op_family(&self, op_family: &OpFamily) -> Result<String> {
+        let op_family_name = Self::qualified_name(&op_family.schema, &op_family.name);
+        Ok(format!("DROP OPERATOR FAMILY IF EXISTS {} USING {} CASCADE;", op_family_name, op_family.index_method))
+    }
+    
     fn create_role(&self, role: &Role) -> Result<String> {
-        let role_name = Self::force_quote_identifier(&role.name);
+        let role_name = Self::quote_ident(&role.name);
         let mut sql = format!("CREATE ROLE {}", role_name);
-
-        // Add role attributes
-        if role.superuser {
-            sql.push_str(" SUPERUSER");
-        }
-        if role.createdb {
-            sql.push_str(" CREATEDB");
-        }
-        if role.createrole {
-            sql.push_str(" CREATEROLE");
-        }
-        if role.inherit {
-            sql.push_str(" INHERIT");
-        }
-        if role.login {
-            sql.push_str(" LOGIN");
-        }
-        if role.replication {
-            sql.push_str(" REPLICATION");
-        }
-
-        // Add connection limit
+        if role.login { sql.push_str(" LOGIN"); }
+        if role.superuser { sql.push_str(" SUPERUSER"); }
+        if role.createdb { sql.push_str(" CREATEDB"); }
+        if role.createrole { sql.push_str(" CREATEROLE"); }
+        if role.inherit { sql.push_str(" INHERIT"); }
+        if role.replication { sql.push_str(" REPLICATION"); }
         if role.connection_limit != -1 {
             sql.push_str(&format!(" CONNECTION LIMIT {}", role.connection_limit));
         }
-
-        // Add password
         if let Some(password) = &role.password {
-            sql.push_str(&format!(" PASSWORD '{}'", password.replace('\'', "''")));
+            sql.push_str(&format!(" PASSWORD '{}'", password));
         }
-
-        // Add valid until
         if let Some(valid_until) = &role.valid_until {
-            sql.push_str(&format!(
-                " VALID UNTIL '{}'",
-                valid_until.replace('\'', "''")
-            ));
+            sql.push_str(&format!(" VALID UNTIL '{}'", valid_until));
         }
-
-        // Add member of roles
-        if !role.member_of.is_empty() {
-            sql.push_str(&format!(" IN ROLE {}", role.member_of.join(", ")));
-        }
-
         sql.push(';');
         Ok(sql)
     }
-
+    
     fn drop_role(&self, role: &Role) -> Result<String> {
-        let role_name = Self::force_quote_identifier(&role.name);
-        Ok(format!("DROP ROLE IF EXISTS {} CASCADE;", role_name))
+        Ok(format!("DROP ROLE IF EXISTS {} CASCADE;", Self::quote_ident(&role.name)))
     }
-
+    
     fn create_tablespace(&self, tablespace: &Tablespace) -> Result<String> {
-        let tablespace_name = Self::force_quote_identifier(&tablespace.name);
-        let location = tablespace.location.replace('\'', "''");
-        let owner = Self::force_quote_identifier(&tablespace.owner);
-
-        let mut sql = format!(
-            "CREATE TABLESPACE {} OWNER {} LOCATION '{}'",
-            tablespace_name, owner, location
-        );
-
-        // Add options if present
+        let tablespace_name = Self::quote_ident(&tablespace.name);
+        let mut sql = format!("CREATE TABLESPACE {} OWNER {}", tablespace_name, Self::quote_ident(&tablespace.owner));
+        sql.push_str(&format!(" LOCATION '{}'", tablespace.location));
         if !tablespace.options.is_empty() {
-            let options = tablespace
-                .options
-                .iter()
-                .map(|(k, v)| format!("{} = {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" WITH ({})", options));
+            sql.push_str(&Self::format_options(&tablespace.options));
         }
-
         sql.push(';');
-
-        // Add comment if present
-        if let Some(comment) = &tablespace.comment {
-            sql.push_str(&format!(
-                "\nCOMMENT ON TABLESPACE {} IS '{}';",
-                tablespace_name,
-                comment.replace('\'', "''")
-            ));
-        }
-
         Ok(sql)
     }
-
+    
     fn drop_tablespace(&self, tablespace: &Tablespace) -> Result<String> {
-        let tablespace_name = Self::force_quote_identifier(&tablespace.name);
-        Ok(format!(
-            "DROP TABLESPACE IF EXISTS {} CASCADE;",
-            tablespace_name
-        ))
+        Ok(format!("DROP TABLESPACE IF EXISTS {} CASCADE;", Self::quote_ident(&tablespace.name)))
     }
-
-    fn create_publication(&self, publication: &Publication) -> Result<String> {
-        let publication_name = Self::force_quote_identifier(&publication.name);
-        let mut sql = format!("CREATE PUBLICATION {}", publication_name);
-
-        // Add FOR ALL TABLES if specified
-        if publication.all_tables {
-            sql.push_str(" FOR ALL TABLES");
+    
+    fn add_table_to_publication(&self, pub_table: &PublicationTable) -> Result<String> {
+        let table_name = Self::qualified_name(&pub_table.table_schema, &pub_table.table_name);
+        let mut sql = format!("ALTER PUBLICATION {} ADD TABLE {}", 
+            Self::quote_ident(&pub_table.publication_oid.to_string()), table_name);
+        
+        if let Some(row_filter) = &pub_table.row_filter {
+            sql.push_str(&format!(" WHERE {}", row_filter));
         }
-        // Note: Specific tables are handled separately via PublicationTable objects
-
-        // Add operation types
-        let mut operations = Vec::new();
-        if publication.insert {
-            operations.push("INSERT");
+        
+        if let Some(column_list) = &pub_table.column_list {
+            sql.push_str(&format!(" (columns: {})", column_list.join(", ")));
         }
-        if publication.update {
-            operations.push("UPDATE");
-        }
-        if publication.delete {
-            operations.push("DELETE");
-        }
-        if publication.truncate {
-            operations.push("TRUNCATE");
-        }
-
-        if !operations.is_empty() {
-            sql.push_str(&format!(" WITH ({})", operations.join(", ")));
-        }
-
+        
         sql.push(';');
         Ok(sql)
     }
-
-    fn drop_publication(&self, publication: &Publication) -> Result<String> {
-        let publication_name = Self::force_quote_identifier(&publication.name);
-        Ok(format!(
-            "DROP PUBLICATION IF EXISTS {} CASCADE;",
-            publication_name
-        ))
+    
+    fn comment_on(&self, object_type: &str, qualified_name: &str, comment: &str) -> Result<String> {
+        Ok(format!("COMMENT ON {} {} IS '{}';", 
+            object_type.to_uppercase(), qualified_name, comment.replace('\'', "''")))
     }
-
-    fn create_subscription(&self, subscription: &Subscription) -> Result<String> {
-        let subscription_name = Self::force_quote_identifier(&subscription.name);
-        let connection_string = subscription.connection.replace('\'', "''");
-        let publications = subscription.publication.join(", ");
-
-        let mut sql = format!(
-            "CREATE SUBSCRIPTION {} CONNECTION '{}' PUBLICATION {}",
-            subscription_name, connection_string, publications
-        );
-
-        // Add enabled/disabled
-        if !subscription.enabled {
-            sql.push_str(" DISABLED");
-        }
-
-        // Add slot name if present
-        if let Some(slot_name) = &subscription.slot_name {
-            sql.push_str(&format!(
-                " SLOT_NAME {}",
-                Self::force_quote_identifier(slot_name)
-            ));
-        }
-
-        sql.push(';');
-        Ok(sql)
+    
+    fn grant_revoke(&self, object_type: &str, qualified_name: &str, acl: &str) -> Result<String> {
+        // This is a simplified implementation - in practice, you'd parse the ACL string
+        // and generate appropriate GRANT/REVOKE statements
+        Ok(format!("-- GRANT/REVOKE statements for {} {} with ACL: {}", 
+            object_type, qualified_name, acl))
     }
-
-    fn drop_subscription(&self, subscription: &Subscription) -> Result<String> {
-        let subscription_name = Self::force_quote_identifier(&subscription.name);
-        Ok(format!(
-            "DROP SUBSCRIPTION IF EXISTS {} CASCADE;",
-            subscription_name
-        ))
-    }
-
-    fn create_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String> {
-        let table_name = if let Some(schema) = &foreign_table.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&foreign_table.name)
-            )
-        } else {
-            Self::force_quote_identifier(&foreign_table.name)
-        };
-
-        let server_name = Self::force_quote_identifier(&foreign_table.server);
-
-        let mut sql = format!("CREATE FOREIGN TABLE {} (", table_name);
-
-        // Add columns
-        let columns = foreign_table
-            .columns
-            .iter()
-            .map(|col| {
-                let col_name = Self::force_quote_identifier(&col.name);
-                format!("{} {}", col_name, col.type_name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        sql.push_str(&columns);
-        sql.push_str(&format!(") SERVER {}", server_name));
-
-        // Add options if present
-        if !foreign_table.options.is_empty() {
-            let options = foreign_table
-                .options
-                .iter()
-                .map(|(k, v)| format!("{} = {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" OPTIONS ({})", options));
-        }
-
-        sql.push(';');
-
-        // Add comment if present
-        // if let Some(comment) = &foreign_table.comment {
-        //     sql.push_str(&format!(
-        //         "\nCOMMENT ON FOREIGN TABLE {} IS '{}';",
-        //         table_name,
-        //         comment.replace('\'', "''")
-        //     ));
-        // }
-
-        Ok(sql)
-    }
-
-    fn drop_foreign_table(&self, foreign_table: &ForeignTable) -> Result<String> {
-        let table_name = if let Some(schema) = &foreign_table.schema {
-            format!(
-                "{}.{}",
-                Self::force_quote_identifier(schema),
-                Self::force_quote_identifier(&foreign_table.name)
-            )
-        } else {
-            Self::force_quote_identifier(&foreign_table.name)
-        };
-        Ok(format!(
-            "DROP FOREIGN TABLE IF EXISTS {} CASCADE;",
-            table_name
-        ))
-    }
-
-    fn create_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
-        let fdw_name = Self::force_quote_identifier(&fdw.name);
-
-        let mut sql = format!("CREATE FOREIGN DATA WRAPPER {}", fdw_name);
-
-        // Add handler if present
-        if let Some(handler) = &fdw.handler {
-            sql.push_str(&format!(
-                " HANDLER {}",
-                Self::force_quote_identifier(handler)
-            ));
-        }
-
-        // Add validator if present
-        if let Some(validator) = &fdw.validator {
-            sql.push_str(&format!(
-                " VALIDATOR {}",
-                Self::force_quote_identifier(validator)
-            ));
-        }
-
-        // Add options if present
-        if !fdw.options.is_empty() {
-            let options = fdw
-                .options
-                .iter()
-                .map(|(k, v)| format!("{} = {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" OPTIONS ({})", options));
-        }
-
-        sql.push(';');
-        Ok(sql)
-    }
-
-    fn drop_foreign_data_wrapper(&self, fdw: &ForeignDataWrapper) -> Result<String> {
-        let fdw_name = Self::force_quote_identifier(&fdw.name);
-        Ok(format!(
-            "DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;",
-            fdw_name
-        ))
+    
+    fn alter_owner(&self, object_type: &str, qualified_name: &str, owner: &str) -> Result<String> {
+        Ok(format!("ALTER {} {} OWNER TO {};", 
+            object_type.to_uppercase(), qualified_name, Self::quote_ident(owner)))
     }
 }

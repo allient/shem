@@ -14,7 +14,7 @@ fn test_parse_table() {
     let stmts = parse_sql(sql).unwrap();
     assert_eq!(stmts.len(), 1);
     match &stmts[0] {
-        Statement::CreateTable(table) => {
+        Statement::cargo(table) => {
             assert_eq!(table.name, "users");
             assert_eq!(table.columns.len(), 4);
         }

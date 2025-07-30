@@ -1,6 +1,6 @@
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
-use shem_core::schema::PolicyCommand;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::policy::PolicyCommand;
 use tracing::debug;
 
 /// Test helper function to execute SQL on the test database

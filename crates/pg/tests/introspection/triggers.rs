@@ -1,5 +1,5 @@
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
 use tracing::debug;
 
 #[tokio::test]

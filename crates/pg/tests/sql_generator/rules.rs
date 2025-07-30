@@ -1,6 +1,6 @@
-use postgres::PostgresSqlGenerator;
-use shem_core::schema::{Rule, RuleEvent};
-use shem_core::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
+use pg::model::{Rule, RuleEvent};
+use pg::traits::SqlGenerator;
 
 #[test]
 fn test_create_rule() {

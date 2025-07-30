@@ -1,6 +1,6 @@
-use shem_core::schema::Trigger;
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::trigger::Trigger;
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_trigger_basic() {

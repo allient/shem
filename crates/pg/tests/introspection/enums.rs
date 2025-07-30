@@ -1,6 +1,7 @@
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, schema::{Type, EnumType}};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::types::{Type, EnumType};
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -12,7 +13,7 @@ async fn execute_sql(
 }
 
 /// Helper function to get an enum type from the unified types map
-fn get_enum_type<'a>(schema: &'a shem_core::Schema, name: &str) -> Option<&'a EnumType> {
+fn get_enum_type<'a>(schema: &'a pg::model::schema::Schema, name: &str) -> Option<&'a EnumType> {
     schema.types.get(name).and_then(|t| {
         if let Type::Enum(et) = t {
             Some(et)

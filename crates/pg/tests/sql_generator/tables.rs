@@ -1,6 +1,6 @@
-use postgres::PostgresSqlGenerator;
-use shem_core::schema::{Column, Constraint, ConstraintKind, Table, ColumnStorage, ReplicaIdentity, Identity, Generated, IdentityGeneration};
-use shem_core::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
+use pg::model::relation::{Column, Constraint, Table, ColumnStorage, ReplicaIdentity, Identity, Generated, IdentityGeneration, ConstraintType, ReferentialAction};
+use pg::traits::SqlGenerator;
 
 #[test]
 fn test_generate_create_table() {
@@ -68,12 +68,12 @@ fn test_generate_create_table() {
                 name: "users_pkey".to_string(),
                 table_oid: 0,
                 definition: "PRIMARY KEY (id)".to_string(),
-                r#type: shem_core::schema::ConstraintType::PrimaryKey,
+                r#type: ConstraintType::PrimaryKey,
                 foreign_table_oid: None,
                 foreign_key_columns: Vec::new(),
                 primary_key_columns: Vec::new(),
-                on_update: shem_core::schema::ReferentialAction::NoAction,
-                on_delete: shem_core::schema::ReferentialAction::NoAction,
+                on_update: ReferentialAction::NoAction,
+                on_delete: ReferentialAction::NoAction,
                 is_deferrable: false,
                 is_initially_deferred: false,
                 is_not_valid: false,
@@ -83,12 +83,12 @@ fn test_generate_create_table() {
                 name: "users_email_key".to_string(),
                 table_oid: 0,
                 definition: "UNIQUE (email)".to_string(),
-                r#type: shem_core::schema::ConstraintType::Unique,
+                r#type: ConstraintType::Unique,
                 foreign_table_oid: None,
                 foreign_key_columns: Vec::new(),
                 primary_key_columns: Vec::new(),
-                on_update: shem_core::schema::ReferentialAction::NoAction,
-                on_delete: shem_core::schema::ReferentialAction::NoAction,
+                on_update: ReferentialAction::NoAction,
+                on_delete: ReferentialAction::NoAction,
                 is_deferrable: false,
                 is_initially_deferred: false,
                 is_not_valid: false,
@@ -119,7 +119,7 @@ fn test_generate_create_table() {
 
 #[test]
 fn test_generate_alter_table() {
-    use shem_core::schema::{Column, Constraint, ConstraintKind, GeneratedColumn, Identity, Table};
+    use pg::model::relation::{Column, Constraint, Identity, Table};
 
     // Old table with some columns and constraints
     let old_table = Table {
@@ -202,12 +202,12 @@ fn test_generate_alter_table() {
             name: "to_drop_constraint".to_string(),
             table_oid: 0,
             definition: "UNIQUE (email)".to_string(),
-            r#type: shem_core::schema::ConstraintType::Unique,
+            r#type: ConstraintType::Unique,
             foreign_table_oid: None,
             foreign_key_columns: Vec::new(),
             primary_key_columns: Vec::new(),
-            on_update: shem_core::schema::ReferentialAction::NoAction,
-            on_delete: shem_core::schema::ReferentialAction::NoAction,
+            on_update: ReferentialAction::NoAction,
+            on_delete: ReferentialAction::NoAction,
             is_deferrable: false,
             is_initially_deferred: false,
             is_not_valid: false,
@@ -309,12 +309,12 @@ fn test_generate_alter_table() {
             name: "new_constraint".to_string(),
             table_oid: 0,
             definition: "CHECK (LENGTH(name) > 0)".to_string(),
-            r#type: shem_core::schema::ConstraintType::Check,
+            r#type: ConstraintType::Check,
             foreign_table_oid: None,
             foreign_key_columns: Vec::new(),
             primary_key_columns: Vec::new(),
-            on_update: shem_core::schema::ReferentialAction::NoAction,
-            on_delete: shem_core::schema::ReferentialAction::NoAction,
+            on_update: ReferentialAction::NoAction,
+            on_delete: ReferentialAction::NoAction,
             is_deferrable: false,
             is_initially_deferred: false,
             is_not_valid: false,

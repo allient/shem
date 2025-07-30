@@ -1,12 +1,12 @@
-use postgres::TestDb;
-use shem_core::DatabaseConnection;
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
 use tracing::debug;
 
 // Helper function to extract procedures from routines
-fn get_procedures_from_schema(schema: &shem_core::Schema) -> Vec<&shem_core::Procedure> {
+fn get_procedures_from_schema(schema: &pg::model::schema::Schema) -> Vec<&pg::model::routine::Procedure> {
     schema.routines.values()
         .filter_map(|r| match r {
-            shem_core::schema::Routine::Procedure(p) => Some(p),
+            pg::model::routine::Routine::Procedure(p) => Some(p),
             _ => None,
         })
         .collect()

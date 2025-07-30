@@ -1,6 +1,6 @@
-use shem_core::schema::{View, MaterializedView, CheckOption};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::relation::{View, MaterializedView, CheckOption};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_view() {

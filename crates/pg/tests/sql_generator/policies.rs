@@ -1,6 +1,6 @@
-use shem_core::schema::{Policy, PolicyCommand};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::policy::{Policy, PolicyCommand};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_policy() {

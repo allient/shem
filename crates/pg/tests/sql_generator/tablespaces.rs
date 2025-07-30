@@ -1,6 +1,6 @@
-use shem_core::schema::Tablespace;
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::global::Tablespace;
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 use std::collections::HashMap;
 
 #[test]

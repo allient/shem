@@ -1,6 +1,6 @@
-use shem_core::schema::{Index, IndexMethod, IndexColumn, SortOrder};
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::relation::{Index, IndexMethod, IndexColumn, SortOrder};
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_index() {

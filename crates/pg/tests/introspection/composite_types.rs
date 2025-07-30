@@ -1,6 +1,7 @@
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, schema::{Type, CompositeType}};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::types::{Type, CompositeType};
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -12,7 +13,7 @@ async fn execute_sql(
 }
 
 /// Helper function to get a composite type from the unified types map
-fn get_composite_type<'a>(schema: &'a shem_core::Schema, name: &str) -> Option<&'a CompositeType> {
+fn get_composite_type<'a>(schema: &'a pg::model::schema::Schema, name: &str) -> Option<&'a CompositeType> {
     schema.types.get(name).and_then(|t| {
         if let Type::Composite(ct) = t {
             Some(ct)

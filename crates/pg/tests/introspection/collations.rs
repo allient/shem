@@ -1,6 +1,7 @@
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, schema::CollationProvider};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::collation::CollationProvider;
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(

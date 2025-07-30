@@ -1,6 +1,7 @@
 use tracing::debug;
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, schema::{Type, RangeType}};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::types::{Type, RangeType};
 
 /// Test helper function to execute SQL on the test database
 async fn execute_sql(
@@ -12,7 +13,7 @@ async fn execute_sql(
 }
 
 /// Helper function to get a range type from the unified types map
-fn get_range_type<'a>(schema: &'a shem_core::Schema, name: &str) -> Option<&'a RangeType> {
+fn get_range_type<'a>(schema: &'a pg::model::schema::Schema, name: &str) -> Option<&'a RangeType> {
     schema.types.get(name).and_then(|t| {
         if let Type::Range(rt) = t {
             Some(rt)

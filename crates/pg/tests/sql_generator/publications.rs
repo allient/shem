@@ -1,6 +1,6 @@
-use shem_core::schema::Publication;
-use shem_core::traits::SqlGenerator;
-use postgres::PostgresSqlGenerator;
+use pg::model::Publication;
+use pg::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
 
 #[test]
 fn test_create_publication_all_tables() {

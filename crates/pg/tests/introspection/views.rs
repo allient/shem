@@ -1,6 +1,6 @@
-use postgres::TestDb;
-use shem_core::schema::CheckOption;
-use shem_core::DatabaseConnection;
+use pg::db_util::TestDb;
+use pg::model::relation::CheckOption;
+use pg::traits::DatabaseConnection;
 use tracing::debug;
 
 /// Test helper function to execute SQL on the test database

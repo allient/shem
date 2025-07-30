@@ -1,5 +1,6 @@
-use postgres::TestDb;
-use shem_core::{DatabaseConnection, schema::IdentityGeneration};
+use pg::db_util::TestDb;
+use pg::traits::DatabaseConnection;
+use pg::model::relation::IdentityGeneration;
 use tracing::debug;
 
 /// Test helper function to execute SQL on the test database
@@ -289,7 +290,7 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
         .find(|i| i.name == "idx_test_indexes_name")
         .unwrap();
     assert!(!name_index.unique, "Name index should not be unique");
-    assert_eq!(name_index.method, shem_core::IndexMethod::Btree);
+    assert_eq!(name_index.method, pg::model::relation::IndexMethod::Btree);
 
     let email_index = tbl
         .indexes
@@ -893,7 +894,7 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
     let fk_constraints: Vec<_> = child
         .constraints
         .iter()
-        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::ForeignKey))
+        .filter(|c| matches!(c.r#type, pg::model::relation::ConstraintType::ForeignKey(_)))
         .collect();
 
     assert!(
@@ -903,7 +904,7 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
 
     let fk = fk_constraints[0];
     assert!(
-        matches!(fk.r#type, shem_core::schema::ConstraintType::ForeignKey),
+        matches!(fk.r#type, pg::model::relation::ConstraintType::ForeignKey(_)),
         "Constraint should be foreign key"
     );
     assert!(
@@ -1162,7 +1163,7 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
     let pk_constraints: Vec<_> = tbl
         .constraints
         .iter()
-        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::PrimaryKey))
+        .filter(|c| matches!(c.r#type, pg::model::relation::ConstraintType::PrimaryKey))
         .collect();
 
     assert!(
@@ -1172,7 +1173,7 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
 
     let pk = pk_constraints[0];
     assert!(
-        matches!(pk.r#type, shem_core::schema::ConstraintType::PrimaryKey),
+        matches!(pk.r#type, pg::model::relation::ConstraintType::PrimaryKey),
         "Constraint should be primary key"
     );
     assert!(
@@ -1225,7 +1226,7 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
     let exclusion_constraints: Vec<_> = tbl
         .constraints
         .iter()
-        .filter(|c| matches!(c.r#type, shem_core::schema::ConstraintType::Exclusion))
+        .filter(|c| matches!(c.r#type, pg::model::relation::ConstraintType::Exclusion))
         .collect();
 
     assert!(
@@ -1235,7 +1236,7 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
 
     let exclusion = exclusion_constraints[0];
     assert!(
-        matches!(exclusion.r#type, shem_core::schema::ConstraintType::Exclusion),
+        matches!(exclusion.r#type, pg::model::relation::ConstraintType::Exclusion),
         "Constraint should be exclusion"
     );
     assert!(

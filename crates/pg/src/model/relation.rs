@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::trigger::Trigger;
+use crate::model::{policy::Policy, rule::Rule, trigger::Trigger};
 
 // in models/relation.rs or a new models/index.rs
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +172,8 @@ pub struct Table {
     pub constraints: Vec<Constraint>,
     pub indexes: Vec<Index>,
     pub triggers: Vec<Trigger>,
+    pub rules: Vec<Rule>,
+    pub policies: Vec<Policy>,
     pub comment: Option<String>,
     pub tablespace: Option<String>,
     pub inherits: Vec<String>,         // List of parent table names
@@ -196,6 +198,7 @@ pub struct MaterializedView {
     pub acl: Option<String>,
     pub comment: Option<String>,
     pub indexes: Vec<Index>, // Indexes are important for matviews
+    pub triggers: Vec<Trigger>,
     pub is_user_defined: bool,
     pub is_from_extension: bool,
 }
@@ -212,17 +215,29 @@ pub struct View {
     pub options: HashMap<String, String>, // For security_barrier and other options
     pub acl: Option<String>,
     pub comment: Option<String>,
+    pub rules: Vec<Rule>,
+    pub policies: Vec<Policy>, // Views can have policies since PostgreSQL 10
     pub is_user_defined: bool,
     pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForeignTable {
+    pub oid: u32,
     pub name: String,
-    pub schema: Option<String>,
+    pub schema: String, // A foreign table, like a regular table, must be in a schema.
+    pub owner: String,
+    pub acl: Option<String>,
     pub columns: Vec<Column>,
-    pub server: String,
+    pub server_name: String, // Renamed from `server` for clarity
     pub options: HashMap<String, String>,
+    pub constraints: Vec<Constraint>,
+    pub comment: Option<String>,
+    pub triggers: Vec<Trigger>,
+    pub rules: Vec<Rule>,
+    pub policies: Vec<Policy>,
+    pub is_user_defined: bool,
+    pub is_from_extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -234,4 +249,25 @@ pub enum Relation {
     // Note: Partitioned Tables are represented by the `Table` variant.
     // The presence of a `partition_key` in the `Table` struct is what
     // distinguishes them from a regular table.
+}
+
+impl Relation {
+    /// Returns the OID of the underlying relation, regardless of its specific kind.
+    pub fn get_oid(&self) -> u32 {
+        match self {
+            Relation::Table(t) => t.oid,
+            Relation::View(v) => v.oid,
+            Relation::MaterializedView(m) => m.oid,
+            Relation::ForeignTable(f) => f.oid,
+        }
+    }
+
+    pub fn get_name(&self) -> &str {
+        match self {
+            Relation::Table(t) => &t.name,
+            Relation::View(v) => &v.name,
+            Relation::MaterializedView(m) => &m.name,
+            Relation::ForeignTable(f) => &f.name,
+        }
+    }
 }

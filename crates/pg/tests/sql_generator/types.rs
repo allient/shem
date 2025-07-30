@@ -1,6 +1,6 @@
-use postgres::PostgresSqlGenerator;
-use shem_core::schema::{Type, TypeInfo, Domain, BaseType, CompositeType, RangeType, PseudoType};
-use shem_core::traits::SqlGenerator;
+use pg::sql_generator::PostgresSqlGenerator;
+use pg::model::types::{Type, TypeInfo, Domain, BaseType, CompositeType, RangeType, PseudoType, DomainConstraint, Attribute};
+use pg::traits::SqlGenerator;
 
 #[test]
 fn test_create_domain() {
@@ -23,7 +23,7 @@ fn test_create_domain() {
         not_null: false,
         default: None,
         constraints: vec![
-            shem_core::schema::DomainConstraint {
+            DomainConstraint {
                 oid: 0,
                 name: "email_check".to_string(),
                 definition: "CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')".to_string(),
@@ -123,12 +123,12 @@ fn test_create_composite_type() {
             array_type_oid: None,
         },
         attributes: vec![
-            shem_core::schema::Attribute {
+            Attribute {
                 name: "x".to_string(),
                 type_name: "integer".to_string(),
                 collation: None,
             },
-            shem_core::schema::Attribute {
+            Attribute {
                 name: "y".to_string(),
                 type_name: "integer".to_string(),
                 collation: None,
