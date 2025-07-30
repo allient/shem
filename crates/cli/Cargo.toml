@@ -16,8 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-shem-common = { path = "../common" }
-postgres = { path = "../postgres" }
+common = { path = "../common" }
+pg = { path = "../pg" }
 parser = { path = "../parser" }
 
 # External dependencies

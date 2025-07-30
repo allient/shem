@@ -1,0 +1,27 @@
+[package]
+name = "pg"
+version = "0.1.0"
+edition = "2024"
+description = "PostgreSQL driver for database schema management"
+
+[dependencies]
+common = { path = "../common" }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+test-log = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+uuid = { workspace = true }
+tempfile = { workspace = true }

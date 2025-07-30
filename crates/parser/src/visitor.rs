@@ -4,7 +4,7 @@ use pg_query::{
     Node, ParseResult,
     protobuf::{self, node},
 };
-use postgres::{
+use shem_postgres::model::{
     CheckOption, DataType, Expression, FunctionBehavior, FunctionParameter, FunctionReturn,
     Literal, ParallelType, ParameterMode, PolicyCommand, RuleEvent, SecurityType, TableConstraint,
     TriggerEvent, TriggerWhen,

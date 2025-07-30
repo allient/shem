@@ -143,7 +143,9 @@ async fn main() -> Result<()> {
         } => {
             todo!()
         }
-        Command::Validate { schema } => validate::execute(schema.to_str().unwrap(), &config).await,
+        Command::Validate { schema } => {
+            todo!()
+        }
         Command::Introspect {
             database_url,
             output,
@@ -151,7 +153,9 @@ async fn main() -> Result<()> {
         } => {
             todo!()
         }
-        Command::Inspect { schema } => inspect::execute(schema.to_str().unwrap(), &config).await,
+        Command::Inspect { schema } => {
+            todo!()
+        }
     };
 
     match result {

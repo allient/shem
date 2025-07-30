@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 pg_query = { workspace = true }
+pg = { path = "../pg" }
 
 [features]
 default = ["full"]

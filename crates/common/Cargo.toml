@@ -1,5 +1,5 @@
 [package]
-name = "shem-common"
+name = "common"
 version = "0.1.0"
 edition = "2024"
 description = "Core types and traits for database schema management"

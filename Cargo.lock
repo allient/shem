@@ -348,19 +348,19 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "clap",
+ "common",
  "env_logger",
  "glob",
  "indexmap",
  "insta",
  "parser",
  "petgraph 0.8.2",
- "postgres",
+ "pg",
  "predicates",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
- "shem-common",
  "sqlx",
  "tempfile",
  "thiserror 2.0.12",
@@ -377,6 +377,22 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
+
+[[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "postgres-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
 
 [[package]]
 name = "concurrent-queue"
@@ -1321,6 +1337,7 @@ name = "parser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "pg",
  "pg_query",
  "serde",
  "serde_json",
@@ -1368,6 +1385,28 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "serde",
+]
+
+[[package]]
+name = "pg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "common",
+ "env_logger",
+ "log",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1458,29 +1497,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
-]
-
-[[package]]
-name = "postgres"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "env_logger",
- "log",
- "parser",
- "serde",
- "serde_json",
- "shem-common",
- "sqlx",
- "tempfile",
- "test-log",
- "tokio",
- "tokio-postgres",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1990,22 +2006,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
-]
-
-[[package]]
-name = "shem-common"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "postgres-types",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
- "tokio",
- "tokio-postgres",
- "uuid",
 ]
 
 [[package]]
