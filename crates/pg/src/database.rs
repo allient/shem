@@ -8,12 +8,13 @@ use crate::model::{
     operator::{OpClass, OpFamily, Operator},
     policy::Policy,
     publication::{Publication, PublicationTable},
-    relation::Relation,
+    relation::{Relation, Table, View, MaterializedView},
     routine::Routine,
     rule::Rule,
     schema::Schema,
     sequence::Sequence,
     subscription::Subscription,
+    trigger::Trigger,
     types::Type,
 };
 use crate::{
@@ -89,6 +90,67 @@ impl DatabaseModel {
             name: Some(name),
             ..Self::default() // Use the derived default constructor
         }
+    }
+
+    // Helper methods to provide backward compatibility with tests
+    pub fn tables(&self) -> HashMap<String, &Table> {
+        self.relations
+            .iter()
+            .filter_map(|(name, relation)| {
+                if let Relation::Table(table) = relation {
+                    Some((name.clone(), table))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn views(&self) -> HashMap<String, &View> {
+        self.relations
+            .iter()
+            .filter_map(|(name, relation)| {
+                if let Relation::View(view) = relation {
+                    Some((name.clone(), view))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn materialized_views(&self) -> HashMap<String, &MaterializedView> {
+        self.relations
+            .iter()
+            .filter_map(|(name, relation)| {
+                if let Relation::MaterializedView(mv) = relation {
+                    Some((name.clone(), mv))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn named_schemas(&self) -> &HashMap<String, Schema> {
+        &self.schemas
+    }
+
+    pub fn triggers(&self) -> HashMap<String, &Trigger> {
+        // Collect all triggers from all relations
+        let mut all_triggers = HashMap::new();
+        for relation in self.relations.values() {
+            let triggers = match relation {
+                Relation::Table(table) => &table.triggers,
+                Relation::MaterializedView(mv) => &mv.triggers,
+                Relation::ForeignTable(ft) => &ft.triggers,
+                Relation::View(_) => continue, // Views don't have triggers
+            };
+            for trigger in triggers {
+                all_triggers.insert(trigger.name.clone(), trigger);
+            }
+        }
+        all_triggers
     }
 
     pub async fn introspect_database_model<C>(client: &C) -> Result<Self>
@@ -195,10 +257,34 @@ impl DatabaseModel {
         // 2. Iterate over the results and use a `match` to sort them into the correct HashMaps.
         for relation in all_relations {
             let relation_name = match &relation {
-                Relation::Table(t) => t.name.clone(),
-                Relation::View(t) => t.name.clone(),
-                Relation::MaterializedView(t) => t.name.clone(),
-                Relation::ForeignTable(t) => t.name.clone(),
+                Relation::Table(t) => {
+                    if t.schema == "public" {
+                        t.name.clone()
+                    } else {
+                        format!("{}.{}", t.schema, t.name)
+                    }
+                },
+                Relation::View(t) => {
+                    if t.schema == "public" {
+                        t.name.clone()
+                    } else {
+                        format!("{}.{}", t.schema, t.name)
+                    }
+                },
+                Relation::MaterializedView(t) => {
+                    if t.schema == "public" {
+                        t.name.clone()
+                    } else {
+                        format!("{}.{}", t.schema, t.name)
+                    }
+                },
+                Relation::ForeignTable(t) => {
+                    if t.schema == "public" {
+                        t.name.clone()
+                    } else {
+                        format!("{}.{}", t.schema, t.name)
+                    }
+                },
             };
             db_model.relations.insert(relation_name, relation);
         }

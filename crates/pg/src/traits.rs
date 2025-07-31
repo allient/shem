@@ -155,6 +155,7 @@ pub trait SqlGenerator: Send + Sync {
     fn drop_extension(&self, ext: &Extension) -> Result<String>;
 
     fn create_sequence(&self, seq: &Sequence) -> Result<String>;
+    fn alter_sequence(&self, old_seq: &Sequence, new_seq: &Sequence) -> Result<String>;
     fn drop_sequence(&self, seq: &Sequence) -> Result<String>;
 
     fn create_collation(&self, collation: &Collation) -> Result<String>;

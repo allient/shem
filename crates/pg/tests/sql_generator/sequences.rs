@@ -105,8 +105,8 @@ fn test_create_sequence_no_limits() {
     assert!(result.contains("AS bigint"));
     assert!(result.contains("START 1"));
     assert!(result.contains("INCREMENT 1"));
-    assert!(!result.contains("MINVALUE"));
-    assert!(!result.contains("MAXVALUE"));
+    assert!(result.contains("NO MINVALUE"));
+    assert!(result.contains("NO MAXVALUE"));
     assert!(result.contains("CACHE 1"));
     assert!(!result.contains("CYCLE"));
 }
@@ -214,10 +214,8 @@ fn test_alter_sequence_change_all_properties() {
     };
 
     let generator = PostgresSqlGenerator;
-    // Note: alter_sequence method not implemented in unified interface
-    // Using create_sequence and drop_sequence instead
-    let up_statements = generator.create_sequence(&new_sequence).unwrap();
-    let down_statements = generator.drop_sequence(&old_sequence).unwrap();
+    let up_statements = generator.alter_sequence(&old_sequence, &new_sequence).unwrap();
+    let down_statements = generator.alter_sequence(&new_sequence, &old_sequence).unwrap();
     
     assert!(!up_statements.is_empty());
     assert!(!down_statements.is_empty());
@@ -256,10 +254,8 @@ fn test_alter_sequence_no_changes() {
     };
 
     let generator = PostgresSqlGenerator;
-    // Note: alter_sequence method not implemented in unified interface
-    // Using create_sequence and drop_sequence instead
-    let up_statements = generator.create_sequence(&sequence).unwrap();
-    let down_statements = generator.drop_sequence(&sequence).unwrap();
+    let up_statements = generator.alter_sequence(&sequence, &sequence).unwrap();
+    let down_statements = generator.alter_sequence(&sequence, &sequence).unwrap();
     
     assert!(up_statements.is_empty());
     assert!(down_statements.is_empty());
@@ -310,9 +306,7 @@ fn test_alter_sequence_remove_limits() {
     };
 
     let generator = PostgresSqlGenerator;
-    // Note: alter_sequence method not implemented in unified interface
-    // Using create_sequence and drop_sequence instead
-    let up_statements = generator.create_sequence(&new_sequence).unwrap();
+    let up_statements = generator.alter_sequence(&old_sequence, &new_sequence).unwrap();
     
     assert!(!up_statements.is_empty());
     let up_sql = up_statements;

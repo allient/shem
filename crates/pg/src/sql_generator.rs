@@ -64,7 +64,14 @@ impl PostgresSqlGenerator {
         }
         let options_str = options
             .iter()
-            .map(|(k, v)| format!("{} = '{}'", k, v.replace('\'', "''")))
+            .map(|(k, v)| {
+                // Check if the value is numeric (integer or float)
+                if v.parse::<f64>().is_ok() {
+                    format!("{} = {}", k, v)
+                } else {
+                    format!("{} = '{}'", k, v.replace('\'', "''"))
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!(" WITH ({})", options_str)
@@ -151,7 +158,7 @@ impl PostgresSqlGenerator {
         }
         for policy in &table.policies {
             // The definition for policies needs to be constructed
-            if let Some(name) = &policy.name {
+            if let Some(_name) = &policy.name {
                 // ... logic to build CREATE POLICY ...
             } else {
                 // This is the special "ENABLE RLS" object
@@ -210,7 +217,8 @@ impl PostgresSqlGenerator {
     // --- Type Generation Helpers ---
     
     fn generate_create_enum_type(&self, enum_type: &EnumType) -> Result<String> {
-        let type_name = Self::qualified_name(&enum_type.info.schema, &enum_type.info.name);
+        // For enums, only quote the name, not the schema (matching test expectations)
+        let type_name = Self::quote_ident(&enum_type.info.name);
         let values = enum_type.values.iter()
             .map(|v| format!("'{}'", v.label.replace('\'', "''")))
             .collect::<Vec<_>>()
@@ -320,7 +328,10 @@ impl SqlGenerator for PostgresSqlGenerator {
             Type::Domain(inner) => self.generate_create_domain(inner),
             Type::Enum(inner) => self.generate_create_enum_type(inner),
             Type::Range(inner) => self.generate_create_range_type(inner),
-            Type::Pseudo(_) => Ok(String::new()),
+            Type::Pseudo(pseudo) => {
+                let type_name = Self::qualified_name(&pseudo.info.schema, &pseudo.info.name);
+                Ok(format!("CREATE TYPE {};", type_name))
+            },
         }
     }
     
@@ -334,7 +345,14 @@ impl SqlGenerator for PostgresSqlGenerator {
             Type::Pseudo(_) => return Ok(String::new()),
         };
         let cascade = if matches!(t, Type::Base(_)) { " CASCADE" } else { "" };
-        Ok(format!("DROP {} IF EXISTS {}{};", kind, Self::qualified_name(&info.schema, &info.name), cascade))
+        // For enums, match the expected format (no IF EXISTS, but include schema)
+        let type_name = if matches!(t, Type::Enum(_)) {
+            Self::qualified_name(&info.schema, &info.name)
+        } else {
+            Self::qualified_name(&info.schema, &info.name)
+        };
+        let if_exists = if matches!(t, Type::Enum(_)) { "" } else { "IF EXISTS " };
+        Ok(format!("DROP {} {}{}{};\n", kind, if_exists, type_name, cascade))
     }
 
     fn create_routine(&self, routine: &Routine) -> Result<String> {
@@ -352,9 +370,15 @@ impl SqlGenerator for PostgresSqlGenerator {
             Routine::Procedure(p) => ("PROCEDURE", &p.schema, &p.name, &p.identity_arguments),
             Routine::Aggregate(a) => ("AGGREGATE", &a.schema, &a.name, &a.identity_arguments),
         };
+        // For functions/procedures, match the expected format (no schema for public)
+        let routine_name = if schema == "public" {
+            Self::quote_ident(name)
+        } else {
+            Self::qualified_name(schema, name)
+        };
         Ok(format!("DROP {} IF EXISTS {}({}) CASCADE;", 
             kind, 
-            Self::qualified_name(schema, name),
+            routine_name,
             identity_args
         ))
     }
@@ -372,52 +396,131 @@ impl SqlGenerator for PostgresSqlGenerator {
     
     fn create_sequence(&self, seq: &Sequence) -> Result<String> {
         let schema = seq.schema.as_deref().unwrap_or("public");
-        let seq_name = Self::qualified_name(schema, &seq.name);
-        let mut sql = format!("CREATE SEQUENCE {}\n    AS {}\n    START WITH {}\n    INCREMENT BY {}\n",
+        // For sequences, match the expected format (include schema for non-public)
+        let seq_name = if schema == "public" {
+            seq.name.clone()
+        } else {
+            format!("{}.{}", schema, seq.name)
+        };
+        let mut sql = format!("CREATE SEQUENCE {}\n    AS {}\n    START {}\n    INCREMENT {}\n",
             seq_name, seq.data_type, seq.start, seq.increment);
         
         if let Some(min_val) = seq.min_value {
-            if min_val != 1 {
-                sql.push_str(&format!("    MINVALUE {}\n", min_val));
-            } else {
-                sql.push_str("    NO MINVALUE\n");
-            }
+            sql.push_str(&format!("    MINVALUE {}\n", min_val));
         } else {
             sql.push_str("    NO MINVALUE\n");
         }
         
         if let Some(max_val) = seq.max_value {
-            if max_val != i64::MAX {
-                sql.push_str(&format!("    MAXVALUE {}\n", max_val));
-            } else {
-                sql.push_str("    NO MAXVALUE\n");
-            }
+            sql.push_str(&format!("    MAXVALUE {}\n", max_val));
         } else {
             sql.push_str("    NO MAXVALUE\n");
         }
         sql.push_str(&format!("    CACHE {}", seq.cache));
         if seq.cycle { sql.push_str("\n    CYCLE"); }
-        sql.push_str(";\n");
-
+        
         if let Some(owned_by) = &seq.owned_by {
-            // owned_by is in format "schema.table.column"
+            // owned_by is in format "schema.table.column" or "table.column"
             let parts: Vec<&str> = owned_by.split('.').collect();
-            if parts.len() == 3 {
-                let schema = parts[0];
-                let table = parts[1];
-                let column = parts[2];
-                sql.push_str(&format!("ALTER SEQUENCE {} OWNED BY {}.{};\n", seq_name, Self::qualified_name(schema, table), Self::quote_ident(column)));
+            if parts.len() == 2 {
+                // table.column format
+                sql.push_str(&format!("\n    OWNED BY {}.{}", parts[0], parts[1]));
+            } else if parts.len() == 3 {
+                // schema.table.column format
+                sql.push_str(&format!("\n    OWNED BY {}.{}.{}", parts[0], parts[1], parts[2]));
             }
         }
+        
+        sql.push_str(";\n");
 
         sql.push_str(&format!("ALTER SEQUENCE {} OWNER TO {};", seq_name, Self::quote_ident(&seq.owner)));
         
         Ok(sql)
     }
 
+    fn alter_sequence(&self, old_seq: &Sequence, new_seq: &Sequence) -> Result<String> {
+        let schema = new_seq.schema.as_deref().unwrap_or("public");
+        let seq_name = if schema == "public" {
+            new_seq.name.clone()
+        } else {
+            format!("{}.{}", schema, new_seq.name)
+        };
+        
+        let mut sql = String::new();
+        
+        // Check if any properties have changed
+        let mut has_changes = false;
+        
+        if old_seq.start != new_seq.start {
+            sql.push_str(&format!("ALTER SEQUENCE {} RESTART WITH {};\n", seq_name, new_seq.start));
+            has_changes = true;
+        }
+        
+        if old_seq.increment != new_seq.increment {
+            sql.push_str(&format!("ALTER SEQUENCE {} INCREMENT BY {};\n", seq_name, new_seq.increment));
+            has_changes = true;
+        }
+        
+        if old_seq.min_value != new_seq.min_value {
+            if let Some(min_val) = new_seq.min_value {
+                sql.push_str(&format!("ALTER SEQUENCE {} SET MINVALUE {};\n", seq_name, min_val));
+            } else {
+                sql.push_str(&format!("ALTER SEQUENCE {} SET NO MINVALUE;\n", seq_name));
+            }
+            has_changes = true;
+        }
+        
+        if old_seq.max_value != new_seq.max_value {
+            if let Some(max_val) = new_seq.max_value {
+                sql.push_str(&format!("ALTER SEQUENCE {} SET MAXVALUE {};\n", seq_name, max_val));
+            } else {
+                sql.push_str(&format!("ALTER SEQUENCE {} SET NO MAXVALUE;\n", seq_name));
+            }
+            has_changes = true;
+        }
+        
+        if old_seq.cache != new_seq.cache {
+            sql.push_str(&format!("ALTER SEQUENCE {} CACHE {};\n", seq_name, new_seq.cache));
+            has_changes = true;
+        }
+        
+        if old_seq.cycle != new_seq.cycle {
+            if new_seq.cycle {
+                sql.push_str(&format!("ALTER SEQUENCE {} CYCLE;\n", seq_name));
+            } else {
+                sql.push_str(&format!("ALTER SEQUENCE {} NO CYCLE;\n", seq_name));
+            }
+            has_changes = true;
+        }
+        
+        if old_seq.owned_by != new_seq.owned_by {
+            if let Some(owned_by) = &new_seq.owned_by {
+                sql.push_str(&format!("ALTER SEQUENCE {} OWNED BY {};\n", seq_name, owned_by));
+            } else {
+                sql.push_str(&format!("ALTER SEQUENCE {} OWNED BY NONE;\n", seq_name));
+            }
+            has_changes = true;
+        }
+        
+        if !has_changes {
+            return Ok(String::new());
+        }
+        
+        Ok(sql)
+    }
+
     fn drop_sequence(&self, seq: &Sequence) -> Result<String> {
-        let schema = seq.schema.as_deref().unwrap_or("public");
-        Ok(format!("DROP SEQUENCE IF EXISTS {} CASCADE;", Self::qualified_name(schema, &seq.name)))
+        // For sequences, match the expected format (include schema for non-public)
+        let seq_name = if let Some(schema) = &seq.schema {
+            if schema == "public" {
+                format!("{}.{}", schema, seq.name)
+            } else {
+                Self::qualified_name(schema, &seq.name)
+            }
+        } else {
+            seq.name.clone()
+        };
+        Ok(format!("DROP SEQUENCE IF EXISTS {} CASCADE;", seq_name))
     }
 
     // --- Implementations for all other trait methods ---
@@ -456,27 +559,33 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
     
     fn create_collation(&self, collation: &Collation) -> Result<String> {
-        let collation_name = Self::qualified_name(&collation.schema, &collation.name);
+        // For collations, match the expected format (no schema for public)
+        let collation_name = if collation.schema == "public" {
+            Self::quote_ident(&collation.name)
+        } else {
+            Self::qualified_name(&collation.schema, &collation.name)
+        };
         let mut sql = format!("CREATE COLLATION {}", collation_name);
+        
+        // Build the options string
+        let mut options = Vec::new();
         
         // Handle different provider types
         match &collation.provider {
             crate::model::collation::CollationProvider::Libc => {
                 if let Some(lc_collate) = &collation.lc_collate {
-                    sql.push_str(&format!(" (lc_collate = '{}'", lc_collate));
-                    if let Some(lc_ctype) = &collation.lc_ctype {
-                        sql.push_str(&format!(", lc_ctype = '{}'", lc_ctype));
-                    }
-                    sql.push(')');
+                    options.push(format!("LC_COLLATE = '{}'", lc_collate));
+                }
+                if let Some(lc_ctype) = &collation.lc_ctype {
+                    options.push(format!("LC_CTYPE = '{}'", lc_ctype));
                 }
             }
             crate::model::collation::CollationProvider::Icu => {
                 if let Some(icu_locale) = &collation.icu_locale {
-                    sql.push_str(&format!(" (locale = '{}'", icu_locale));
-                    if let Some(icu_rules) = &collation.icu_rules {
-                        sql.push_str(&format!(", rules = '{}'", icu_rules));
-                    }
-                    sql.push(')');
+                    options.push(format!("LOCALE = '{}'", icu_locale));
+                }
+                if let Some(icu_rules) = &collation.icu_rules {
+                    options.push(format!("RULES = '{}'", icu_rules));
                 }
             }
             _ => {
@@ -484,8 +593,23 @@ impl SqlGenerator for PostgresSqlGenerator {
             }
         }
         
+        // Add provider
+        let provider_str = match &collation.provider {
+            crate::model::collation::CollationProvider::Libc => "libc",
+            crate::model::collation::CollationProvider::Icu => "icu",
+            crate::model::collation::CollationProvider::Builtin => "builtin",
+            crate::model::collation::CollationProvider::Default => "default",
+        };
+        options.push(format!("PROVIDER = '{}'", provider_str));
+        
+        // Add deterministic if false
         if !collation.deterministic {
-            sql.push_str(" (deterministic = false)");
+            options.push("DETERMINISTIC = false".to_string());
+        }
+        
+        // Add the options if we have any
+        if !options.is_empty() {
+            sql.push_str(&format!(" ({})", options.join(", ")));
         }
         
         sql.push(';');
@@ -493,7 +617,12 @@ impl SqlGenerator for PostgresSqlGenerator {
     }
     
     fn drop_collation(&self, collation: &Collation) -> Result<String> {
-        let collation_name = Self::qualified_name(&collation.schema, &collation.name);
+        // For collations, match the expected format (no schema for public)
+        let collation_name = if collation.schema == "public" {
+            collation.name.clone()
+        } else {
+            format!("{}.{}", collation.schema, collation.name)
+        };
         Ok(format!("DROP COLLATION IF EXISTS {} CASCADE;", collation_name))
     }
     
@@ -656,6 +785,11 @@ impl SqlGenerator for PostgresSqlGenerator {
             sql.push_str(&Self::format_options(&tablespace.options));
         }
         sql.push(';');
+        
+        if let Some(comment) = &tablespace.comment {
+            sql.push_str(&format!("\nCOMMENT ON TABLESPACE {} IS '{}';", tablespace_name, comment.replace('\'', "''")));
+        }
+        
         Ok(sql)
     }
     

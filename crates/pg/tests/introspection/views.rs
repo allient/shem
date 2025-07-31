@@ -34,7 +34,8 @@ async fn test_introspect_basic_view() -> Result<(), Box<dyn std::error::Error>> 
     let schema = connection.introspect().await?;
 
     // Verify the view exists
-    let view = schema.views.get("active_users").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("active_users").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.name, "active_users");
     assert_eq!(view.schema, "public".to_string()); // Public schema
@@ -68,7 +69,8 @@ async fn test_introspect_view_with_schema() -> Result<(), Box<dyn std::error::Er
     let schema = connection.introspect().await?;
 
     // Verify the view exists in the schema
-    let view = schema.views.get("test_schema.expensive_products").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("test_schema.expensive_products").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.name, "expensive_products");
     assert_eq!(view.schema, "test_schema".to_string());
@@ -105,7 +107,8 @@ async fn test_introspect_view_with_comment() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the view has a comment
-    let view = schema.views.get("managers").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("managers").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.comment, Some("View showing only management employees".to_string()));
 
@@ -134,7 +137,8 @@ async fn test_introspect_view_with_check_option() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the view has check option
-    let view = schema.views.get("small_orders").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("small_orders").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.check_option, CheckOption::Cascaded);
 
@@ -163,7 +167,8 @@ async fn test_introspect_view_with_cascaded_check_option() -> Result<(), Box<dyn
     let schema = connection.introspect().await?;
 
     // Verify the view has cascaded check option
-    let view = schema.views.get("electronics").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("electronics").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.check_option, CheckOption::Cascaded);
 
@@ -197,7 +202,8 @@ async fn test_introspect_view_with_security_barrier() -> Result<(), Box<dyn std:
     let schema = connection.introspect().await?;
 
     // Verify the view has security barrier
-    let view = schema.views.get("user_data").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("user_data").expect("View should exist");
     debug!("View: {:?}", view);
     assert!(view.options.get("security_barrier").map(|v| v == "true").unwrap_or(false));
 
@@ -226,7 +232,8 @@ async fn test_introspect_view_with_column_aliases() -> Result<(), Box<dyn std::e
     let schema = connection.introspect().await?;
 
     // Verify the view has correct column names (aliases)
-    let view = schema.views.get("customer_names").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("customer_names").expect("View should exist");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "fname", "lname"]);
     assert!(view.definition.contains("first_name AS fname"));
     assert!(view.definition.contains("last_name AS lname"));
@@ -261,7 +268,8 @@ async fn test_introspect_view_with_joins() -> Result<(), Box<dyn std::error::Err
     let schema = connection.introspect().await?;
 
     // Verify the view with joins
-    let view = schema.views.get("employee_departments").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("employee_departments").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "dept_name"]);
     assert!(view.definition.contains("JOIN departments d ON ((e.dept_id = d.id))"));
@@ -291,7 +299,8 @@ async fn test_introspect_view_with_aggregation() -> Result<(), Box<dyn std::erro
     let schema = connection.introspect().await?;
 
     // Verify the view with aggregation
-    let view = schema.views.get("daily_sales").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("daily_sales").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["date", "sales_count", "total_amount"]);
     assert!(view.definition.contains("GROUP BY date"));
@@ -323,7 +332,8 @@ async fn test_introspect_view_with_window_function() -> Result<(), Box<dyn std::
     let schema = connection.introspect().await?;
 
     // Verify the view with window function
-    let view = schema.views.get("student_rankings").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("student_rankings").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["student", "subject", "score", "rank"]);
     assert!(view.definition.contains("row_number() OVER"));
@@ -353,7 +363,8 @@ async fn test_introspect_view_with_cte() -> Result<(), Box<dyn std::error::Error
     let schema = connection.introspect().await?;
 
     // Verify the view with CTE
-    let view = schema.views.get("popular_events").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("popular_events").expect("View should exist");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["name", "avg_attendees"]);
     assert!(view.definition.contains("WITH event_stats AS"));
 
@@ -382,7 +393,8 @@ async fn test_introspect_view_with_subquery() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the view with subquery
-    let view = schema.views.get("expensive_products").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("expensive_products").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "price", "category"]);
     assert!(view.definition.contains("SELECT avg(products_1.price) AS avg"));
@@ -417,7 +429,8 @@ async fn test_introspect_view_with_union() -> Result<(), Box<dyn std::error::Err
     let schema = connection.introspect().await?;
 
     // Verify the view with union
-    let view = schema.views.get("all_users").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("all_users").expect("View should exist");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name"]);
     assert!(view.definition.contains("UNION"));
 
@@ -446,7 +459,8 @@ async fn test_introspect_view_with_case_statement() -> Result<(), Box<dyn std::e
     let schema = connection.introspect().await?;
 
     // Verify the view with case statement
-    let view = schema.views.get("grade_letters").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("grade_letters").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["student", "score", "letter_grade"]);
     assert!(view.definition.contains("CASE"));
@@ -478,7 +492,8 @@ async fn test_introspect_view_with_functions() -> Result<(), Box<dyn std::error:
     let schema = connection.introspect().await?;
 
     // Verify the view with functions
-    let view = schema.views.get("user_summary").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("user_summary").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "upper_name", "birth_year"]);
     assert!(view.definition.contains("upper(name)"));
@@ -509,7 +524,8 @@ async fn test_introspect_view_with_distinct() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the view with distinct
-    let view = schema.views.get("unique_visitors").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("unique_visitors").expect("View should exist");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["user_id", "visit_count"]);
     assert!(view.definition.contains("DISTINCT user_id"));
 
@@ -538,7 +554,8 @@ async fn test_introspect_view_with_limit_offset() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the view with limit
-    let view = schema.views.get("top_articles").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("top_articles").expect("View should exist");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "title", "views"]);
     assert!(view.definition.contains("LIMIT 10"));
     assert!(view.definition.contains("ORDER BY views DESC"));
@@ -568,7 +585,8 @@ async fn test_introspect_view_with_complex_expression() -> Result<(), Box<dyn st
     let schema = connection.introspect().await?;
 
     // Verify the view with complex expression
-    let view = schema.views.get("calculated_metrics").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("calculated_metrics").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "average", "geometric_mean"]);
     assert!(view.definition.contains("(value1 + value2) / (2)::numeric"));
@@ -609,18 +627,21 @@ async fn test_introspect_multiple_views() -> Result<(), Box<dyn std::error::Erro
     let schema = connection.introspect().await?;
 
     // Verify all views exist
-    assert!(schema.views.contains_key("high_salary_employees"));
-    assert!(schema.views.contains_key("department_summary"));
-    assert!(schema.views.contains_key("employee_names"));
+    assert!(schema.views().contains_key("high_salary_employees"));
+    assert!(schema.views().contains_key("department_summary"));
+    assert!(schema.views().contains_key("employee_names"));
 
     // Verify view details
-    let high_salary = schema.views.get("high_salary_employees").unwrap();
+    let views = schema.views();
+    let high_salary = views.get("high_salary_employees").unwrap();
     assert_eq!(high_salary.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name", "salary", "department"]);
 
-    let dept_summary = schema.views.get("department_summary").unwrap();
+    let views = schema.views();
+    let dept_summary = views.get("department_summary").unwrap();
     assert_eq!(dept_summary.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["department", "count", "avg_salary"]);
 
-    let names = schema.views.get("employee_names").unwrap();
+    let views = schema.views();
+    let names = views.get("employee_names").unwrap();
     assert_eq!(names.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "name"]);
 
     Ok(())
@@ -655,7 +676,8 @@ async fn test_introspect_view_performance() -> Result<(), Box<dyn std::error::Er
     let schema = connection.introspect().await?;
 
     // Verify the view with many columns
-    let view = schema.views.get("filtered_large_table").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("filtered_large_table").expect("View should exist");
     debug!("View: {:?}", view);
     assert_eq!(view.columns.len(), 21); // id + 20 columns
     assert!(view.definition.contains("WHERE (col2 > 100)"));
@@ -685,8 +707,10 @@ async fn test_introspect_view_consistency() -> Result<(), Box<dyn std::error::Er
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let view1 = schema1.views.get("test_view").expect("View should exist");
-    let view2 = schema2.views.get("test_view").expect("View should exist");
+    let views1 = schema1.views();
+    let views2 = schema2.views();
+    let view1 = views1.get("test_view").expect("View should exist");
+    let view2 = views2.get("test_view").expect("View should exist");
 
     // Verify consistency
     assert_eq!(view1.name, view2.name);
@@ -724,7 +748,8 @@ async fn test_introspect_view_edge_cases() -> Result<(), Box<dyn std::error::Err
     let schema = connection.introspect().await?;
 
     // Verify the view with quoted identifiers
-    let view = schema.views.get("quoted view").expect("View should exist");
+    let views = schema.views();
+    let view = views.get("quoted view").expect("View should exist");
     assert_eq!(view.name, "quoted view");
     assert_eq!(view.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["id", "quoted column", "UPPER_CASE"]);
     assert!(view.definition.contains("\"quoted column\""));

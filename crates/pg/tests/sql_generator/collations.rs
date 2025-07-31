@@ -159,6 +159,12 @@ fn test_create_collation_common_locales() {
     ];
 
     for (locale, provider) in common_locales {
+        let (lc_collate, lc_ctype, icu_locale) = match &provider {
+            CollationProvider::Libc => (Some(locale.to_string()), Some(locale.to_string()), None),
+            CollationProvider::Icu => (None, None, Some(locale.to_string())),
+            _ => (None, None, None),
+        };
+        
         let collation = Collation {
             oid: 0,
             name: format!("collation_{}", locale.replace('-', "_")),
@@ -166,9 +172,9 @@ fn test_create_collation_common_locales() {
             schema: "public".to_string(),
             provider: provider.clone(),
             deterministic: true,
-            lc_collate: None,
-            lc_ctype: None,
-            icu_locale: Some(locale.to_string()),
+            lc_collate,
+            lc_ctype,
+            icu_locale,
             icu_rules: None,
             version: None,
             comment: None,
@@ -179,7 +185,18 @@ fn test_create_collation_common_locales() {
         let generator = PostgresSqlGenerator;
         let result = generator.create_collation(&collation).unwrap();
         
-        assert!(result.contains(&format!("LOCALE = '{}'", locale)));
+        // Check for the appropriate locale field based on provider
+        match &provider {
+            CollationProvider::Libc => {
+                assert!(result.contains(&format!("LC_COLLATE = '{}'", locale)));
+                assert!(result.contains(&format!("LC_CTYPE = '{}'", locale)));
+            }
+            CollationProvider::Icu => {
+                assert!(result.contains(&format!("LOCALE = '{}'", locale)));
+            }
+            _ => {}
+        }
+        
         let provider_str = match &provider {
             CollationProvider::Libc => "libc",
             CollationProvider::Icu => "icu",

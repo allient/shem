@@ -24,7 +24,7 @@ async fn test_introspect_basic_schema() -> Result<(), Box<dyn std::error::Error>
     let schema = connection.introspect().await?;
 
     // Verify the schema was introspected
-    let named_schema = schema.named_schemas.get("test_schema");
+    let named_schema = schema.named_schemas().get("test_schema");
     debug!("Named schema: {:?}", named_schema);
     assert!(
         named_schema.is_some(),
@@ -57,7 +57,7 @@ async fn test_introspect_database_model_with_owner() -> Result<(), Box<dyn std::
     let schema = connection.introspect().await?;
 
     // Verify the schema was introspected with owner
-    let named_schema = schema.named_schemas.get("test_schema_owner");
+    let named_schema = schema.named_schemas().get("test_schema_owner");
     assert!(
         named_schema.is_some(),
         "Schema 'test_schema_owner' should be introspected"
@@ -94,7 +94,7 @@ async fn test_introspect_database_model_with_comment() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the schema was introspected with comment
-    let named_schema = schema.named_schemas.get("test_schema_comment");
+    let named_schema = schema.named_schemas().get("test_schema_comment");
     assert!(
         named_schema.is_some(),
         "Schema 'test_schema_comment' should be introspected"
@@ -128,17 +128,17 @@ async fn test_introspect_multiple_schemas() -> Result<(), Box<dyn std::error::Er
 
     // Verify both schemas were introspected
     assert!(
-        schema.named_schemas.contains_key("schema1"),
+        schema.named_schemas().contains_key("schema1"),
         "Schema 'schema1' should be introspected"
     );
     assert!(
-        schema.named_schemas.contains_key("schema2"),
+        schema.named_schemas().contains_key("schema2"),
         "Schema 'schema2' should be introspected"
     );
 
     // Verify schema details
-    let schema1 = schema.named_schemas.get("schema1").unwrap();
-    let schema2 = schema.named_schemas.get("schema2").unwrap();
+    let schema1 = schema.named_schemas().get("schema1").unwrap();
+    let schema2 = schema.named_schemas().get("schema2").unwrap();
 
     assert_eq!(schema1.name, "schema1");
     assert_eq!(schema2.name, "schema2");

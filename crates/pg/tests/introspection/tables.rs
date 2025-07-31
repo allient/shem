@@ -29,7 +29,8 @@ async fn test_introspect_basic_table() -> Result<(), Box<dyn std::error::Error>>
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected
-    let table = schema.tables.get("test_basic_table");
+    let tables = schema.tables();
+    let table = tables.get("test_basic_table");
     debug!("Table: {:?}", table);
     assert!(
         table.is_some(),
@@ -111,7 +112,8 @@ async fn test_introspect_table_with_schema() -> Result<(), Box<dyn std::error::E
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with correct schema
-    let table = schema.tables.get("test_table_schema.schema_table");
+    let tables = schema.tables();
+    let table = tables.get("test_table_schema.schema_table");
     assert!(
         table.is_some(),
         "Table 'test_table_schema.schema_table' should be introspected"
@@ -152,7 +154,8 @@ async fn test_introspect_table_with_comment() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with comment
-    let table = schema.tables.get("test_comment_table");
+    let tables = schema.tables();
+    let table = tables.get("test_comment_table");
     assert!(
         table.is_some(),
         "Table 'test_comment_table' should be introspected"
@@ -193,7 +196,8 @@ async fn test_introspect_table_with_constraints() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with constraints
-    let table = schema.tables.get("test_constraints_table");
+    let tables = schema.tables();
+    let table = tables.get("test_constraints_table");
     assert!(
         table.is_some(),
         "Table 'test_constraints_table' should be introspected"
@@ -269,7 +273,8 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with indexes
-    let table = schema.tables.get("test_indexes_table");
+    let tables = schema.tables();
+    let table = tables.get("test_indexes_table");
     assert!(
         table.is_some(),
         "Table 'test_indexes_table' should be introspected"
@@ -289,15 +294,15 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
         .iter()
         .find(|i| i.name == "idx_test_indexes_name")
         .unwrap();
-    assert!(!name_index.unique, "Name index should not be unique");
-    assert_eq!(name_index.method, pg::model::relation::IndexMethod::Btree);
+    assert!(!name_index.definition.contains("UNIQUE"), "Name index should not be unique");
+    assert!(name_index.definition.contains("btree"), "Index should use btree method");
 
     let email_index = tbl
         .indexes
         .iter()
         .find(|i| i.name == "idx_test_indexes_email")
         .unwrap();
-    assert!(email_index.unique, "Email index should be unique");
+    assert!(email_index.definition.contains("UNIQUE"), "Email index should be unique");
 
     // Clean up
     db.cleanup().await?;
@@ -340,7 +345,8 @@ async fn test_introspect_table_with_indexes() -> Result<(), Box<dyn std::error::
 //     let schema = connection.introspect().await?;
 
 //     // Verify the table was introspected with tablespace
-//     let table = schema.tables.get("test_tablespace_table");
+//     let tables = schema.tables();
+//     let table = tables.get("test_tablespace_table");
 //     assert!(
 //         table.is_some(),
 //         "Table 'test_tablespace_table' should be introspected"
@@ -383,7 +389,8 @@ async fn test_introspect_table_with_inheritance() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the child table was introspected with inheritance
-    let table = schema.tables.get("child_table");
+    let tables = schema.tables();
+    let table = tables.get("child_table");
     assert!(
         table.is_some(),
         "Table 'child_table' should be introspected"
@@ -427,7 +434,8 @@ async fn test_introspect_table_with_identity_columns() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with identity columns
-    let table = schema.tables.get("test_identity_table");
+    let tables = schema.tables();
+    let table = tables.get("test_identity_table");
     assert!(
         table.is_some(),
         "Table 'test_identity_table' should be introspected"
@@ -484,7 +492,8 @@ async fn test_introspect_table_with_generated_columns() -> Result<(), Box<dyn st
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with generated columns
-    let table = schema.tables.get("test_generated_table");
+    let tables = schema.tables();
+    let table = tables.get("test_generated_table");
     assert!(
         table.is_some(),
         "Table 'test_generated_table' should be introspected"
@@ -539,17 +548,19 @@ async fn test_introspect_multiple_tables() -> Result<(), Box<dyn std::error::Err
 
     // Verify both tables were introspected
     assert!(
-        schema.tables.contains_key("test_table1"),
+        schema.tables().contains_key("test_table1"),
         "Table 'test_table1' should be introspected"
     );
     assert!(
-        schema.tables.contains_key("test_table2"),
+        schema.tables().contains_key("test_table2"),
         "Table 'test_table2' should be introspected"
     );
 
     // Verify table details
-    let tbl1 = schema.tables.get("test_table1").unwrap();
-    let tbl2 = schema.tables.get("test_table2").unwrap();
+    let tables = schema.tables();
+    let tbl1 = tables.get("test_table1").unwrap();
+    let tables = schema.tables();
+    let tbl2 = tables.get("test_table2").unwrap();
 
     assert_eq!(tbl1.name, "test_table1");
     assert_eq!(tbl2.name, "test_table2");
@@ -572,7 +583,8 @@ async fn test_introspect_no_tables() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify no user tables are present
     // Note: System tables should be filtered out
-    let user_tables: Vec<&String> = schema.tables.keys().collect();
+    let tables_map = schema.tables();
+    let user_tables: Vec<&String> = tables_map.keys().collect();
     assert!(
         user_tables.is_empty(),
         "No user tables should be introspected: {:?}",
@@ -598,7 +610,8 @@ async fn test_introspect_table_edge_cases() -> Result<(), Box<dyn std::error::Er
     .await?;
 
     let schema = connection.introspect().await?;
-    let table = schema.tables.get(&long_name);
+    let tables = schema.tables();
+    let table = tables.get(&long_name);
     assert!(
         table.is_some(),
         "Table with long name should be introspected"
@@ -612,7 +625,8 @@ async fn test_introspect_table_edge_cases() -> Result<(), Box<dyn std::error::Er
     .await?;
 
     let schema2 = connection.introspect().await?;
-    let table2 = schema2.tables.get("test-table-with-dashes");
+    let tables2 = schema2.tables();
+    let table2 = tables2.get("test-table-with-dashes");
     assert!(
         table2.is_some(),
         "Table with special characters should be introspected"
@@ -650,7 +664,7 @@ async fn test_introspect_table_performance() -> Result<(), Box<dyn std::error::E
     for i in 1..=5 {
         assert!(
             schema
-                .tables
+                .tables()
                 .contains_key(&format!("test_perf_table_{}", i)),
             "Table test_perf_table_{} should be introspected",
             i
@@ -685,8 +699,10 @@ async fn test_introspect_table_consistency() -> Result<(), Box<dyn std::error::E
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let tbl1 = schema1.tables.get("test_consistency_table").unwrap();
-    let tbl2 = schema2.tables.get("test_consistency_table").unwrap();
+    let tables1 = schema1.tables();
+    let tables2 = schema2.tables();
+    let tbl1 = tables1.get("test_consistency_table").unwrap();
+    let tbl2 = tables2.get("test_consistency_table").unwrap();
 
     // Verify consistency across multiple introspections
     assert_eq!(tbl1.name, tbl2.name);
@@ -722,8 +738,10 @@ async fn test_introspect_table_schema_consistency() -> Result<(), Box<dyn std::e
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let tbl1 = schema1.tables.get("test_table_schema_consistency.schema_consistency_table").unwrap();
-    let tbl2 = schema2.tables.get("test_table_schema_consistency.schema_consistency_table").unwrap();
+    let tables1 = schema1.tables();
+    let tables2 = schema2.tables();
+    let tbl1 = tables1.get("test_table_schema_consistency.schema_consistency_table").unwrap();
+    let tbl2 = tables2.get("test_table_schema_consistency.schema_consistency_table").unwrap();
 
     // Verify consistency across multiple introspections
     assert_eq!(tbl1.name, tbl2.name);
@@ -763,12 +781,12 @@ async fn test_introspect_table_comment_consistency() -> Result<(), Box<dyn std::
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let tbl1 = schema1
-        .tables
+    let tables1 = schema1.tables();
+    let tables2 = schema2.tables();
+    let tbl1 = tables1
         .get("test_comment_consistency_table")
         .unwrap();
-    let tbl2 = schema2
-        .tables
+    let tbl2 = tables2
         .get("test_comment_consistency_table")
         .unwrap();
 
@@ -810,7 +828,8 @@ async fn test_introspect_table_with_various_defaults() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with defaults
-    let table = schema.tables.get("test_various_defaults_table");
+    let tables = schema.tables();
+    let table = tables.get("test_various_defaults_table");
     assert!(
         table.is_some(),
         "Table 'test_various_defaults_table' should be introspected"
@@ -877,8 +896,10 @@ async fn test_introspect_table_with_foreign_keys() -> Result<(), Box<dyn std::er
     let schema = connection.introspect().await?;
 
     // Verify both tables were introspected
-    let parent_table = schema.tables.get("parent_table");
-    let child_table = schema.tables.get("child_table");
+    let tables = schema.tables();
+    let parent_table = tables.get("parent_table");
+    let tables = schema.tables();
+    let child_table = tables.get("child_table");
 
     assert!(
         parent_table.is_some(),
@@ -952,7 +973,8 @@ async fn test_introspect_partitioned_table() -> Result<(), Box<dyn std::error::E
 
     debug!("Schema: {:?}", schema);
     // Verify the partitioned table was introspected
-    let table = schema.tables.get("partitioned_table");
+    let tables = schema.tables();
+    let table = tables.get("partitioned_table");
     debug!("Table: {:?}", table);
     assert!(table.is_some(), "Partitioned table should be introspected");
 
@@ -994,7 +1016,8 @@ async fn test_introspect_unlogged_table() -> Result<(), Box<dyn std::error::Erro
     let schema = connection.introspect().await?;
 
     // Verify the unlogged table was introspected
-    let table = schema.tables.get("unlogged_table");
+    let tables = schema.tables();
+    let table = tables.get("unlogged_table");
     assert!(table.is_some(), "Unlogged table should be introspected");
 
     let unlogged = table.unwrap();
@@ -1037,7 +1060,8 @@ async fn test_introspect_table_with_rls() -> Result<(), Box<dyn std::error::Erro
     let schema = connection.introspect().await?;
 
     // Verify the RLS table was introspected
-    let table = schema.tables.get("rls_table");
+    let tables = schema.tables();
+    let table = tables.get("rls_table");
     assert!(table.is_some(), "RLS table should be introspected");
 
     let rls_table = table.unwrap();
@@ -1090,7 +1114,8 @@ async fn test_introspect_table_with_column_comments() -> Result<(), Box<dyn std:
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected with column comments
-    let table = schema.tables.get("comment_columns_table");
+    let tables = schema.tables();
+    let table = tables.get("comment_columns_table");
     assert!(
         table.is_some(),
         "Table with column comments should be introspected"
@@ -1149,7 +1174,8 @@ async fn test_introspect_table_with_composite_primary_key() -> Result<(), Box<dy
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected
-    let table = schema.tables.get("composite_pk_table");
+    let tables = schema.tables();
+    let table = tables.get("composite_pk_table");
     assert!(
         table.is_some(),
         "Table with composite PK should be introspected"
@@ -1212,7 +1238,8 @@ async fn test_introspect_table_with_exclusion_constraint() -> Result<(), Box<dyn
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected
-    let table = schema.tables.get("exclusion_table");
+    let tables = schema.tables();
+    let table = tables.get("exclusion_table");
     assert!(
         table.is_some(),
         "Table with exclusion constraint should be introspected"
@@ -1289,7 +1316,8 @@ async fn test_introspect_table_with_custom_types() -> Result<(), Box<dyn std::er
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected
-    let table = schema.tables.get("custom_types_table");
+    let tables = schema.tables();
+    let table = tables.get("custom_types_table");
     assert!(
         table.is_some(),
         "Table with custom types should be introspected"
@@ -1395,7 +1423,8 @@ async fn test_introspect_table_with_complex_column_types() -> Result<(), Box<dyn
     let schema = connection.introspect().await?;
 
     // Verify the table was introspected
-    let table = schema.tables.get("complex_types_table");
+    let tables = schema.tables();
+    let table = tables.get("complex_types_table");
     assert!(
         table.is_some(),
         "Table with complex types should be introspected"

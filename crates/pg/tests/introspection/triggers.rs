@@ -31,7 +31,8 @@ async fn test_introspect_basic_trigger() -> Result<(), Box<dyn std::error::Error
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_basic_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_basic_trigger");
@@ -73,7 +74,8 @@ async fn test_introspect_trigger_multiple_events() -> Result<(), Box<dyn std::er
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers multi: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_multi_event_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_multi_event_trigger");
@@ -116,7 +118,8 @@ async fn test_introspect_trigger_with_when_condition() -> Result<(), Box<dyn std
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers when: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_when_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_when_trigger");
@@ -159,7 +162,8 @@ async fn test_introspect_trigger_with_arguments() -> Result<(), Box<dyn std::err
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers args: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_args_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_args_trigger");
@@ -202,7 +206,8 @@ async fn test_introspect_trigger_for_each_statement() -> Result<(), Box<dyn std:
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers statement: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_stmt_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_stmt_trigger");
@@ -245,7 +250,8 @@ async fn test_introspect_trigger_with_comment() -> Result<(), Box<dyn std::error
     let schema = connection.introspect().await?;
 
     // Verify the trigger was introspected with comment
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Triggers comment: {:?}", triggers);
     let trig = triggers.iter().find(|t| t.name == "test_comment_trigger").expect("Should find trigger");
     assert_eq!(trig.name, "test_comment_trigger");
@@ -295,7 +301,8 @@ async fn test_introspect_constraint_trigger() -> Result<(), Box<dyn std::error::
     let schema = connection.introspect().await?;
 
     // Verify the constraint trigger was introspected
-    let triggers: Vec<_> = schema.triggers.values().collect();
+    let triggers_map = schema.triggers();
+    let triggers: Vec<_> = triggers_map.values().collect();
     debug!("Constraint triggers: {:?}", triggers);
 
     // Should find at least one constraint trigger

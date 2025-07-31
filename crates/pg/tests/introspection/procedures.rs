@@ -1,9 +1,10 @@
 use pg::db_util::TestDb;
 use pg::traits::DatabaseConnection;
 use tracing::debug;
+use pg::database::DatabaseModel;
 
 // Helper function to extract procedures from routines
-fn get_procedures_from_schema(schema: &pg::model::schema::Schema) -> Vec<&pg::model::routine::Procedure> {
+fn get_procedures_from_schema(schema: &DatabaseModel) -> Vec<&pg::model::routine::Procedure> {
     schema.routines.values()
         .filter_map(|r| match r {
             pg::model::routine::Routine::Procedure(p) => Some(p),

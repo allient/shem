@@ -153,15 +153,16 @@ pub async fn introspect_op_families<C: GenericClient>(client: &C) -> Result<Vec<
 pub async fn introspect_op_classes<C: GenericClient>(client: &C) -> Result<Vec<OpClass>> {
     let last_system_oid = get_last_system_oid(client).await?;
 
-    // This query is simple and correct, relying on the built-in function.
+    // This query fetches the data needed to manually construct the CREATE OPERATOR CLASS statement
     let query = r#"
         SELECT
             oc.oid,
             oc.opcname AS name,
             n.nspname AS schema,
             pg_get_userbyid(oc.opcowner) AS owner,
-            -- This function returns the complete "CREATE OPERATOR CLASS ..." statement
-            pg_get_opclass_def(oc.oid) AS definition,
+            am.amname AS index_method,
+            oc.opcintype::regtype::text AS data_type,
+            oc.opcdefault AS is_default,
             obj_description(oc.oid, 'pg_opclass') AS comment,
             EXISTS (
                 SELECT 1 FROM pg_depend d
@@ -169,6 +170,7 @@ pub async fn introspect_op_classes<C: GenericClient>(client: &C) -> Result<Vec<O
             ) AS is_from_extension
         FROM pg_opclass oc
         JOIN pg_namespace n ON oc.opcnamespace = n.oid
+        JOIN pg_am am ON oc.opcmethod = am.oid
         WHERE oc.oid > $1;
     "#;
 
@@ -176,14 +178,35 @@ pub async fn introspect_op_classes<C: GenericClient>(client: &C) -> Result<Vec<O
 
     let op_classes = rows
         .into_iter()
-        .map(|row| OpClass {
-            oid: row.get("oid"),
-            name: row.get("name"),
-            schema: row.get("schema"),
-            owner: row.get("owner"),
-            definition: row.get("definition"),
-            comment: row.get("comment"),
-            is_from_extension: row.get("is_from_extension"),
+        .map(|row| {
+            let schema: String = row.get("schema");
+            let name: String = row.get("name");
+            let index_method: String = row.get("index_method");
+            let data_type: String = row.get("data_type");
+            let is_default: bool = row.get("is_default");
+
+            // Manually construct the CREATE OPERATOR CLASS statement
+            let mut def = format!(
+                "CREATE OPERATOR CLASS {}.{}\n",
+                quote_ident(&schema),
+                quote_ident(&name)
+            );
+            
+            if is_default {
+                def.push_str("    DEFAULT ");
+            }
+            
+            def.push_str(&format!("FOR TYPE {} USING {};", data_type, index_method));
+
+            OpClass {
+                oid: row.get("oid"),
+                name,
+                schema,
+                owner: row.get("owner"),
+                definition: def,
+                comment: row.get("comment"),
+                is_from_extension: row.get("is_from_extension"),
+            }
         })
         .collect();
 

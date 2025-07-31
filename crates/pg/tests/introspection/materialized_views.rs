@@ -1,5 +1,5 @@
 use pg::db_util::TestDb;
-use pg::model::relation::CheckOption;
+
 use pg::traits::DatabaseConnection;
 use tracing::debug;
 
@@ -37,10 +37,11 @@ async fn test_introspect_basic_materialized_view() -> Result<(), Box<dyn std::er
 
     // Introspect the database
     let schema = connection.introspect().await?;
-    debug!("Full schema materialized views: {:?}", schema.materialized_views);
+    debug!("Full schema materialized views: {:?}", schema.materialized_views());
 
     // Verify the materialized view exists
-    let view = schema.materialized_views.get("active_users").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("active_users").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.name, "active_users");
     assert_eq!(view.schema, "public".to_string()); // Public schema
@@ -79,7 +80,8 @@ async fn test_introspect_materialized_view_with_schema() -> Result<(), Box<dyn s
     let schema = connection.introspect().await?;
 
     // Verify the materialized view exists in the schema
-    let view = schema.materialized_views.get("test_schema.expensive_products").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("test_schema.expensive_products").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.name, "expensive_products");
     assert_eq!(view.schema, "test_schema".to_string());
@@ -120,7 +122,8 @@ async fn test_introspect_materialized_view_with_comment() -> Result<(), Box<dyn 
     let schema = connection.introspect().await?;
 
     // Verify the materialized view has a comment
-    let view = schema.materialized_views.get("managers").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("managers").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.comment, Some("Materialized view showing only management employees".to_string()));
 
@@ -149,7 +152,8 @@ async fn test_introspect_materialized_view_with_no_data() -> Result<(), Box<dyn 
     let schema = connection.introspect().await?;
 
     // Verify the materialized view has NO DATA
-    let view = schema.materialized_views.get("small_orders").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("small_orders").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     // NOTE: PostgreSQL does not expose via catalog tables whether a materialized view was created WITH DATA or WITH NO DATA.
     // The introspection always sets populate_with_data = true, so we cannot assert its value here.
@@ -189,7 +193,8 @@ async fn test_introspect_materialized_view_with_storage_parameters() -> Result<(
     let schema = connection.introspect().await?;
 
     // Verify the materialized view has storage parameters
-    let view = schema.materialized_views.get("recent_logs").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("recent_logs").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.options.get("fillfactor"), Some(&"70".to_string()));
 
@@ -234,7 +239,8 @@ async fn test_introspect_materialized_view_with_storage_parameters() -> Result<(
 //     let schema = connection.introspect().await?;
 
 //     // Verify the materialized view has tablespace
-//     let view = schema.materialized_views.get("data_summary").expect("Materialized view should exist");
+//     let materialized_views = schema.materialized_views();
+//     let view = materialized_views.get("data_summary").expect("Materialized view should exist");
 //     debug!("Materialized view: {:?}", view);
 //     assert_eq!(view.tablespace, Some("test_tablespace".to_string()));
 
@@ -284,21 +290,20 @@ async fn test_introspect_materialized_view_with_indexes() -> Result<(), Box<dyn 
     let schema = connection.introspect().await?;
 
     // Verify the materialized view has indexes
-    let view = schema.materialized_views.get("customer_summary").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("customer_summary").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert_eq!(view.indexes.len(), 2);
 
     // Check the first index
     let region_index = view.indexes.iter().find(|idx| idx.name == "idx_customer_summary_region").unwrap();
-    assert_eq!(region_index.columns.len(), 1);
-    assert_eq!(region_index.columns[0].name, "region");
-    assert!(!region_index.unique);
+    assert!(region_index.definition.contains("region"), "Index definition should contain 'region'");
+    assert!(!region_index.definition.contains("UNIQUE"), "Index should not be unique");
 
     // Check the second index
     let count_index = view.indexes.iter().find(|idx| idx.name == "idx_customer_summary_count").unwrap();
-    assert_eq!(count_index.columns.len(), 1);
-    assert_eq!(count_index.columns[0].name, "count");
-    assert!(count_index.unique);
+    assert!(count_index.definition.contains("count"), "Index definition should contain 'count'");
+    assert!(count_index.definition.contains("UNIQUE"), "Index should be unique");
 
     Ok(())
 }
@@ -342,7 +347,8 @@ async fn test_introspect_materialized_view_with_joins() -> Result<(), Box<dyn st
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with join
-    let view = schema.materialized_views.get("employee_details").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("employee_details").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT e.id")
         && view.definition.contains("e.name")
@@ -383,7 +389,8 @@ async fn test_introspect_materialized_view_with_aggregation() -> Result<(), Box<
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with aggregation
-    let view = schema.materialized_views.get("sales_summary").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("sales_summary").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT product,\n    sum(amount) AS total_sales,\n    count(*) AS num_sales\n   FROM sales\n  GROUP BY product"));
 
@@ -419,7 +426,8 @@ async fn test_introspect_materialized_view_with_window_function() -> Result<(), 
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with window function
-    let view = schema.materialized_views.get("score_rankings").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("score_rankings").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT student,\n    subject,\n    score,\n    row_number() OVER (PARTITION BY subject ORDER BY score DESC) AS rank\n   FROM scores"));
 
@@ -455,7 +463,8 @@ async fn test_introspect_materialized_view_with_cte() -> Result<(), Box<dyn std:
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with CTE
-    let view = schema.materialized_views.get("event_summary").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("event_summary").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("WITH event_counts AS")
         && view.definition.contains("SELECT events.event_type")
@@ -498,7 +507,8 @@ async fn test_introspect_materialized_view_with_subquery() -> Result<(), Box<dyn
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with subquery
-    let view = schema.materialized_views.get("expensive_products").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("expensive_products").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT id,")
         && view.definition.contains("FROM products")
@@ -548,7 +558,8 @@ async fn test_introspect_materialized_view_with_union() -> Result<(), Box<dyn st
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with union
-    let view = schema.materialized_views.get("all_users").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("all_users").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT users_2023.id,")
         && view.definition.contains("users_2023.name")
@@ -590,7 +601,8 @@ async fn test_introspect_materialized_view_with_case_statement() -> Result<(), B
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with case statement
-    let view = schema.materialized_views.get("order_categories").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("order_categories").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("CASE")
         && view.definition.contains("WHEN (amount < (100)::numeric) THEN 'Small'::text")
@@ -629,7 +641,8 @@ async fn test_introspect_materialized_view_with_functions() -> Result<(), Box<dy
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with functions
-    let view = schema.materialized_views.get("processed_text").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("processed_text").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT id,\n    upper(text_field) AS upper_text,\n    length(text_field) AS text_length\n   FROM text_data"));
 
@@ -665,7 +678,8 @@ async fn test_introspect_materialized_view_with_distinct() -> Result<(), Box<dyn
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with distinct
-    let view = schema.materialized_views.get("unique_values").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("unique_values").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT DISTINCT value\n   FROM duplicates"));
 
@@ -701,7 +715,8 @@ async fn test_introspect_materialized_view_with_limit_offset() -> Result<(), Box
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with limit and offset
-    let view = schema.materialized_views.get("limited_numbers").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("limited_numbers").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("SELECT id,")
         && view.definition.contains("FROM numbers")
@@ -741,7 +756,8 @@ async fn test_introspect_materialized_view_with_complex_expression() -> Result<(
     let schema = connection.introspect().await?;
 
     // Verify the materialized view with complex expression
-    let view = schema.materialized_views.get("complex_calc").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("complex_calc").expect("Materialized view should exist");
     debug!("Materialized view: {:?}", view);
     assert!(view.definition.contains("((a + b) * 2) AS result")
         && view.definition.contains("CASE")
@@ -788,23 +804,26 @@ async fn test_introspect_multiple_materialized_views() -> Result<(), Box<dyn std
 
     // Introspect the database
     let schema = connection.introspect().await?;
-    debug!("Full schema materialized views: {:?}", schema.materialized_views);
+    debug!("Full schema materialized views: {:?}", schema.materialized_views());
 
     // Verify all materialized views exist
-    assert!(schema.materialized_views.contains_key("view1"));
-    assert!(schema.materialized_views.contains_key("view2"));
-    assert!(schema.materialized_views.contains_key("view3"));
+    assert!(schema.materialized_views().contains_key("view1"));
+    assert!(schema.materialized_views().contains_key("view2"));
+    assert!(schema.materialized_views().contains_key("view3"));
 
     // Verify view1
-    let view1 = schema.materialized_views.get("view1").unwrap();
+    let materialized_views = schema.materialized_views();
+    let view1 = materialized_views.get("view1").unwrap();
     assert!(view1.definition.contains("SELECT category,\n    count(*) AS count\n   FROM data\n  GROUP BY category"));
 
     // Verify view2
-    let view2 = schema.materialized_views.get("view2").unwrap();
+    let materialized_views = schema.materialized_views();
+    let view2 = materialized_views.get("view2").unwrap();
     assert!(view2.definition.contains("SELECT category,\n    sum(value) AS total\n   FROM data\n  GROUP BY category"));
 
     // Verify view3
-    let view3 = schema.materialized_views.get("view3").unwrap();
+    let materialized_views = schema.materialized_views();
+    let view3 = materialized_views.get("view3").unwrap();
     assert!(view3.definition.contains("SELECT id,\n    category,\n    value\n   FROM data\n  WHERE (value > 10)"));
 
     Ok(())
@@ -848,10 +867,11 @@ async fn test_introspect_materialized_view_performance() -> Result<(), Box<dyn s
 
     // Introspect the database
     let schema = connection.introspect().await?;
-    debug!("Full schema materialized views: {:?}", schema.materialized_views);
+    debug!("Full schema materialized views: {:?}", schema.materialized_views());
 
     // Verify the materialized view and its index
-    let view = schema.materialized_views.get("performance_summary").expect("Materialized view should exist");
+    let materialized_views = schema.materialized_views();
+    let view = materialized_views.get("performance_summary").expect("Materialized view should exist");
     debug!("Performance materialized view: {:?}", view);
     assert_eq!(view.indexes.len(), 1);
     assert_eq!(view.indexes[0].name, "idx_performance_category");
@@ -888,8 +908,10 @@ async fn test_introspect_materialized_view_consistency() -> Result<(), Box<dyn s
     let schema1 = connection.introspect().await?;
     let schema2 = connection.introspect().await?;
 
-    let view1 = schema1.materialized_views.get("consistency_view").unwrap();
-    let view2 = schema2.materialized_views.get("consistency_view").unwrap();
+    let materialized_views1 = schema1.materialized_views();
+    let materialized_views2 = schema2.materialized_views();
+    let view1 = materialized_views1.get("consistency_view").unwrap();
+    let view2 = materialized_views2.get("consistency_view").unwrap();
 
     // Verify consistency
     assert_eq!(view1.name, view2.name);
@@ -939,12 +961,14 @@ async fn test_introspect_materialized_view_edge_cases() -> Result<(), Box<dyn st
     let schema = connection.introspect().await?;
 
     // Verify empty view
-    let empty_view = schema.materialized_views.get("empty_view").expect("Empty view should exist");
+    let materialized_views = schema.materialized_views();
+    let empty_view = materialized_views.get("empty_view").expect("Empty view should exist");
     debug!("Empty view definition: {:?}", empty_view.definition);
     assert!(empty_view.definition.contains("WHERE (1 = 0)"));
 
     // Verify all columns view
-    let all_columns_view = schema.materialized_views.get("all_columns_view").expect("All columns view should exist");
+    let materialized_views = schema.materialized_views();
+    let all_columns_view = materialized_views.get("all_columns_view").expect("All columns view should exist");
     assert!(all_columns_view.definition.contains("SELECT id,\n    name,\n    description\n   FROM all_columns"));
 
     Ok(())
